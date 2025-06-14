@@ -178,6 +178,14 @@ class OutlierDetectionPage(QWidget):
         right_v.addLayout(sup)
         bottom_split.addWidget(right_panel)
 
+        # ──右下角的清空按钮 ──
+        bottom_bar = QHBoxLayout()
+        bottom_bar.addStretch()
+        next_step = QPushButton("下一步")
+        #完善这个逻辑
+        next_step.clicked.connect()
+        right_v.addLayout(next_step )
+
         right_v.addStretch() #空白位置
 
         # ---------- 可选：设置左右初始比例 ----------
