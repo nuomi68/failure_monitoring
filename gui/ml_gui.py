@@ -9,9 +9,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QPushButton,
-    QFileDialog,
     QListWidget,
     QListWidgetItem,
+    QSplitter,
     QHBoxLayout,
     QMessageBox,
     QLabel,
@@ -19,11 +19,11 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QTextEdit,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt
 
-from data_loader import load_dataframe
-from tools import scale_features, save_model, plot_scores, logger
+from tools import scale_features, save_model, plot_scores
 from model import train_knn, train_iforest
 
 
@@ -33,7 +33,6 @@ class MLWindow(QWidget):
         self.setWindowTitle("ML Frontend")
         self.resize(600, 400)
 
-        self.file_path: Path | None = None
         self.df: pd.DataFrame | None = None
         self.model = None
         self.scaler = None
@@ -44,9 +43,6 @@ class MLWindow(QWidget):
         self.setLayout(layout)
 
         btn_layout = QHBoxLayout()
-        self.load_btn = QPushButton("Load File")
-        self.load_btn.clicked.connect(self.load_file)
-        btn_layout.addWidget(self.load_btn)
 
         self.alg_combo = QComboBox()
         self.alg_combo.addItems(["knn", "iforest"])
@@ -75,37 +71,28 @@ class MLWindow(QWidget):
         self.save_btn.clicked.connect(self.save_model)
         btn_layout.addWidget(self.save_btn)
 
-        self.plot_btn = QPushButton("Show Plot")
-        self.plot_btn.setEnabled(False)
-        self.plot_btn.clicked.connect(self.show_plot)
-        btn_layout.addWidget(self.plot_btn)
-
         layout.addLayout(btn_layout)
 
+        body_split = QSplitter(Qt.Orientation.Horizontal)
         self.column_list = QListWidget()
-        layout.addWidget(self.column_list)
+        body_split.addWidget(self.column_list)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        layout.addWidget(self.log_edit)
+        body_split.addWidget(self.log_edit)
 
-    def load_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open Data", "", "Data Files (*.csv *.xlsx *.xls)")
-        if not file_name:
-            return
-        try:
-            self.df = load_dataframe(Path(file_name))
-        except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Failed to load file: {exc}")
-            logger.exception("load failed")
-            return
-        self.file_path = Path(file_name)
-        self.column_list.clear()
-        for col in self.df.columns:
+        body_split.setStretchFactor(0, 1)
+        body_split.setStretchFactor(1, 1)
+        layout.addWidget(body_split)
+
+    def set_data(self, df: pd.DataFrame, columns: List[str]) -> None:
+        """Inject dataframe and populate column list."""
+        self.df = df
+        for col in df.columns:
             item = QListWidgetItem(col)
-            item.setCheckState(Qt.CheckState.Unchecked)
+            state = Qt.CheckState.Checked if col in columns else Qt.CheckState.Unchecked
+            item.setCheckState(state)
             self.column_list.addItem(item)
-        self.log_edit.append(f"Loaded {file_name}")
 
     def selected_columns(self) -> List[str]:
         cols: List[str] = []
@@ -117,7 +104,7 @@ class MLWindow(QWidget):
 
     def train_model(self):
         if self.df is None:
-            QMessageBox.warning(self, "Warning", "Please load data first")
+            QMessageBox.warning(self, "Warning", "No data provided")
             return
         cols = self.selected_columns()
         if not cols:
@@ -142,15 +129,7 @@ class MLWindow(QWidget):
             self.scores = -self.model.decision_function(X_scaled)
 
         self.save_btn.setEnabled(True)
-        self.plot_btn.setEnabled(True)
 
-        QMessageBox.information(self, "Result", f"Training finished. Tau = {tau:.4f}")
-        logger.info("Model trained with tau=%.4f", tau)
-        self.log_edit.append(f"train ok, tau={tau:.4f}")
-
-    def show_plot(self) -> None:
-        if self.scores is None:
-            return
         plot_scores(
             range(len(self.scores)),
             self.scores,
