@@ -77,10 +77,6 @@ class MLWindow(QWidget):
         self.column_list = QListWidget()
         body_split.addWidget(self.column_list)
 
-        self.log_edit = QTextEdit()
-        self.log_edit.setReadOnly(True)
-        body_split.addWidget(self.log_edit)
-
         body_split.setStretchFactor(0, 1)
         body_split.setStretchFactor(1, 1)
         layout.addWidget(body_split)
@@ -144,7 +140,6 @@ class MLWindow(QWidget):
         if not file_name:
             return
         save_model(Path(file_name), self.model, self.scaler, self.meta)
-        self.log_edit.append(f"model saved to {file_name}")
 
 
 def main():
