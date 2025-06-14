@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QHBoxLayout,
+    QSplitter,
     QMessageBox,
     QLabel,
     QComboBox,
@@ -82,12 +83,18 @@ class MLWindow(QWidget):
 
         layout.addLayout(btn_layout)
 
+        body_split = QSplitter(Qt.Orientation.Horizontal)
+
         self.column_list = QListWidget()
-        layout.addWidget(self.column_list)
+        body_split.addWidget(self.column_list)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        layout.addWidget(self.log_edit)
+        body_split.addWidget(self.log_edit)
+
+        body_split.setStretchFactor(0, 1)
+        body_split.setStretchFactor(1, 1)
+        layout.addWidget(body_split)
 
     def load_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Open Data", "", "Data Files (*.csv *.xlsx *.xls)")
