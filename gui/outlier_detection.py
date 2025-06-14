@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from calculator_widget import CalculatorWidget
+from ml_gui import MLWindow
 
 class OutlierDetectionPage(QWidget):
     def __init__(self):
@@ -159,6 +160,10 @@ class OutlierDetectionPage(QWidget):
         self.btn_reset = QPushButton("清空表格")
         self.btn_reset.clicked.connect(self.reset_ui)
         bottom_bar.addWidget(self.btn_reset)
+        # 下一步进入算法训练界面
+        self.btn_next = QPushButton("下一步")
+        self.btn_next.clicked.connect(self.open_ml_window)
+        bottom_bar.addWidget(self.btn_next)
         right_v.addLayout(bottom_bar)
         #=====计算器 == == =
         self.calc = CalculatorWidget()
@@ -177,14 +182,6 @@ class OutlierDetectionPage(QWidget):
                                 QSizePolicy.Policy.Minimum))
         right_v.addLayout(sup)
         bottom_split.addWidget(right_panel)
-
-        # ──右下角的清空按钮 ──
-        bottom_bar = QHBoxLayout()
-        bottom_bar.addStretch()
-        next_step = QPushButton("下一步")
-        #完善这个逻辑
-        next_step.clicked.connect()
-        right_v.addLayout(next_step )
 
         right_v.addStretch() #空白位置
 
@@ -267,3 +264,9 @@ class OutlierDetectionPage(QWidget):
         # 2) 左侧 / 右侧列表 & 下拉框
         self.list_all.addItem(name)
         self.cmb.addItem(name)
+
+    def open_ml_window(self):
+        """打开算法训练界面"""
+        if not hasattr(self, "ml_window"):
+            self.ml_window = MLWindow()
+        self.ml_window.show()
