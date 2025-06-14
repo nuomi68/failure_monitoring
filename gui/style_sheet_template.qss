@@ -1,0 +1,201 @@
+/* ======= 调色盘（全部变量） =======
+   $primary            主色
+   $primary-hover      按钮 hover
+   $primary-pressed    按钮 pressed
+   $border             通用边框
+   $btn-text             默认文字色
+   $btn-hover-border     悬浮描边
+   $btn-hover-text       悬浮文字色
+   $btn-pressed-border   按压描边
+   $btn-pressed-text     按压文字色
+   $bg                 主背景
+   $surface            卡片 / 面板背景
+   $sidebar-bg         侧边栏背景
+   $sidebar-hover      侧边栏按钮 hover 背景
+   $text               主文字
+   $text-light         次要文字
+   $disabled-bg        Disabled 填充
+   $disabled-border    Disabled 描边
+   $disabled-text      Disabled 文字
+   $input-bg           输入框背景
+   $table-header-bg    表头背景
+   $scrollbar          滚动条拖块
+   $scrollbar-hover    滚动条 hover
+   $scrollbar-pressed  滚动条 pressed
+   $tooltip-bg         Tooltip 背景
+   $tooltip-text       Tooltip 文字
+   $card-shadow        阴影（占位）
+   $radius             圆角
+====================================*/
+
+/* ---------- 全局 ---------- */
+QWidget {
+    background-color: $bg;
+    color: $text;
+    font-family: "Inter","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size: 14px;
+}
+
+/* ---------- 侧边栏 ---------- */
+#Sidebar {
+    background-color: $sidebar-bg;
+    border-right: 1px solid $border;
+}
+#Sidebar QPushButton {
+    background-color: transparent;
+    border: none;
+    color: $text;
+    padding: 8px 14px;
+    text-align: left;
+}
+#Sidebar QPushButton:hover   { background-color: $sidebar-hover; }
+#Sidebar QPushButton:checked {
+    background-color: $primary;
+    color: $tooltip-text;
+}
+
+/* ---------- 顶部搜索框 / 工具栏 ---------- */
+#TopBar { background-color: $bg; }
+#TopBar QLineEdit {
+    background-color: $input-bg;
+    border: 1px solid $input-bg;
+    border-radius: $radius;
+    padding: 4px 8px;
+}
+#TopBar QLineEdit:focus { border-color: $primary; }
+
+/* ---------- 按钮 ---------- */
+QPushButton {
+    background-color: $primary;
+    border: 1px solid $primary;
+    border-radius: $radius;
+    padding: 6px 14px;
+    color: $btn-text;
+}
+
+
+QPushButton:hover {
+    background-color: $primary-hover;
+    border-color:    $btn-hover-border;
+    color:           $btn-hover-text;
+}
+
+
+QPushButton:pressed {
+    background-color: $primary-pressed;
+    border-color:     $btn-pressed-border;
+    color:            $btn-pressed-text;
+}
+
+
+QPushButton:disabled {
+    background-color: $disabled-bg;
+    border: 1px solid $disabled-border;
+    color: $disabled-text;
+}
+
+/* ---------- 卡片 / Panel ---------- */
+.Card {
+    background-color: $surface;
+    border: 1px solid $border;
+    border-radius: $radius;
+    padding: 12px;
+    /* $card-shadow 供 QGraphicsDropShadowEffect 使用 */
+}
+
+/* ---------- 标题 ---------- */
+h1, .h1, QLabel[h1="true"] {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+}
+
+/* ---------- hint ---------- */
+.hint, QLabel[hint="true"] { color: $text-light; }
+
+/* ---------- 输入框 ---------- */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background-color: $bg;
+    border: 1px solid $border;
+    border-radius: $radius;
+    padding: 6px 8px;
+    selection-background-color: $primary;
+}
+QLineEdit:hover,
+QTextEdit:hover,
+QPlainTextEdit:hover { border-color: $primary; }
+QLineEdit:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus { border: 1px solid $primary; }
+
+/* ---------- 下拉框 ---------- */
+QComboBox {
+    background-color: $bg;
+    border: 1px solid $border;
+    border-radius: $radius;
+    padding: 6px 8px;
+}
+QComboBox:hover { border-color: $primary; }
+QComboBox:focus { border: 1px solid $primary; }
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    width: 28px;
+    border-left: 1px solid $border;
+}
+QComboBox QAbstractItemView {
+    border: 1px solid $border;
+    selection-background-color: $primary;
+    outline: 0;
+}
+
+/* ---------- 表格 ---------- */
+QTableView {
+    border: 1px solid $border;
+    border-radius: $radius;
+    gridline-color: $border;
+    selection-background-color: $primary;
+}
+QHeaderView::section {
+    background-color: $table-header-bg;
+    border: 1px solid $border;
+    padding: 6px;
+    font-weight: 600;
+}
+
+/* ---------- 滚动条 ---------- */
+QScrollBar:vertical,
+QScrollBar:horizontal {
+    background-color: transparent;
+    border: none;
+}
+QScrollBar::handle {
+    background-color: $scrollbar;
+    border-radius: $radius;
+    min-height: 30px;
+}
+QScrollBar::handle:hover   { background-color: $scrollbar-hover; }
+QScrollBar::handle:pressed { background-color: $scrollbar-pressed; }
+QScrollBar::add-line,
+QScrollBar::sub-line { width:0; height:0; }
+QScrollBar::add-page,
+QScrollBar::sub-page { background-color: none; }
+
+/* ---------- Tooltip ---------- */
+QToolTip {
+    background-color: $tooltip-bg;
+    color: $tooltip-text;
+    border-radius: $radius;
+    padding: 4px 8px;
+}
+
+/* ---------- 进度条 ---------- */
+QProgressBar {
+    border: 1px solid $border;
+    border-radius: $radius;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background-color: $primary;
+    border-radius: $radius;
+}
