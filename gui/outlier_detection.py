@@ -8,12 +8,19 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from calculator_widget import CalculatorWidget
+from ml_gui import MLWindow
 
 class OutlierDetectionPage(QWidget):
     def __init__(self):
         super().__init__()
 
-        main = QVBoxLayout(self)          # 顶层垂直
+        self.df = pd.DataFrame()
+
+        self.stack = QStackedLayout()
+        self.setLayout(self.stack)
+
+        self.data_page = QWidget()
+        main = QVBoxLayout(self.data_page)          # 顶层垂直
         title = QLabel("选择数据")
         title.setStyleSheet("font-weight:600; font-size:26px;")
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -159,6 +166,10 @@ class OutlierDetectionPage(QWidget):
         self.btn_reset = QPushButton("清空表格")
         self.btn_reset.clicked.connect(self.reset_ui)
         bottom_bar.addWidget(self.btn_reset)
+        # 下一步进入算法训练界面
+        self.btn_next = QPushButton("下一步")
+        self.btn_next.clicked.connect(self.open_ml_window)
+        bottom_bar.addWidget(self.btn_next)
         right_v.addLayout(bottom_bar)
         #=====计算器 == == =
         self.calc = CalculatorWidget()
@@ -178,19 +189,16 @@ class OutlierDetectionPage(QWidget):
         right_v.addLayout(sup)
         bottom_split.addWidget(right_panel)
 
-        # ──右下角的清空按钮 ──
-        bottom_bar = QHBoxLayout()
-        bottom_bar.addStretch()
-        next_step = QPushButton("下一步")
-        #完善这个逻辑
-        next_step.clicked.connect()
-        right_v.addLayout(next_step )
-
         right_v.addStretch() #空白位置
 
         # ---------- 可选：设置左右初始比例 ----------
         bottom_split.setStretchFactor(0, 1)   # 左 1
         bottom_split.setStretchFactor(1, 1)   # 右 1
+
+        self.stack.addWidget(self.data_page)
+        self.ml_window = MLWindow()
+        self.stack.addWidget(self.ml_window)
+        self.stack.setCurrentWidget(self.data_page)
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件",
@@ -198,6 +206,7 @@ class OutlierDetectionPage(QWidget):
         if not path:
             return
         df = pd.read_excel(path)
+        self.df = df
         self.populate_table(df)
         self.populate_lists(df.columns.tolist())
         self.calc.setDataFrame(df)
@@ -211,6 +220,7 @@ class OutlierDetectionPage(QWidget):
         self.list_selected.clear()
         self.cmb.clear()
         self.calc.setDataFrame(pd.DataFrame())
+        self.df = pd.DataFrame()
         self.top_stack.setCurrentIndex(0)      # 恢复到示例页
 
     def populate_table(self, df):
@@ -267,3 +277,14 @@ class OutlierDetectionPage(QWidget):
         # 2) 左侧 / 右侧列表 & 下拉框
         self.list_all.addItem(name)
         self.cmb.addItem(name)
+
+    def selected_columns(self) -> list[str]:
+        """返回已选择的特征名称列表"""
+        return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
+
+    def open_ml_window(self):
+        """打开算法训练界面"""
+        if self.df.empty:
+            return
+        self.ml_window.set_data(self.df, self.selected_columns())
+        self.stack.setCurrentWidget(self.ml_window)
