@@ -199,3 +199,9 @@ QProgressBar::chunk {
     background-color: $primary;
     border-radius: $radius;
 }
+
+/* ---------- Step Indicator ---------- */
+QLabel[step="current"] {
+    color: $primary;
+    font-weight: 600;
+}

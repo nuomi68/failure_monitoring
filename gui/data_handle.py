@@ -1,7 +1,7 @@
 import pandas as pd
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QPushButton, QFileDialog,QSplitter,QStackedLayout,
-    QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,QHeaderView,
+    QWidget, QFrame, QPushButton, QFileDialog, QSplitter, QStackedLayout,
+    QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
     QListWidget, QAbstractItemView, QCheckBox, QComboBox,
     QLabel, QSizePolicy, QSpacerItem
 )
@@ -9,11 +9,18 @@ from PyQt6.QtCore import Qt
 
 from calculator_widget import CalculatorWidget
 
-class OutlierDetectionPage(QWidget):
+class DataHandlePage(QWidget):
+    """Data preprocessing interface embedding the ML window."""
+
     def __init__(self):
         super().__init__()
 
-        main = QVBoxLayout(self)          # 顶层垂直
+        self.df = pd.DataFrame()
+
+        layout = QVBoxLayout(self)
+
+        self.data_page = QWidget()
+        main = QVBoxLayout(self.data_page)          # 顶层垂直
         title = QLabel("选择数据")
         title.setStyleSheet("font-weight:600; font-size:26px;")
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -178,19 +185,13 @@ class OutlierDetectionPage(QWidget):
         right_v.addLayout(sup)
         bottom_split.addWidget(right_panel)
 
-        # ──右下角的清空按钮 ──
-        bottom_bar = QHBoxLayout()
-        bottom_bar.addStretch()
-        next_step = QPushButton("下一步")
-        #完善这个逻辑
-        next_step.clicked.connect()
-        right_v.addLayout(next_step )
-
         right_v.addStretch() #空白位置
 
         # ---------- 可选：设置左右初始比例 ----------
         bottom_split.setStretchFactor(0, 1)   # 左 1
         bottom_split.setStretchFactor(1, 1)   # 右 1
+
+        layout.addWidget(self.data_page)
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件",
@@ -198,6 +199,7 @@ class OutlierDetectionPage(QWidget):
         if not path:
             return
         df = pd.read_excel(path)
+        self.df = df
         self.populate_table(df)
         self.populate_lists(df.columns.tolist())
         self.calc.setDataFrame(df)
@@ -211,6 +213,7 @@ class OutlierDetectionPage(QWidget):
         self.list_selected.clear()
         self.cmb.clear()
         self.calc.setDataFrame(pd.DataFrame())
+        self.df = pd.DataFrame()
         self.top_stack.setCurrentIndex(0)      # 恢复到示例页
 
     def populate_table(self, df):
@@ -267,3 +270,8 @@ class OutlierDetectionPage(QWidget):
         # 2) 左侧 / 右侧列表 & 下拉框
         self.list_all.addItem(name)
         self.cmb.addItem(name)
+
+    def selected_columns(self) -> list[str]:
+        """返回已选择的特征名称列表"""
+        return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
+
