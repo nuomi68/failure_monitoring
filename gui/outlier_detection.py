@@ -277,6 +277,7 @@ class OutlierDetectionPage(QWidget):
         # 2) 左侧 / 右侧列表 & 下拉框
         self.list_all.addItem(name)
         self.cmb.addItem(name)
+        self.cmb.addItem(name)
 
     def selected_columns(self) -> list[str]:
         """返回已选择的特征名称列表"""

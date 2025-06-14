@@ -86,7 +86,6 @@ class MLWindow(QWidget):
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         body_split.addWidget(self.log_edit)
-
         body_split.setStretchFactor(0, 1)
         body_split.setStretchFactor(1, 1)
         layout.addWidget(body_split)
