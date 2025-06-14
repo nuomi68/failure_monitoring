@@ -9,20 +9,20 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QPushButton,
+    QFileDialog,
     QListWidget,
     QListWidgetItem,
     QHBoxLayout,
-    QSplitter,
     QMessageBox,
     QLabel,
     QComboBox,
     QSpinBox,
     QDoubleSpinBox,
     QTextEdit,
-    QFileDialog,
 )
 from PyQt6.QtCore import Qt
 
+from data_loader import load_dataframe
 from tools import scale_features, save_model, plot_scores, logger
 from model import train_knn, train_iforest
 
@@ -33,6 +33,7 @@ class MLWindow(QWidget):
         self.setWindowTitle("ML Frontend")
         self.resize(600, 400)
 
+        self.file_path: Path | None = None
         self.df: pd.DataFrame | None = None
         self.model = None
         self.scaler = None
@@ -43,6 +44,9 @@ class MLWindow(QWidget):
         self.setLayout(layout)
 
         btn_layout = QHBoxLayout()
+        self.load_btn = QPushButton("Load File")
+        self.load_btn.clicked.connect(self.load_file)
+        btn_layout.addWidget(self.load_btn)
 
         self.alg_combo = QComboBox()
         self.alg_combo.addItems(["knn", "iforest"])
@@ -78,29 +82,30 @@ class MLWindow(QWidget):
 
         layout.addLayout(btn_layout)
 
-        body_split = QSplitter(Qt.Orientation.Horizontal)
-
         self.column_list = QListWidget()
-        body_split.addWidget(self.column_list)
+        layout.addWidget(self.column_list)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        body_split.addWidget(self.log_edit)
+        layout.addWidget(self.log_edit)
 
-        body_split.setStretchFactor(0, 1)
-        body_split.setStretchFactor(1, 1)
-        layout.addWidget(body_split)
-
-    def set_data(self, df: pd.DataFrame, columns: List[str]) -> None:
-        """Inject dataframe and populate column list."""
-        self.df = df
+    def load_file(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open Data", "", "Data Files (*.csv *.xlsx *.xls)")
+        if not file_name:
+            return
+        try:
+            self.df = load_dataframe(Path(file_name))
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {exc}")
+            logger.exception("load failed")
+            return
+        self.file_path = Path(file_name)
         self.column_list.clear()
-        for col in df.columns:
+        for col in self.df.columns:
             item = QListWidgetItem(col)
-            state = Qt.CheckState.Checked if col in columns else Qt.CheckState.Unchecked
-            item.setCheckState(state)
+            item.setCheckState(Qt.CheckState.Unchecked)
             self.column_list.addItem(item)
-
+        self.log_edit.append(f"Loaded {file_name}")
 
     def selected_columns(self) -> List[str]:
         cols: List[str] = []
@@ -112,7 +117,7 @@ class MLWindow(QWidget):
 
     def train_model(self):
         if self.df is None:
-            QMessageBox.warning(self, "Warning", "No data provided")
+            QMessageBox.warning(self, "Warning", "Please load data first")
             return
         cols = self.selected_columns()
         if not cols:
