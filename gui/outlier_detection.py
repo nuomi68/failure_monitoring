@@ -14,7 +14,13 @@ class OutlierDetectionPage(QWidget):
     def __init__(self):
         super().__init__()
 
-        main = QVBoxLayout(self)          # 顶层垂直
+        self.df = pd.DataFrame()
+
+        self.stack = QStackedLayout()
+        self.setLayout(self.stack)
+
+        self.data_page = QWidget()
+        main = QVBoxLayout(self.data_page)          # 顶层垂直
         title = QLabel("选择数据")
         title.setStyleSheet("font-weight:600; font-size:26px;")
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -189,12 +195,18 @@ class OutlierDetectionPage(QWidget):
         bottom_split.setStretchFactor(0, 1)   # 左 1
         bottom_split.setStretchFactor(1, 1)   # 右 1
 
+        self.stack.addWidget(self.data_page)
+        self.ml_window = MLWindow()
+        self.stack.addWidget(self.ml_window)
+        self.stack.setCurrentWidget(self.data_page)
+
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件",
                                               "", "Excel 文件 (*.xlsx *.xls)")
         if not path:
             return
         df = pd.read_excel(path)
+        self.df = df
         self.populate_table(df)
         self.populate_lists(df.columns.tolist())
         self.calc.setDataFrame(df)
@@ -208,6 +220,7 @@ class OutlierDetectionPage(QWidget):
         self.list_selected.clear()
         self.cmb.clear()
         self.calc.setDataFrame(pd.DataFrame())
+        self.df = pd.DataFrame()
         self.top_stack.setCurrentIndex(0)      # 恢复到示例页
 
     def populate_table(self, df):
@@ -265,8 +278,13 @@ class OutlierDetectionPage(QWidget):
         self.list_all.addItem(name)
         self.cmb.addItem(name)
 
+    def selected_columns(self) -> list[str]:
+        """返回已选择的特征名称列表"""
+        return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
+
     def open_ml_window(self):
         """打开算法训练界面"""
-        if not hasattr(self, "ml_window"):
-            self.ml_window = MLWindow()
-        self.ml_window.show()
+        if self.df.empty:
+            return
+        self.ml_window.set_data(self.df, self.selected_columns())
+        self.stack.setCurrentWidget(self.ml_window)
