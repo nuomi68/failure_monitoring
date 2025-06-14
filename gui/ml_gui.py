@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Any
 
 import numpy as np
 import pandas as pd
@@ -17,11 +17,13 @@ from PyQt6.QtWidgets import (
     QLabel,
     QComboBox,
     QSpinBox,
+    QDoubleSpinBox,
+    QTextEdit,
 )
 from PyQt6.QtCore import Qt
 
 from data_loader import load_dataframe
-from tools import scale_features, logger
+from tools import scale_features, save_model, plot_scores, logger
 from model import train_knn, train_iforest
 
 
@@ -33,6 +35,10 @@ class MLWindow(QWidget):
 
         self.file_path: Path | None = None
         self.df: pd.DataFrame | None = None
+        self.model = None
+        self.scaler = None
+        self.meta: dict[str, Any] = {}
+        self.scores: np.ndarray | None = None
 
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -52,14 +58,36 @@ class MLWindow(QWidget):
         btn_layout.addWidget(QLabel("k / estimators:"))
         btn_layout.addWidget(self.k_spin)
 
+        self.contam_spin = QDoubleSpinBox()
+        self.contam_spin.setDecimals(3)
+        self.contam_spin.setSingleStep(0.001)
+        self.contam_spin.setRange(0.0, 1.0)
+        self.contam_spin.setValue(0.01)
+        btn_layout.addWidget(QLabel("contam:"))
+        btn_layout.addWidget(self.contam_spin)
+
         self.train_btn = QPushButton("Train")
         self.train_btn.clicked.connect(self.train_model)
         btn_layout.addWidget(self.train_btn)
+
+        self.save_btn = QPushButton("Save Model")
+        self.save_btn.setEnabled(False)
+        self.save_btn.clicked.connect(self.save_model)
+        btn_layout.addWidget(self.save_btn)
+
+        self.plot_btn = QPushButton("Show Plot")
+        self.plot_btn.setEnabled(False)
+        self.plot_btn.clicked.connect(self.show_plot)
+        btn_layout.addWidget(self.plot_btn)
 
         layout.addLayout(btn_layout)
 
         self.column_list = QListWidget()
         layout.addWidget(self.column_list)
+
+        self.log_edit = QTextEdit()
+        self.log_edit.setReadOnly(True)
+        layout.addWidget(self.log_edit)
 
     def load_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Open Data", "", "Data Files (*.csv *.xlsx *.xls)")
@@ -77,6 +105,7 @@ class MLWindow(QWidget):
             item = QListWidgetItem(col)
             item.setCheckState(Qt.CheckState.Unchecked)
             self.column_list.addItem(item)
+        self.log_edit.append(f"Loaded {file_name}")
 
     def selected_columns(self) -> List[str]:
         cols: List[str] = []
@@ -96,16 +125,47 @@ class MLWindow(QWidget):
             return
 
         X = self.df[cols].values.astype(np.float32)
-        X_scaled, _ = scale_features(X)
+        X_scaled, self.scaler = scale_features(X)
 
         alg = self.alg_combo.currentText()
         if alg == "knn":
-            _, tau = train_knn(X_scaled, k=self.k_spin.value())
+            self.model, tau = train_knn(X_scaled, k=self.k_spin.value())
+            self.meta = {"model_type": "knn", "tau": tau}
+            self.scores = self.model.kneighbors(X_scaled)[0][:, -1]
         else:
-            _, tau = train_iforest(X_scaled, n_estimators=self.k_spin.value())
+            self.model, tau = train_iforest(
+                X_scaled,
+                n_estimators=self.k_spin.value(),
+                contamination=self.contam_spin.value(),
+            )
+            self.meta = {"model_type": "iforest", "tau": tau}
+            self.scores = -self.model.decision_function(X_scaled)
+
+        self.save_btn.setEnabled(True)
+        self.plot_btn.setEnabled(True)
 
         QMessageBox.information(self, "Result", f"Training finished. Tau = {tau:.4f}")
         logger.info("Model trained with tau=%.4f", tau)
+        self.log_edit.append(f"train ok, tau={tau:.4f}")
+
+    def show_plot(self) -> None:
+        if self.scores is None:
+            return
+        plot_scores(
+            range(len(self.scores)),
+            self.scores,
+            threshold=self.meta.get("tau"),
+            title="Training Scores",
+        )
+
+    def save_model(self) -> None:
+        if self.model is None:
+            return
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Model", "", "Joblib Files (*.joblib)")
+        if not file_name:
+            return
+        save_model(Path(file_name), self.model, self.scaler, self.meta)
+        self.log_edit.append(f"model saved to {file_name}")
 
 
 def main():
