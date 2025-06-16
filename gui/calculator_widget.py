@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 
 
+
 class CalculatorWidget(QGroupBox):
     new_column = pyqtSignal(str, object)
 

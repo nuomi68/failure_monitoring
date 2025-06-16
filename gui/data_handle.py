@@ -1,4 +1,8 @@
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QPushButton, QFileDialog, QSplitter, QStackedLayout,
     QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -8,6 +12,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from calculator_widget import CalculatorWidget
+from feature_preview import FeaturePreviewWidget,HeatmapCanvas
+
 
 class DataHandlePage(QWidget):
     """Data preprocessing interface embedding the ML window."""
@@ -18,6 +24,7 @@ class DataHandlePage(QWidget):
         self.df = pd.DataFrame()
 
         layout = QVBoxLayout(self)
+
 
         self.data_page = QWidget()
         main = QVBoxLayout(self.data_page)          # 顶层垂直
@@ -97,12 +104,31 @@ class DataHandlePage(QWidget):
 
         self.top_stack.addWidget(upper_placeholder)  # index 0
 
-        # ---------- Page 1：真正的数据表 ----------
+        # ---------- Page 1：真正的数据表（表格左 2/3 + 热力图右 1/3） ----------
+        page1 = QWidget()
+        page1_layout = QVBoxLayout(page1)
+
+        # 水平分割
+        split = QSplitter(Qt.Orientation.Horizontal)
+
+        # —— ① 表格 —— #
         self.table = QTableWidget()
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding,
                                  QSizePolicy.Policy.Expanding)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.top_stack.addWidget(self.table)  # index 1
+        split.addWidget(self.table)
+
+        # —— ② 热力图 —— #
+        self.heatmap_canvas = HeatmapCanvas()  # ← 前面定义好的 Matplotlib 画布
+        split.addWidget(self.heatmap_canvas)
+
+        # 设置左右 2:1 比例
+        split.setStretchFactor(0, 2)  # 表格
+        split.setStretchFactor(1, 1)  # 热力图
+        split.setHandleWidth(1)
+        self.heatmap_canvas.setMaximumWidth(500)
+        page1_layout.addWidget(split)
+        self.top_stack.addWidget(page1)  # index 1
 
         # ---------- 底部：左右分割 ----------
         bottom_split = QSplitter(Qt.Orientation.Horizontal)
@@ -156,7 +182,11 @@ class DataHandlePage(QWidget):
         left_v.addLayout(lists_layout)
         bottom_split.addWidget(left_panel)
 
-        # ===== 右半======
+        # === 中：图形预览================
+        self.preview = FeaturePreviewWidget()
+        bottom_split.addWidget(self.preview)
+
+        # ===== 计算器 ======
         right_panel = QWidget()
         right_v = QVBoxLayout(right_panel)
 
@@ -187,7 +217,7 @@ class DataHandlePage(QWidget):
 
         right_v.addStretch() #空白位置
 
-        # ---------- 可选：设置左右初始比例 ----------
+        # ---------- 设置左右初始比例 ----------
         bottom_split.setStretchFactor(0, 1)   # 左 1
         bottom_split.setStretchFactor(1, 1)   # 右 1
 
@@ -204,8 +234,11 @@ class DataHandlePage(QWidget):
         self.populate_lists(df.columns.tolist())
         self.calc.setDataFrame(df)
         self.calc.new_column.connect(self._on_new_column)
-
+        self.heatmap_canvas.plot_corr(self.df)
         self.top_stack.setCurrentIndex(1)      # 只切上半部分！
+
+        self.preview.set_dataframe(df)
+        self.preview.set_selected_columns(self.selected_columns())
 
     def reset_ui(self):
         self.table.clear()
@@ -239,21 +272,25 @@ class DataHandlePage(QWidget):
         for it in self.list_all.selectedItems():
             self.list_selected.addItem(it.text())
             self.list_all.takeItem(self.list_all.row(it))
+        self.preview.set_selected_columns(self.selected_columns())
 
     def move_one_left(self):
         for it in self.list_selected.selectedItems():
             self.list_all.addItem(it.text())
             self.list_selected.takeItem(self.list_selected.row(it))
+        self.preview.set_selected_columns(self.selected_columns())
 
     def move_all_right(self):
         while self.list_all.count():
             it = self.list_all.takeItem(0)
             self.list_selected.addItem(it.text())
+        self.preview.set_selected_columns(self.selected_columns())
 
     def move_all_left(self):
         while self.list_selected.count():
             it = self.list_selected.takeItem(0)
             self.list_all.addItem(it.text())
+        self.preview.set_selected_columns(self.selected_columns())
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked)
@@ -271,7 +308,13 @@ class DataHandlePage(QWidget):
         self.list_all.addItem(name)
         self.cmb.addItem(name)
 
+        self._update_heatmap()
+
     def selected_columns(self) -> list[str]:
         """返回已选择的特征名称列表"""
         return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
+
+    def _update_heatmap(self):
+        """根据已选特征即时重绘热力图"""
+        self.heatmap_canvas.plot_corr(self.df)
 
