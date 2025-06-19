@@ -98,7 +98,19 @@ class PlotCanvas(FigureCanvas):
         mask = scores >= tau
         self.ax.scatter(xs[mask], scores[mask], c="red", zorder=5, label="abnormal")
         self.ax.axhline(tau, color="red", linestyle="--")
-        self.ax.set_xlabel("Time / Index"); self.ax.set_ylabel("score")
+
+        # 等距选择 4~5 个横坐标
+        num_ticks = min(5, len(xs))  # 不超过总数
+        tick_indices = np.linspace(0, len(xs) - 1, num=num_ticks, dtype=int)
+        tick_values = xs[tick_indices]
+        self.ax.set_xticks(tick_values)
+
+        # 如果 xs 是文本（如时间标签），也要设 labels
+        if np.issubdtype(xs.dtype, np.str_) or xs.dtype == object:
+            self.ax.set_xticklabels(tick_values, rotation=45)
+
+        self.ax.set_xlabel("Index")
+        self.ax.set_ylabel("score")
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
@@ -253,13 +265,13 @@ class MLWindow(QWidget):
         tau = self.meta.get("tau", 0.95)
         viz = self.viz_combo.currentText()
 
-        if viz == "Score Hist":
+        if viz == "分数直方图":
             self.canvas.plot_hist(self.scores, tau)
 
-        elif viz == "PCA 2D":
+        elif viz == "PCA 散点":
             self.canvas.plot_pca(self.X_scaled, self.scores, tau)
 
-        elif viz == "Time Series":
+        elif viz == "时序折线":
             xs = np.arange(len(self.scores))
             if "TIME" in self.df.columns:
                 xs = self.df["TIME"].values

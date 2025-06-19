@@ -97,7 +97,7 @@ class FeaturePreviewWidget(QWidget):
         ctrl.addStretch()
         root.addLayout(ctrl)
 
-        # ⬇️ 中部：Matplotlib 画布 ------------------------------
+        # 中部：Matplotlib 画布 ------------------------------
         self.canvas = _PreviewCanvas()
         root.addWidget(self.canvas)
         self.ax = self.canvas.ax
@@ -172,12 +172,22 @@ class FeaturePreviewWidget(QWidget):
         # -------- 折线图 ---------------------------------------------------
         if chart == "折线图":
             if not self._sel_cols:
-                self.canvas.draw();
+                self.canvas.draw()
                 return
             for col in self._sel_cols:
                 self.ax.plot(df_use.index, df_use[col], label=col)
             self.ax.legend()
             self.ax.set_xlabel("样本")
+
+            # ✅ 等距选择 4~5 个横坐标标签
+            num_ticks = min(5, len(df_use))
+            tick_indices = np.linspace(0, len(df_use) - 1, num=num_ticks, dtype=int)
+            tick_values = df_use.index[tick_indices]
+            self.ax.set_xticks(tick_values)
+
+            # 如果 index 是文本（如时间标签），设置文字标签
+            if np.issubdtype(df_use.index.dtype, np.str_) or df_use.index.dtype == object:
+                self.ax.set_xticklabels(tick_values, rotation=45)
 
         # -------- 散点图 ---------------------------------------------------
         elif chart == "散点图":

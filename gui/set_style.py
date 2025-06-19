@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.rcParams['font.family'] = ['Microsoft YaHei', 'SimHei', 'sans-serif']
+matplotlib.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
 light_palette = {
     # --- 三态底色 ---
     "$primary":           "#111111",  # 默认黑
