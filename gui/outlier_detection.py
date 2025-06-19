@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from data_handle import DataHandlePage
 from ml_gui import MLWindow
+from validation_page import ValidationPage
 
 class OutlierDetectionPage(QWidget):
     """Top-level page managing the data handle and ML views."""
@@ -35,7 +36,7 @@ class OutlierDetectionPage(QWidget):
         self.stack = QStackedLayout()
         self.data_page = DataHandlePage()
         self.ml_page = MLWindow()
-        self.valid_page = QWidget()
+        self.valid_page = ValidationPage()
         self.stack.addWidget(self.data_page)
         self.stack.addWidget(self.ml_page)
         self.stack.addWidget(self.valid_page)
@@ -54,6 +55,13 @@ class OutlierDetectionPage(QWidget):
         if self._step == 1:
             self.ml_page.set_data(
                 self.data_page.df, self.data_page.selected_columns()
+            )
+        elif self._step == 2:
+            self.valid_page.configure(
+                self.ml_page.selected_columns(),
+                self.ml_page.model,
+                self.ml_page.scaler,
+                self.ml_page.meta,
             )
 
     def next_step(self) -> None:
