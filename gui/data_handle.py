@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt
 
 from calculator_widget import CalculatorWidget
 from feature_preview import FeaturePreviewWidget,HeatmapCanvas
-
+from tools import logger
 
 class DataHandlePage(QWidget):
     """Data preprocessing interface embedding the ML window."""
@@ -229,6 +229,10 @@ class DataHandlePage(QWidget):
         if not path:
             return
         df = pd.read_excel(path)
+        removed = int(df.isna().any(axis=1).sum())
+        if removed:
+            df = df.dropna()
+            logger.info("删除含 NaN 的行 %d 条", removed)
         self.df = df
         self.populate_table(df)
         self.populate_lists(df.columns.tolist())
@@ -293,7 +297,7 @@ class DataHandlePage(QWidget):
         self.preview.set_selected_columns(self.selected_columns())
 
     def toggle_target(self, state):
-        self.cmb.setEnabled(state == Qt.CheckState.Checked)
+        self.cmb.setEnabled(state == Qt.CheckState.Checked.value)
 
     def _on_new_column(self, name: str, col: pd.Series):
         """收到计算器的新列后，同步 UI."""

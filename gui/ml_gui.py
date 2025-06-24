@@ -115,6 +115,28 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
+    # ------- ROC 曲线 ------------------------------------------
+    def plot_roc(self, y_true, y_score):
+        from sklearn.metrics import roc_curve, auc
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        self.ax.clear()
+        self.ax.plot(fpr, tpr, lw=2, label=f"AUC={auc(fpr,tpr):.3f}")
+        self.ax.plot([0,1], [0,1], "--", lw=1, color="gray")
+        self.ax.set_xlabel("False Positive Rate"); self.ax.set_ylabel("True Positive Rate")
+        self.ax.legend(); self.fig.tight_layout(); self.draw()
+
+    # ------- 混淆矩阵 ------------------------------------------
+    def plot_confmat(self, y_true, y_pred):
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(y_true, y_pred)
+        self.ax.clear()
+        im = self.ax.imshow(cm, cmap="Blues")
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                self.ax.text(j, i, cm[i,j], ha="center", va="center")
+        self.ax.set_xlabel("Predicted"); self.ax.set_ylabel("True")
+        self.fig.colorbar(im, ax=self.ax); self.fig.tight_layout(); self.draw()
+
 
 # ======== 主窗口 ======================================================
 class MLWindow(QWidget):
@@ -131,6 +153,8 @@ class MLWindow(QWidget):
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
         self.target_col: str | None = None
+        self.y_true = None
+        self.y_pred = None
 
         # ===== 顶部参数栏 =================================================
         top = QHBoxLayout()
@@ -219,11 +243,13 @@ class MLWindow(QWidget):
 
         self.alg_combo.clear()
         if target:
-            self.alg_combo.addItem("带标签KNN", "knn_clf")
+            self.alg_combo.addItem("KNN", "knn_clf")
             self.alg_combo.addItem("随机森林", "rf")
         else:
             self.alg_combo.addItem("KNN", "knn")
             self.alg_combo.addItem("孤立森林", "iforest")
+        # --- 重置可视化模式
+        self._reset_viz_mode(bool(target))
 
     def selected_columns(self) -> List[str]:
         cols = []
@@ -248,24 +274,38 @@ class MLWindow(QWidget):
 
         alg = self.alg_combo.currentData()
         if self.target_col:
+            self._reset_viz_mode(True)
             y = self.df[self.target_col].values
+            self.y_true = y
+            from sklearn.utils.multiclass import type_of_target
+            if type_of_target(y) in ("continuous", "continuous-multioutput"):
+                QMessageBox.warning(self, "错误", "标签列必须为离散类别，当前为连续值")
+                return
             if alg == "rf":
                 from sklearn.ensemble import RandomForestClassifier
                 self.model = RandomForestClassifier(
                     n_estimators=self.k_spin.value(), random_state=0
                 ).fit(self.X_scaled, y)
-                self.scores = self.model.predict_proba(self.X_scaled)[:, 1]
+                proba = self.model.predict_proba(self.X_scaled)
                 tau = 0.5
             else:  # knn_clf
                 from sklearn.neighbors import KNeighborsClassifier
                 self.model = KNeighborsClassifier(n_neighbors=self.k_spin.value())
                 self.model.fit(self.X_scaled, y)
-                self.scores = self.model.predict_proba(self.X_scaled)[:, 1]
+                proba = self.model.predict_proba(self.X_scaled)
                 tau = 0.5
+            if proba.shape[1] == 1:  # 只有一个类别
+                self.scores = proba[:, 0]  # 或者直接设 0
+            else:
+                cls_idx = list(self.model.classes_).index(1)
+                self.scores = proba[:, cls_idx]
+            self.y_pred = self.model.predict(self.X_scaled)
         else:
+            self._reset_viz_mode(False)
+            self.y_true = self.y_pred = None
             if alg == "knn":
                 self.model, tau = train_knn(self.X_scaled, k=self.k_spin.value())
-                self.scores = self.model.kneighbors(self.X_scaled)[0][:, -1]
+                self.scores = self.model.kneighbors(self.X_scaled)
             else:
                 self.model, tau = train_iforest(
                     self.X_scaled,
@@ -292,20 +332,41 @@ class MLWindow(QWidget):
         tau = self.meta.get("tau", 0.95)
         viz = self.viz_combo.currentText()
 
-        if viz == "分数直方图":
-            self.canvas.plot_hist(self.scores, tau)
+        if self.target_col:  # ======== 监督 =========
+            if viz == "ROC 曲线":
+                self.canvas.plot_roc(self.y_true, self.scores)
+            elif viz == "混淆矩阵":
+                self.canvas.plot_confmat(self.y_true, self.y_pred)
+            elif viz == "PCA 彩色散点":
+                # 带 label 着色的 PCA
+                self.canvas.plot_pca(self.X_scaled, self.y_true, 1)  # τ=1 只是占位
+        else:  # ======== 非监督 =========
+            if viz == "分数直方图":
+                self.canvas.plot_hist(self.scores, tau)
+            elif viz == "PCA 散点":
+                self.canvas.plot_pca(self.X_scaled, self.scores, tau)
+            elif viz == "时序折线":
+                xs = np.arange(len(self.scores))
+                if "TIME" in self.df.columns:
+                    xs = self.df["TIME"].values
+                self.canvas.plot_series(xs, self.scores, tau)
+            # 更新异常表
+            self.update_abnormal_table(tau)
 
-        elif viz == "PCA 散点":
-            self.canvas.plot_pca(self.X_scaled, self.scores, tau)
-
-        elif viz == "时序折线":
-            xs = np.arange(len(self.scores))
-            if "TIME" in self.df.columns:
-                xs = self.df["TIME"].values
-            self.canvas.plot_series(xs, self.scores, tau)
-
-        # 更新异常表
-        self.update_abnormal_table(tau)
+    def _reset_viz_mode(self, supervised: bool):
+        self.viz_combo.blockSignals(True)
+        self.viz_combo.clear()
+        if supervised:
+            self.viz_combo.addItems(["ROC 曲线", "混淆矩阵", "PCA 彩色散点"])
+            self.canvas.slider.hide()
+            self.canvas.lbl_tau.hide()
+            self.tbl_abn.hide()
+        else:
+            self.viz_combo.addItems(["分数直方图", "PCA 散点", "时序折线"])
+            self.canvas.slider.show()
+            self.canvas.lbl_tau.show()
+            self.tbl_abn.show()
+        self.viz_combo.blockSignals(False)
 
     def update_abnormal_table(self, tau: float):
         mask = self.scores >= tau
@@ -324,18 +385,4 @@ class MLWindow(QWidget):
             save_model(Path(name), self.model, self.scaler, self.meta)
 
 
-# ================== DEMO 入口 ============================================
-def main():
-    # 随机生成 demo 数据
-    rng = np.random.default_rng(0)
-    df_demo = pd.DataFrame(rng.normal(size=(500, 6)), columns=[f"f{i}" for i in range(6)])
-    df_demo["TIME"] = pd.date_range("2023-01-01", periods=len(df_demo), freq="H")
 
-    app = QApplication(sys.argv)
-    win = MLWindow()
-    win.set_data(df_demo, checked=["f0", "f1", "f2"])
-    win.show()
-    sys.exit(app.exec())
-
-if __name__ == "__main__":
-    main()
