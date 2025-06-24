@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QTextEdit
 )
 
-from gui.ml_gui import MLWindow
+from gui.unsupervised_page import UnsupervisedPage
 
 
 class DataProcessingWindow(QWidget):
@@ -30,7 +30,7 @@ class DataProcessingWindow(QWidget):
         self.log.append("数据处理完成")
 
     def open_ml(self) -> None:
-        self.ml_win = MLWindow()
+        self.ml_win = UnsupervisedPage()
         self.ml_win.show()
 
 

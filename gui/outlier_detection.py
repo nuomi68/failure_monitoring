@@ -3,7 +3,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from data_handle import DataHandlePage
-from ml_gui import MLWindow
+from unsupervised_page import UnsupervisedPage
+from supervised_page import SupervisedPage
 from validation_page import ValidationPage
 
 class OutlierDetectionPage(QWidget):
@@ -18,7 +19,7 @@ class OutlierDetectionPage(QWidget):
         # --- step labels and navigation ---
         top = QHBoxLayout()
         self.labels = []
-        for text in ["数据处理", "拟合模型", "验证预测"]:
+        for text in ["数据处理", "异常检测", "监督学习", "验证预测"]:
             lbl = QLabel(text)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.labels.append(lbl)
@@ -35,10 +36,12 @@ class OutlierDetectionPage(QWidget):
         # --- stacked pages ---
         self.stack = QStackedLayout()
         self.data_page = DataHandlePage()
-        self.ml_page = MLWindow()
+        self.unsup_page = UnsupervisedPage()
+        self.sup_page = SupervisedPage()
         self.valid_page = ValidationPage()
         self.stack.addWidget(self.data_page)
-        self.stack.addWidget(self.ml_page)
+        self.stack.addWidget(self.unsup_page)
+        self.stack.addWidget(self.sup_page)
         self.stack.addWidget(self.valid_page)
         layout.addLayout(self.stack)
 
@@ -53,25 +56,39 @@ class OutlierDetectionPage(QWidget):
         self.next_btn.setEnabled(self._step < self.stack.count() - 1)
         self.stack.setCurrentIndex(self._step)
         if self._step == 1:
-            self.ml_page.set_data(
+            self.unsup_page.set_data(
                 self.data_page.df,
                 self.data_page.selected_columns(),
-                target=self.data_page.target_column() if self.data_page.has_target() else None,
             )
         elif self._step == 2:
+            self.sup_page.set_data(
+                self.data_page.df,
+                self.data_page.selected_columns(),
+                target=self.data_page.target_column(),
+            )
+        elif self._step == 3:
+            src = self.sup_page if self.data_page.has_target() else self.unsup_page
             self.valid_page.configure(
-                self.ml_page.selected_columns(),
-                self.ml_page.model,
-                self.ml_page.scaler,
-                self.ml_page.meta,
+                src.selected_columns(),
+                src.model,
+                src.scaler,
+                src.meta,
             )
 
     def next_step(self) -> None:
-        if self._step < self.stack.count() - 1:
-            self._step += 1
-            self.update_steps()
+        if self._step == 0:
+            self._step = 2 if self.data_page.has_target() else 1
+        elif self._step in (1, 2):
+            self._step = 3
+        else:
+            return
+        self.update_steps()
 
     def prev_step(self) -> None:
-        if self._step > 0:
-            self._step -= 1
-            self.update_steps()
+        if self._step == 3:
+            self._step = 2 if self.data_page.has_target() else 1
+        elif self._step in (1, 2):
+            self._step = 0
+        else:
+            return
+        self.update_steps()
