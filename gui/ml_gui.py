@@ -235,7 +235,7 @@ class MLWindow(QWidget):
         X = self.df[cols].astype(np.float32).values
         self.X_scaled, self.scaler = scale_features(X)
 
-        alg = self.alg_combo.currentText()
+        alg = self.alg_combo.currentData()
         if alg == "knn":
             self.model, tau = train_knn(self.X_scaled, k=self.k_spin.value())
             self.scores = self.model.kneighbors(self.X_scaled)[0][:, -1]
