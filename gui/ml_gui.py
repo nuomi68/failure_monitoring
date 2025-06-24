@@ -130,6 +130,7 @@ class MLWindow(QWidget):
         self.meta: dict[str, Any] = {}
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
+        self.target_col: str | None = None
 
         # ===== 顶部参数栏 =================================================
         top = QHBoxLayout()
@@ -206,13 +207,23 @@ class MLWindow(QWidget):
 
     # ---------------------------------------------------------------------
     # 外部注入数据
-    def set_data(self, df: pd.DataFrame, checked: List[str]):
+    def set_data(self, df: pd.DataFrame, checked: List[str], target: str | None = None):
+        """载入数据并根据是否有标签切换算法列表"""
         self.df = df
+        self.target_col = target
         self.column_list.clear()
         for col in df.columns:
             item = QListWidgetItem(col)
             item.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
             self.column_list.addItem(item)
+
+        self.alg_combo.clear()
+        if target:
+            self.alg_combo.addItem("带标签KNN", "knn_clf")
+            self.alg_combo.addItem("随机森林", "rf")
+        else:
+            self.alg_combo.addItem("KNN", "knn")
+            self.alg_combo.addItem("孤立森林", "iforest")
 
     def selected_columns(self) -> List[str]:
         cols = []
@@ -236,16 +247,32 @@ class MLWindow(QWidget):
         self.X_scaled, self.scaler = scale_features(X)
 
         alg = self.alg_combo.currentData()
-        if alg == "knn":
-            self.model, tau = train_knn(self.X_scaled, k=self.k_spin.value())
-            self.scores = self.model.kneighbors(self.X_scaled)[0][:, -1]
+        if self.target_col:
+            y = self.df[self.target_col].values
+            if alg == "rf":
+                from sklearn.ensemble import RandomForestClassifier
+                self.model = RandomForestClassifier(
+                    n_estimators=self.k_spin.value(), random_state=0
+                ).fit(self.X_scaled, y)
+                self.scores = self.model.predict_proba(self.X_scaled)[:, 1]
+                tau = 0.5
+            else:  # knn_clf
+                from sklearn.neighbors import KNeighborsClassifier
+                self.model = KNeighborsClassifier(n_neighbors=self.k_spin.value())
+                self.model.fit(self.X_scaled, y)
+                self.scores = self.model.predict_proba(self.X_scaled)[:, 1]
+                tau = 0.5
         else:
-            self.model, tau = train_iforest(
-                self.X_scaled,
-                n_estimators=self.k_spin.value(),
-                contamination=self.contam_spin.value()
-            )
-            self.scores = -self.model.decision_function(self.X_scaled)
+            if alg == "knn":
+                self.model, tau = train_knn(self.X_scaled, k=self.k_spin.value())
+                self.scores = self.model.kneighbors(self.X_scaled)[0][:, -1]
+            else:
+                self.model, tau = train_iforest(
+                    self.X_scaled,
+                    n_estimators=self.k_spin.value(),
+                    contamination=self.contam_spin.value()
+                )
+                self.scores = -self.model.decision_function(self.X_scaled)
 
         self.meta = {"model_type": alg, "tau": tau}
         self.save_btn.setEnabled(True)

@@ -232,6 +232,11 @@ class ValidationPage(QWidget):
             scores = self.model.kneighbors(Xs)[0][:, -1]
         elif mtype == "iforest":
             scores = -self.model.decision_function(Xs)
+        elif mtype in ("rf", "knn_clf"):
+            try:
+                scores = self.model.predict_proba(Xs)[:, 1]
+            except Exception:
+                scores = self.model.predict(Xs).astype(float)
         else:
             QMessageBox.warning(self, "错误", "未知模型类型"); return
         abn = 0

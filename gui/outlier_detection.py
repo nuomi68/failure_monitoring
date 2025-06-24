@@ -54,7 +54,9 @@ class OutlierDetectionPage(QWidget):
         self.stack.setCurrentIndex(self._step)
         if self._step == 1:
             self.ml_page.set_data(
-                self.data_page.df, self.data_page.selected_columns()
+                self.data_page.df,
+                self.data_page.selected_columns(),
+                target=self.data_page.target_column() if self.data_page.has_target() else None,
             )
         elif self._step == 2:
             self.valid_page.configure(

@@ -314,6 +314,14 @@ class DataHandlePage(QWidget):
         """返回已选择的特征名称列表"""
         return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
 
+    def has_target(self) -> bool:
+        """是否启用监督学习"""
+        return self.chk.isChecked()
+
+    def target_column(self) -> str | None:
+        """返回选择的标签列名称，若未启用则为 ``None``"""
+        return self.cmb.currentText() if self.has_target() and self.cmb.currentText() else None
+
     def _update_heatmap(self):
         """根据已选特征即时重绘热力图"""
         self.heatmap_canvas.plot_corr(self.df)
