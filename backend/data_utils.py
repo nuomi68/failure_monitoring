@@ -32,7 +32,6 @@ def build_windows(data: np.ndarray, look_back: int):
         y.append(data[i + look_back])
     return np.asarray(X, np.float32), np.asarray(y, np.float32)
 
-
 def compute_relative_errors(compare_df: pd.DataFrame):
     """Compute relative errors for predicted values.
 
