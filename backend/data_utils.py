@@ -31,3 +31,27 @@ def build_windows(data: np.ndarray, look_back: int):
         X.append(data[i : i + look_back])
         y.append(data[i + look_back])
     return np.asarray(X, np.float32), np.asarray(y, np.float32)
+
+def compute_relative_errors(compare_df: pd.DataFrame):
+    """Compute relative errors for predicted values.
+
+    Parameters
+    ----------
+    compare_df : pd.DataFrame
+        DataFrame whose first column contains the ground truth values and
+        the remaining columns are predictions from different models.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.Series, pd.Series]
+        * Relative error DataFrame (same shape as predictions)
+        * Maximum relative error for each model
+        * Mean relative error for each model
+    """
+    true = compare_df.iloc[:, 0]
+    preds = compare_df.iloc[:, 1:]
+    denom = true.replace(0, np.nan)
+    rel_err_df = preds.sub(true, axis=0).abs().div(denom, axis=0)
+    max_err = rel_err_df.max()
+    mean_err = rel_err_df.mean()
+    return rel_err_df, max_err, mean_err

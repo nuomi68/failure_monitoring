@@ -1,10 +1,14 @@
 from pathlib import Path
 
+
+import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
 
-from .data_utils import load_dataset, build_windows
+
+from .data_utils import load_dataset, build_windows, compute_relative_errors
+
 from .models import (
     gru_model,
     tcn_model,
@@ -71,6 +75,38 @@ def run_all_models():
     preds = xgboost_model.predict(xgb, X_val_t[-1])
     mae_xgb = mean_absolute_error(y_val_t[-1], preds)
     print(f"XGBoost MAE: {mae_xgb:.4f}")
+
+
+
+def predict_next_steps(tcn, mixer, steps: int = 5, look_back: int = 14):
+    """Predict the next few steps using trained models and print errors."""
+    data_scaled, feature_names, scaler = load_dataset(str(CSV_PATH))
+    features = pd.DataFrame(
+        scaler.inverse_transform(data_scaled), columns=feature_names
+    )
+
+    for i in range(1, steps + 1):
+        seq = data_scaled[-look_back - i : -i]
+        pred_tcn = tcn_model.predict(tcn, seq, device=DEVICE)
+        pred_mix = tsmixer_model.predict(mixer, seq, device=DEVICE)
+
+        pred_tcn = scaler.inverse_transform(pred_tcn.reshape(1, -1)).squeeze()
+        pred_mix = scaler.inverse_transform(pred_mix.reshape(1, -1)).squeeze()
+
+        series_true = features.iloc[-i]
+        series_tcn = pd.Series(pred_tcn, index=feature_names, name="TCN")
+        series_mix = pd.Series(pred_mix, index=feature_names, name="TSMixer")
+        next_series = [series_true, series_tcn, series_mix]
+        compare_df = pd.concat(next_series, axis=1)
+
+        rel_err_df, max_err, mean_err = compute_relative_errors(compare_df)
+        _ = pd.concat([compare_df, rel_err_df], axis=1)
+        print(f"\n———————— 第{i}步预测结果 ————————")
+        print(compare_df)
+        print("\n最大相对误差：")
+        print(max_err)
+        print("\n平均相对误差：")
+        print(mean_err)
 
 
 if __name__ == "__main__":
