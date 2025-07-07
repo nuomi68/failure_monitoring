@@ -1,4 +1,4 @@
-from unsupervised_page import MLWindow, scale_features
+from ml_page import MLWindow, scale_features
 from PyQt6.QtWidgets import QListWidgetItem, QMessageBox
 from PyQt6.QtCore import Qt
 import numpy as np

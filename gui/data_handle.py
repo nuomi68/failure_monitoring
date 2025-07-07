@@ -222,6 +222,31 @@ class DataHandlePage(QWidget):
         bottom_split.setStretchFactor(1, 1)   # 右 1
 
         layout.addWidget(self.data_page)
+        self.load_dev_file()
+
+    def load_dev_file(self):
+        """开发阶段：写死加载一个本地 Excel 文件"""
+        path = "../data/20230510-20240924_merged.xlsx"  # ← 改成你自己的路径
+        try:
+            df = pd.read_excel(path)
+        except Exception as e:
+            logger.error("开发文件加载失败: %s", e)
+            return
+
+        removed = int(df.isna().any(axis=1).sum())
+        if removed:
+            df = df.dropna()
+            logger.info("删除含 NaN 的行 %d 条", removed)
+
+        self.df = df
+        self.populate_table(df)
+        self.populate_lists(df.columns.tolist())
+        self.calc.setDataFrame(df)
+        self.calc.new_column.connect(self._on_new_column)
+        self.heatmap_canvas.plot_corr(self.df)
+        self.top_stack.setCurrentIndex(1)
+        self.preview.set_dataframe(df)
+        self.preview.set_selected_columns(self.selected_columns())
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件",
