@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 
 import logging
 
-from tools import logger
+#from tools import logger
 
 class QtLogHandler(logging.Handler):
     """Simple logging handler that appends logs to a QPlainTextEdit."""

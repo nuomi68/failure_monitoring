@@ -1,20 +1,19 @@
 from pathlib import Path
 
-
-import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
+import pandas as pd
 
+from data_utils import load_dataset, build_windows, compute_relative_errors
 
-from .data_utils import load_dataset, build_windows, compute_relative_errors
-
-from .models import (
+from backend.models import (
     gru_model,
     tcn_model,
     tsmixer_model,
     random_forest_model,
     xgboost_model,
+    timesnet_model
 )
 
 CSV_PATH = Path(__file__).resolve().parents[1] / "data/20230510-20240924_merged.xlsx"
@@ -23,91 +22,121 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def prepare_data(look_back: int):
     data, feature_names, scaler = load_dataset(str(CSV_PATH))
-    X, y = build_windows(data, look_back)
+    X, y = build_windows(data[:-5], look_back)
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
     return (X_train, y_train), (X_val, y_val), feature_names, scaler
 
 
+# 全局配置：想跑哪些模型就在列表里写上名字，注释掉就不跑
+ACTIVE_MODELS = [
+    # "gru",
+    #"tcn",
+    "tsmixer",
+    #"rf",
+    "timesnet",
+    # "xgb",
+]
+
+# 把所有模型的 train 和 predict 函数映射到同一个结构
+MODEL_REGISTRY = {
+    # "gru": {
+    #     "train": lambda X_tr, y_tr, X_val, y_val: gru_model.train_gru(X_tr, y_tr, X_val, y_val, device=DEVICE),
+    #     "predict": lambda model, seq: gru_model.predict(model, seq, device=DEVICE),
+    # },
+    # "tcn": {
+    #     "train": lambda X_tr, y_tr, X_val, y_val: tcn_model.train_tcn(X_tr, y_tr, X_val, y_val, device=DEVICE),
+    #     "predict": lambda model, seq: tcn_model.predict(model, seq, device=DEVICE),
+    # },
+    "tsmixer": {
+        "train": lambda X_tr, y_tr, X_val, y_val: tsmixer_model.train_tsmixer(X_tr, y_tr, X_val, y_val, device=DEVICE),
+        "predict": lambda model, seq: tsmixer_model.predict(model, seq, device=DEVICE),
+    },
+    # "rf": {
+    #     "train": lambda X_tr, y_tr, X_val, y_val: random_forest_model.train_rf(
+    #         X_tr, y_tr, X_val, y_val, n_estimators=400, random_state=42, n_jobs=-1
+    #     ),
+    #     "predict": lambda model, seq: random_forest_model.predict(model, seq),
+    # },
+    # "xgb": {
+    #     "train": lambda X_tr, y_tr, X_val, y_val: xgboost_model.train_xgb(X_tr, y_tr, X_val, y_val),
+    #     "predict": lambda model, seq: xgboost_model.predict(model, seq),
+    # },
+    "timesnet": {
+        "train": lambda X_tr, y_tr, X_val, y_val: timesnet_model.train_timesnet(
+            X_tr, y_tr, X_val, y_val, device=DEVICE, d_model=32, num_blocks=3),
+        "predict": lambda model, seq: timesnet_model.predict(model, seq, device=DEVICE),
+    },
+}
+DATA_CFG = {
+    "tcn": 14,
+    "tsmixer": 32,
+    "rf": 5,
+    "timesnet": 32,       # 新增
+}
+
 def run_all_models():
-    (X_train, y_train), (X_val, y_val), _, _ = prepare_data(14)
-    
-    print("Training GRU …")
-    gru, gru_loss = gru_model.train_gru(
-        X_train, y_train, X_val, y_val, device=DEVICE
-    )
-    preds = gru_model.predict(gru, X_val[-1], device=DEVICE)
-    mae_gru = mean_absolute_error(y_val[-1], preds)
-    print(f"GRU Val Loss: {gru_loss:.4f}  MAE: {mae_gru:.4f}")
+    # 不同模型需要不同 look_back
 
-    print("Training TCN …")
-    tcn, tcn_loss = tcn_model.train_tcn(
-        X_train, y_train, X_val, y_val, device=DEVICE
-    )
-    preds = tcn_model.predict(tcn, X_val[-1], device=DEVICE)
-    mae_tcn = mean_absolute_error(y_val[-1], preds)
-    print(f"TCN Val Loss: {tcn_loss:.4f}  MAE: {mae_tcn:.4f}")
+    trained_models = {}
 
-    print("Training TSMixer …")
-    mix, mix_loss = tsmixer_model.train_tsmixer(
-        X_train, y_train, X_val, y_val, device=DEVICE
-    )
-    preds = tsmixer_model.predict(mix, X_val[-1], device=DEVICE)
-    mae_mix = mean_absolute_error(y_val[-1], preds)
-    print(f"TSMixer Val Loss: {mix_loss:.4f}  MAE: {mae_mix:.4f}")
+    for name in ACTIVE_MODELS:
+        look_back = DATA_CFG.get(name,14)
+        (X_tr, y_tr), (X_val, y_val), _, feats_scaled = prepare_data(look_back)
 
-    (X_train_t, y_train_t), (X_val_t, y_val_t), _, _ = prepare_data(5)
+        print(f"Training {name.upper()} …")
+        train_fn = MODEL_REGISTRY[name]["train"]
+        result = train_fn(X_tr, y_tr, X_val, y_val)
 
-    print("Training RandomForest …")
-    rf, mae_rf = random_forest_model.train_rf(
-        X_train_t, y_train_t, X_val_t, y_val_t,
-        n_estimators=400, random_state=42, n_jobs=-1
-    )
-    preds = random_forest_model.predict(rf, X_val_t[-1])
-    mae_rf = mean_absolute_error(y_val_t[-1], preds)
-    print(f"RandomForest MAE: {mae_rf:.4f}")
+        # 解析返回值：神经网返回 (model, loss)，树模型返回 (model, mae)
+        if len(result) == 2:
+            model_obj, metric = result
+            if name in ("gru", "tcn", "tsmixer"):
+                print(f"{name.upper()} Val Loss: {metric:.4f}")
+            else:
+                print(f"{name.upper()} MAE: {metric:.4f}")
+        else:
+            model_obj = result  # 万一只有 model
 
-    print("Training XGBoost …")
-    xgb, mae_xgb = xgboost_model.train_xgb(
-        X_train_t, y_train_t, X_val_t, y_val_t
-    )
-    preds = xgboost_model.predict(xgb, X_val_t[-1])
-    mae_xgb = mean_absolute_error(y_val_t[-1], preds)
-    print(f"XGBoost MAE: {mae_xgb:.4f}")
+        trained_models[name] = model_obj
 
+    # 训练完毕后统一做 multi-step 预测
+    predict_next_steps(trained_models,feats_scaled)
 
-
-def predict_next_steps(tcn, mixer, steps: int = 5, look_back: int = 14):
-    """Predict the next few steps using trained models and print errors."""
+def predict_next_steps(trained_models: dict,feats_scaled, steps: int = 5):
+    """对所有 ACTIVE_MODELS 做逐步预测，并打印相对误差"""
     data_scaled, feature_names, scaler = load_dataset(str(CSV_PATH))
-    features = pd.DataFrame(
-        scaler.inverse_transform(data_scaled), columns=feature_names
-    )
+    features = pd.DataFrame(scaler.inverse_transform(data_scaled), columns=feature_names)
 
     for i in range(1, steps + 1):
-        seq = data_scaled[-look_back - i : -i]
-        pred_tcn = tcn_model.predict(tcn, seq, device=DEVICE)
-        pred_mix = tsmixer_model.predict(mixer, seq, device=DEVICE)
+        preds = {}
+        for name, model_obj in trained_models.items():
+            look_back = DATA_CFG.get(name, 14)
+            seq = data_scaled[-look_back - i : -i]
 
-        pred_tcn = scaler.inverse_transform(pred_tcn.reshape(1, -1)).squeeze()
-        pred_mix = scaler.inverse_transform(pred_mix.reshape(1, -1)).squeeze()
+            pred = MODEL_REGISTRY[name]["predict"](model_obj, seq)
+            preds[name] = scaler.inverse_transform(pred.reshape(1, -1)).squeeze()
 
-        series_true = features.iloc[-i]
-        series_tcn = pd.Series(pred_tcn, index=feature_names, name="TCN")
-        series_mix = pd.Series(pred_mix, index=feature_names, name="TSMixer")
-        next_series = [series_true, series_tcn, series_mix]
-        compare_df = pd.concat(next_series, axis=1)
+        preds["eval"] = 0.5*(preds["tsmixer"]+preds["timesnet"])
+        # 真值
+        true_series = features.iloc[-i].astype(float)
+        # 构造 DataFrame
+        df = pd.DataFrame({name: preds[name] for name in preds}, index=feature_names)
+        df.insert(0, "True", true_series)
 
-        rel_err_df, max_err, mean_err = compute_relative_errors(compare_df)
-        _ = pd.concat([compare_df, rel_err_df], axis=1)
-        print(f"\n———————— 第{i}步预测结果 ————————")
-        print(compare_df)
-        print("\n最大相对误差：")
-        print(max_err)
-        print("\n平均相对误差：")
-        print(mean_err)
-
-
+        # 计算误差
+        rel_err_df, max_err, mean_err = compute_relative_errors(df)
+        print(f"\n—— 第 {i} 步预测 ——")
+        # 合并显示
+        conc = pd.concat([df, rel_err_df.add_suffix("_err")], axis=1)
+        with pd.option_context(
+                'display.max_rows', None,
+                'display.max_columns', None,
+                'display.width', None
+        ):
+            print(conc)
+        print("最大相对误差：", max_err)
+        print("平均相对误差：", mean_err)
 if __name__ == "__main__":
     run_all_models()

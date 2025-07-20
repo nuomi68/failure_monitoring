@@ -1,18 +1,3 @@
-# multivariate_lstm_forecast.py
-"""多变量时间序列预测对比：GRU (深度)、随机森林、**TimeGAN 数据增强**
-
-脚本输出三组结果：
-
-* **GRU** —— 端到端深度模型（原网络）
-* **Random Forest** —— 滑动窗口展平 + 树模型
-* **RF + TimeGAN** —— 用 *YData‑Synthetic* TimeGAN 生成等量**合成样本**扩充训练集，再训练随机森林
-
-> 需额外安装：
-> ```bash
-> pip install ydata-synthetic==1.3.1 tensorflow==2.15.0
-> ```
-"""
-
 import math
 from typing import Tuple
 import warnings
@@ -175,7 +160,7 @@ from torch.nn.utils import weight_norm
 # 1) 数据窗口（沿用 LOOK_BACK_DEEP）
 X_tcn, y_tcn = build_windows(features_scaled[:-5], LOOK_BACK_DEEP)
 X_train_c, X_val_c, y_train_c, y_val_c = train_test_split(
-    X_tcn, y_tcn, test_size=TEST_SIZE, shuffle=False
+    X_tcn, y_tcn, test_size=TEST_SIZE, shuffle=True
 )
 
 class SeqDatasetTCN(Dataset):
