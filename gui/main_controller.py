@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 
 import logging
 
-#from tools import logger
+from tools import logger
 
 class QtLogHandler(logging.Handler):
     """Simple logging handler that appends logs to a QPlainTextEdit."""
@@ -43,7 +43,7 @@ class MainController(QMainWindow):
     2. 点击折叠按钮后，侧边栏缩至固定窄宽度，仅保留图标。
     3. 再次点击按钮可重新展开。
 
-    ⚠️ 去掉了悬浮浮窗逻辑 —— 折叠时仅显示图标 + Tooltip 提示文字。
+    去掉了悬浮浮窗逻辑 —— 折叠时仅显示图标 + Tooltip 提示文字。
     """
 
     EXPANDED_WIDTH = 180  # 展开宽度
