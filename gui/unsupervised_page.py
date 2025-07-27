@@ -330,11 +330,6 @@ class UnsupervisedPage(QWidget):
         self.train_btn.clicked.connect(self.train_model)
         top.addWidget(self.train_btn)
 
-        self.save_btn = QPushButton("保存模型")
-        self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self.save_model)
-        top.addWidget(self.save_btn)
-
         # 主体：左特征 + 右可视化
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -444,7 +439,6 @@ class UnsupervisedPage(QWidget):
         self.meta = ML.get_meta()
         self.scores = rep.scores
         self.X_scaled = ML.transform(X)
-        self.save_btn.setEnabled(True)
 
         tau = float(self.meta.get("tau", np.quantile(self.scores,0.95)))
         self.canvas.slider.setValue(int(tau * 1000))
@@ -469,10 +463,6 @@ class UnsupervisedPage(QWidget):
         else:
          # 万一路由到其它，默认直方图
             self.canvas.plot_hist(self.scores, tau)
-
-    def save_model(self):
-        name,_ = QFileDialog.getSaveFileName(self,"保存模型","","Joblib Files (*.joblib)")
-        if name: ML.save(str(name))
 
     def _parse_max_samples(self,val, n_samples: int):
         """Utility to parse IsolationForest max_samples value."""

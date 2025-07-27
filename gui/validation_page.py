@@ -7,7 +7,8 @@ from functools import partial
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QLabel, QPushButton, QHBoxLayout, QMessageBox, QMenu
+    QLabel, QPushButton, QHBoxLayout, QMessageBox, QMenu,
+    QFileDialog
 )
 from PyQt6.QtGui import (
     QGuiApplication, QKeySequence, QShortcut, QCursor
@@ -64,6 +65,8 @@ class ValidationPage(QWidget):
         self.redo_btn = QPushButton("重做"); self.redo_btn.clicked.connect(self._redo); btn_row.addWidget(self.redo_btn)
         self.predict_btn = QPushButton("计算"); self.predict_btn.clicked.connect(self.on_predict); btn_row.addWidget(self.predict_btn)
         self.clear_btn = QPushButton("清空全部"); self.clear_btn.clicked.connect(self._clear_all); btn_row.addWidget(self.clear_btn)
+        self.save_btn = QPushButton("保存模型"); self.save_btn.clicked.connect(self.save_model); btn_row.addWidget(self.save_btn)
+        self.save_btn.setEnabled(False)
         self.result_lbl = QLabel("结果: "); btn_row.addWidget(self.result_lbl); btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -77,6 +80,7 @@ class ValidationPage(QWidget):
         self.meta = {}
         self._setup_table()
         self._clear_history(); self._push_state()  # 初始快照
+        self.save_btn.setEnabled(bool(ML.get_meta()))
 
     # ------------------------------------------------------------------
     # 撤销 / 重做 栈
@@ -235,6 +239,17 @@ class ValidationPage(QWidget):
             self.table.setItem(row, len(self.features), QTableWidgetItem(f"{s:.4f}"))
             self.table.setItem(row, len(self.features) + 1, QTableWidgetItem("异常" if flag else "正常"))
         self.result_lbl.setText(f"结果: 共 {len(row_map)} 行, 异常 {abn} 行")
+
+    def save_model(self):
+        if not ML.get_meta():
+            QMessageBox.warning(self, "提示", "暂无可保存的模型")
+            return
+        name,_ = QFileDialog.getSaveFileName(self, "保存模型", "", "Joblib Files (*.joblib)")
+        if name:
+            try:
+                ML.save(str(name))
+            except Exception as e:
+                QMessageBox.warning(self, "错误", str(e))
 
     # ------------------------------------------------------------------
     # 工具
