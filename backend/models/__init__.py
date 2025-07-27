@@ -7,5 +7,7 @@ __all__ = [
     'tcn_model',
     'tsmixer_model',
     'xgboost_model',
-    'timesnet_model'
+    'timesnet_model',
+    'unsupervised_core',
+    'supervised_core',
 ]

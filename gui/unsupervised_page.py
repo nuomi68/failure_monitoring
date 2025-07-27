@@ -1,63 +1,41 @@
-import sys
-from pathlib import Path
-from typing import List, Any, Dict
 
-import numpy as np
-import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+"""
+unsupervised_page_rewired.py
 
-import matplotlib
-matplotlib.use("QtAgg")
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+无监督学习页（简化示例）：
+- 前端不做规范化，把原始 X 传给后端
+- 可选规范化器；训练后使用 ML.transform(X) 供 PCA/时序等绘图
+- 阈值 τ 取自后端 meta["tau"]（默认 95% 分位）
+"""
 
+import numpy as np, pandas as pd, matplotlib.pyplot as plt
+from typing import List, Dict, Any
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem,
-    QSplitter, QHBoxLayout, QMessageBox, QLabel, QComboBox, QSpinBox,
-    QDoubleSpinBox, QFileDialog, QSlider, QTableWidget, QTableWidgetItem,
-    QDialog, QFormLayout, QDialogButtonBox, QCheckBox, QLineEdit
+    QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
+    QLabel, QComboBox, QSpinBox, QSlider, QFileDialog, QMessageBox,QDoubleSpinBox,
+    QLineEdit,QCheckBox,QFormLayout,QDialog, QDialogButtonBox,QTableWidget,QSplitter
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from sklearn.decomposition import PCA
 
-from tools import scale_features
 from backend.ml_interface import ML
 
-def parse_max_samples(val, n_samples: int):
-    """Utility to parse IsolationForest max_samples value."""
-    if val == "" or str(val).lower() == "auto":
-        return "auto"
-    try:
-        if "." in str(val):
-            f = float(val)
-            if 0 < f <= 1:
-                return f
-        i = int(val)
-        if i > 0:
-            return min(i, n_samples)
-    except Exception:
-        pass
-    return "auto"
-
-# ================= 绘图画布 =================
-class PlotCanvas(FigureCanvas):
-    threshold_changed = pyqtSignal(float)
-
+# ============== 画布 ==============
+class UnCanvas(FigureCanvas):
+    tau_changed = pyqtSignal(float)
     def __init__(self, parent=None):
         self.fig, self.ax = plt.subplots()
         super().__init__(self.fig)
         self.setParent(parent)
-
         self.slider = QSlider(Qt.Orientation.Horizontal, parent)
-        self.slider.setRange(0, 999)
-        self.slider.setValue(950)
-        self.slider.valueChanged.connect(self._emit_threshold)
-        self.lbl_tau = QLabel("阈值 τ = 0.950")
-
-    def _emit_threshold(self, v: int):
-        tau = v / 1000.0
-        self.lbl_tau.setText(f"阈值 τ = {tau:.3f}")
-        self.threshold_changed.emit(tau)
+        self.slider.setRange(0,999)
+        self.slider.valueChanged.connect(self._emit)
+        self.lbl_tau = QLabel("τ = 0.950")
+    def _emit(self, v:int):
+        tau = v/1000.0
+        self.lbl_tau.setText(f"τ = {tau:.3f}")
+        self.tau_changed.emit(tau)
 
     def plot_hist(self, scores: np.ndarray, tau: float):
         self.ax.clear()
@@ -74,27 +52,20 @@ class PlotCanvas(FigureCanvas):
         mask = scores >= tau
         self.ax.scatter(XY[~mask, 0], XY[~mask, 1], c="lightgray", s=10, label="normal")
         self.ax.scatter(XY[mask, 0],  XY[mask, 1],  c="red",       s=15, label="abnormal")
-        self.ax.set_xlabel("PC1"); self.ax.set_ylabel("PC2")
+        self.ax.set_xlabel("PC1")
+        self.ax.set_ylabel("PC2")
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
 
-    def plot_series(self, xs: np.ndarray, scores: np.ndarray, tau: float):
+    def plot_timeseries(self, X: np.ndarray, scores: np.ndarray, tau: float):
+        """把样本按原始顺序，画分数随样本 index 的折线图。"""
+
         self.ax.clear()
-        self.ax.plot(xs, scores, label="score")
-        mask = scores >= tau
-        self.ax.scatter(xs[mask], scores[mask], c="red", zorder=5, label="abnormal")
-        self.ax.axhline(tau, color="red", linestyle="--")
-
-        num_ticks = min(5, len(xs))
-        tick_indices = np.linspace(0, len(xs) - 1, num=num_ticks, dtype=int)
-        tick_values = xs[tick_indices]
-        self.ax.set_xticks(tick_values)
-        if np.issubdtype(xs.dtype, np.str_) or xs.dtype == object:
-            self.ax.set_xticklabels(tick_values, rotation=45)
-
-        self.ax.set_xlabel("Index")
-        self.ax.set_ylabel("score")
+        self.ax.plot(np.arange(len(scores)), scores, lw=1)
+        self.ax.axhline(tau, color="red", linestyle="--", label=f"τ={tau:.3f}")
+        self.ax.set_xlabel("样本序号")
+        self.ax.set_ylabel("打分")
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
@@ -198,29 +169,29 @@ class AdvancedParamsDialog(QDialog):
             )
             form.addRow("隐藏层(逗号分隔)", self.le_hidden)
 
-            self.sp_latent = QSpinBox();
+            self.sp_latent = QSpinBox()
             self.sp_latent.setRange(1, 1024)
             self.sp_latent.setValue(int(params.get("latent_dim", 16)))
             form.addRow("latent_dim", self.sp_latent)
 
-            self.sp_epochs = QSpinBox();
+            self.sp_epochs = QSpinBox()
             self.sp_epochs.setRange(1, 10000)
             self.sp_epochs.setValue(int(params.get("epochs", 50)))
             form.addRow("epochs", self.sp_epochs)
 
-            self.sp_batch = QSpinBox();
+            self.sp_batch = QSpinBox()
             self.sp_batch.setRange(1, 100000)
             self.sp_batch.setValue(int(params.get("batch_size", 128)))
             form.addRow("batch_size", self.sp_batch)
 
-            self.sp_lr = QDoubleSpinBox();
+            self.sp_lr = QDoubleSpinBox()
             self.sp_lr.setDecimals(6)
-            self.sp_lr.setRange(1e-6, 1.0);
+            self.sp_lr.setRange(1e-6, 1.0)
             self.sp_lr.setSingleStep(0.0001)
             self.sp_lr.setValue(float(params.get("lr", 1e-3)))
             form.addRow("learning_rate", self.sp_lr)
 
-            self.sp_dropout = QDoubleSpinBox();
+            self.sp_dropout = QDoubleSpinBox()
             self.sp_dropout.setRange(0.0, 0.9)
             self.sp_dropout.setSingleStep(0.05)
             self.sp_dropout.setValue(float(params.get("dropout", 0.0)))
@@ -271,17 +242,17 @@ class AdvancedParamsDialog(QDialog):
         super().accept()
 
 
-# ================= 无监督页面 =================
+# ============== 主界面 ==============
 class UnsupervisedPage(QWidget):
-    """纯无监督异常检测界面，不再继承 MLWindow"""
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("异常检测")
         self.resize(1100, 650)
 
-        # 数据与结果
+        # 数据与模型
         self.df: pd.DataFrame | None = None
+        self.model = None
+        self.scaler = None
         self.meta: dict[str, Any] = {}
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
@@ -319,6 +290,14 @@ class UnsupervisedPage(QWidget):
         self.alg_combo.addItem("自编码器", "autoencoder")
         self.alg_combo.currentIndexChanged.connect(self._on_alg_changed)
         top.addWidget(self.alg_combo)
+        top.addWidget(QLabel("规范化："))
+        self.scaler_combo = QComboBox()
+        for name, spec in [("标准化 (Z‑score)", "standard"), ("MinMax [0,1]", "minmax"), ("Robust (IQR)", "robust"),
+                           ("MaxAbs", "maxabs"), ("PowerTransformer", "power"), ("QuantileTransformer", "quantile"),
+                           ("Normalizer (L2)", "normalizer"), ("不做缩放", "none")]:
+            self.scaler_combo.addItem(name, spec)
+        self.scaler_combo.setCurrentIndex(0)
+        top.addWidget(self.scaler_combo)
         top.addStretch()
 
         # 复用这个 label + spinbox，三种算法下显示不同含义
@@ -362,15 +341,16 @@ class UnsupervisedPage(QWidget):
         self.column_list = QListWidget()
         splitter.addWidget(self.column_list)
 
-        right_panel = QWidget(); right_v = QVBoxLayout(right_panel)
+        right_panel = QWidget()
+        right_v = QVBoxLayout(right_panel)
 
         self.viz_combo = QComboBox()
         self.viz_combo.addItems(["分数直方图", "PCA 散点", "时序折线"])
         self.viz_combo.currentIndexChanged.connect(lambda _: self.refresh_plot())
         right_v.addWidget(self.viz_combo, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.canvas = PlotCanvas()
-        self.canvas.threshold_changed.connect(self.on_tau_changed)
+        self.canvas = UnCanvas()
+        self.canvas.tau_changed.connect(self.on_tau_changed)
         right_v.addWidget(self.canvas)
         right_v.addWidget(self.canvas.lbl_tau)
         right_v.addWidget(self.canvas.slider)
@@ -382,29 +362,23 @@ class UnsupervisedPage(QWidget):
         right_v.addWidget(self.tbl_abn)
 
         splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 1); splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
 
         main = QVBoxLayout(self)
         main.addLayout(top)
         main.addWidget(splitter)
 
-    # ---------------- 外部载入数据 ----------------
     def set_data(self, df: pd.DataFrame, checked: List[str]):
         self.df = df
         self.column_list.clear()
         for col in df.columns:
-            item = QListWidgetItem(col)
-            item.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
-            self.column_list.addItem(item)
-        self._reset_viz_mode()
+            it = QListWidgetItem(col)
+            it.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
+            self.column_list.addItem(it)
 
     def selected_columns(self) -> List[str]:
-        cols = []
-        for i in range(self.column_list.count()):
-            it = self.column_list.item(i)
-            if it.checkState() == Qt.CheckState.Checked:
-                cols.append(it.text())
-        return cols
+        return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
 
     # ---------------- 算法切换 ----------------
     def _on_alg_changed(self, _index: int):
@@ -429,7 +403,6 @@ class UnsupervisedPage(QWidget):
             self.k_spin.setValue( self.ae_params.get("epochs", 50) )
             self.contam_label.hide()
             self.contam_spin.hide()
-
     # ---------------- 打开高级参数对话框 ----------------
     def open_advanced_dialog(self):
         alg = self.alg_combo.currentData()
@@ -443,84 +416,76 @@ class UnsupervisedPage(QWidget):
             # 写回已经在对话框里做了；如果需要可以在此处刷新
             pass
 
-    # ---------------- 训练模型 ----------------
     def train_model(self):
         if self.df is None:
-            QMessageBox.warning(self, "提示", "请先加载数据")
+            QMessageBox.warning(self,"提示","请先加载数据")
             return
         cols = self.selected_columns()
         if not cols:
-            QMessageBox.warning(self, "提示", "请选择特征")
+            QMessageBox.warning(self,"提示","请选择特征")
             return
 
         X = self.df[cols].astype(np.float32).values
-        self.X_scaled, _ = scale_features(X)
-
         alg = self.alg_combo.currentData()
-        params = (
-            self.knn_params if alg == "knn" else
-            self.if_params if alg == "iforest" else
-            self.ae_params
-        ).copy()
+        scaler_spec = self.scaler_combo.currentData()
+        # 主参数：为不同算法映射
         if alg == "knn":
-            params["n_neighbors"] = self.k_spin.value()
-        elif alg == "iforest":
-            params["n_estimators"] = self.k_spin.value()
-            params["contamination"] = self.contam_spin.value()
-            params["max_samples"] = parse_max_samples(params.get("max_samples", "auto"), len(self.X_scaled))
-        else:  # autoencoder
-            params["epochs"] = self.k_spin.value()
+            # 取高级参数
+            params = self.knn_params.copy()
+        elif alg == "autoencoder":
+            params = self.ae_params.copy()
+        else:
+            params = self.if_params.copy()
+            # 解析 max_samples
+            max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(self.X))
+            params["max_samples"] = max_samples
 
-        rep = ML.train(alg=alg, X=X, params=params)
-        self.scores = rep.scores
+        rep = ML.train(alg=alg, X=X, params=params, scaler=scaler_spec)
         self.meta = ML.get_meta()
-        tau = float(self.meta.get("tau", 0.95))
+        self.scores = rep.scores
+        self.X_scaled = ML.transform(X)
         self.save_btn.setEnabled(True)
+
+        tau = float(self.meta.get("tau", np.quantile(self.scores,0.95)))
         self.canvas.slider.setValue(int(tau * 1000))
         self.refresh_plot()
 
-    # ---------------- 阈值滑块回调 ----------------
     def on_tau_changed(self, tau: float):
         self.meta["tau"] = tau
         self.refresh_plot()
 
-    # ---------------- 刷新可视化 ----------------
     def refresh_plot(self):
         if self.scores is None:
             return
-        tau = self.meta.get("tau", 0.95)
-        viz = self.viz_combo.currentText()
+        tau = float(self.meta.get("tau", 0.5))
+        mode = self.viz_combo.currentText()
 
-        if viz == "分数直方图":
+        if mode == "分数直方图":
             self.canvas.plot_hist(self.scores, tau)
-        elif viz == "PCA 散点":
+        elif mode == "PCA 散点":
             self.canvas.plot_pca(self.X_scaled, self.scores, tau)
-        elif viz == "时序折线":
-            xs = np.arange(len(self.scores))
-            if self.df is not None and "TIME" in self.df.columns:
-                xs = self.df["TIME"].values
-            self.canvas.plot_series(xs, self.scores, tau)
-        self.update_abnormal_table(tau)
+        elif mode == "时序折线":
+            self.canvas.plot_timeseries(self.X_scaled, self.scores, tau)
+        else:
+         # 万一路由到其它，默认直方图
+            self.canvas.plot_hist(self.scores, tau)
 
-    def _reset_viz_mode(self):
-        self.viz_combo.blockSignals(True)
-        self.viz_combo.clear()
-        self.viz_combo.addItems(["分数直方图", "PCA 散点", "时序折线"])
-        self.canvas.slider.show()
-        self.canvas.lbl_tau.show()
-        self.tbl_abn.show()
-        self.viz_combo.blockSignals(False)
-
-    def update_abnormal_table(self, tau: float):
-        mask = self.scores >= tau
-        idxs = np.where(mask)[0]
-        self.tbl_abn.setRowCount(len(idxs))
-        for r, i in enumerate(idxs):
-            self.tbl_abn.setItem(r, 0, QTableWidgetItem(str(i)))
-            self.tbl_abn.setItem(r, 1, QTableWidgetItem(f"{self.scores[i]:.4f}"))
-
-    # ---------------- 保存模型 ----------------
     def save_model(self):
-        name, _ = QFileDialog.getSaveFileName(self, "保存模型", "", "Joblib Files (*.joblib)")
-        if name:
-            ML.save(str(Path(name)))
+        name,_ = QFileDialog.getSaveFileName(self,"保存模型","","Joblib Files (*.joblib)")
+        if name: ML.save(str(name))
+
+    def _parse_max_samples(self,val, n_samples: int):
+        """Utility to parse IsolationForest max_samples value."""
+        if val == "" or str(val).lower() == "auto":
+            return "auto"
+        try:
+            if "." in str(val):
+                f = float(val)
+                if 0 < f <= 1:
+                    return f
+            i = int(val)
+            if i > 0:
+                return min(i, n_samples)
+        except Exception:
+            pass
+        return "auto"
