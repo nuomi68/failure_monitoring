@@ -263,10 +263,6 @@ class SupervisedPage(QWidget):
         self.train_btn = QPushButton("训练")
         self.train_btn.clicked.connect(self.train_model)
         top.addWidget(self.train_btn)
-        self.save_btn  = QPushButton("保存模型")
-        self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self.save_model)
-        top.addWidget(self.save_btn)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.column_list = QListWidget()
@@ -387,7 +383,6 @@ class SupervisedPage(QWidget):
             self.canvas.lbl_tau.setVisible(False)
 
         self._compute_metrics()
-        self.save_btn.setEnabled(True)
         self._reset_viz_mode()
         self._plot()
 
@@ -515,6 +510,3 @@ class SupervisedPage(QWidget):
         self.k_spin.setValue(self.rf_params.get("n_estimators",100) if "n_estimators" in self.rf_params else 100)
         self._reset_viz_mode()
 
-    def save_model(self):
-        name,_ = QFileDialog.getSaveFileName(self,"保存模型","","Joblib Files (*.joblib)")
-        if name: ML.save(str(name))
