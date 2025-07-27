@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List, Any, Dict, Tuple
 import numpy as np
+from backend.ml_interface import ML
 from functools import partial
 
 from PyQt6.QtWidgets import (
@@ -31,8 +32,6 @@ class ValidationPage(QWidget):
         super().__init__()
 
         # -------------------- 数据属性 --------------------
-        self.model: Any | None = None
-        self.scaler: Any | None = None
         self.meta: Dict[str, Any] = {}
         self.features: List[str] = []
 
@@ -73,9 +72,9 @@ class ValidationPage(QWidget):
     # ------------------------------------------------------------------
     # 对外接口
     # ------------------------------------------------------------------
-    def configure(self, features: List[str], model: Any, scaler: Any, meta: Dict[str, Any] | None = None) -> None:
+    def configure(self, features: List[str]) -> None:
         self.features = list(features)
-        self.model = model; self.scaler = scaler; self.meta = meta or {}
+        self.meta = {}
         self._setup_table()
         self._clear_history(); self._push_state()  # 初始快照
 
@@ -215,7 +214,8 @@ class ValidationPage(QWidget):
     # 预测逻辑（略微整理）
     # ------------------------------------------------------------------
     def on_predict(self):
-        if self.model is None or self.scaler is None:
+        meta = ML.get_meta()
+        if not meta:
             QMessageBox.warning(self, "提示", "请先在上一页训练模型"); return
         data_rows, row_map = [], []
         for r in range(self.table.rowCount()):
@@ -226,19 +226,9 @@ class ValidationPage(QWidget):
             data_rows.append(vals); row_map.append(r)
         if not data_rows:
             QMessageBox.warning(self, "提示", "请在表格中输入 / 粘贴有效数值"); return
-        Xs = self.scaler.transform(np.asarray(data_rows, dtype=np.float32))
-        mtype = self.meta.get("model_type"); tau = float(self.meta.get("tau", 0))
-        if mtype == "knn":
-            scores = self.model.kneighbors(Xs)[0][:, -1]
-        elif mtype == "iforest":
-            scores = -self.model.decision_function(Xs)
-        elif mtype in ("rf", "knn_clf"):
-            try:
-                scores = self.model.predict_proba(Xs)[:, 1]
-            except Exception:
-                scores = self.model.predict(Xs).astype(float)
-        else:
-            QMessageBox.warning(self, "错误", "未知模型类型"); return
+        X = np.asarray(data_rows, dtype=np.float32)
+        _pred, scores = ML.predict(X)
+        tau = float(meta.get("tau", 0))
         abn = 0
         for idx, row in enumerate(row_map):
             s = scores[idx]; flag = s > tau; abn += flag

@@ -20,8 +20,24 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
-from tools import save_model,scale_features
-from unsupervised_model import train_iforest,train_knn,parse_max_samples,train_autoencoder
+from tools import scale_features
+from backend.ml_interface import ML
+
+def parse_max_samples(val, n_samples: int):
+    """Utility to parse IsolationForest max_samples value."""
+    if val == "" or str(val).lower() == "auto":
+        return "auto"
+    try:
+        if "." in str(val):
+            f = float(val)
+            if 0 < f <= 1:
+                return f
+        i = int(val)
+        if i > 0:
+            return min(i, n_samples)
+    except Exception:
+        pass
+    return "auto"
 
 # ================= 绘图画布 =================
 class PlotCanvas(FigureCanvas):
@@ -264,10 +280,8 @@ class UnsupervisedPage(QWidget):
         self.setWindowTitle("异常检测")
         self.resize(1100, 650)
 
-        # 数据与模型
+        # 数据与结果
         self.df: pd.DataFrame | None = None
-        self.model = None
-        self.scaler = None
         self.meta: dict[str, Any] = {}
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
@@ -440,56 +454,27 @@ class UnsupervisedPage(QWidget):
             return
 
         X = self.df[cols].astype(np.float32).values
-        self.X_scaled, self.scaler = scale_features(X)
+        self.X_scaled, _ = scale_features(X)
 
         alg = self.alg_combo.currentData()
+        params = (
+            self.knn_params if alg == "knn" else
+            self.if_params if alg == "iforest" else
+            self.ae_params
+        ).copy()
         if alg == "knn":
-            # 取高级参数
-            adv = self.knn_params.copy()
-            model, tau, dist = train_knn(
-                self.X_scaled,
-                k=self.k_spin.value(),
-                algorithm=adv.get("algorithm"),
-                leaf_size=adv.get("leaf_size"),
-                metric=adv.get("metric"),
-                p=adv.get("p"),
-                n_jobs=adv.get("n_jobs"),
-            )
-            self.model = model
-            self.scores = dist
-        elif alg == "autoencoder":
-            import torch  # 确保已安装
-            adv = self.ae_params.copy()
-            model, tau, score = train_autoencoder(
-                self.X_scaled,
-                hidden=adv.get("hidden"),
-                latent_dim=adv.get("latent_dim"),
-                epochs=self.k_spin.value(),
-                batch_size=adv.get("batch_size"),
-                lr=adv.get("lr"),
-                dropout=adv.get("dropout"),
-            )
-            self.model = model
-            self.scores = score
-        else:
-            adv = self.if_params.copy()
-            # 解析 max_samples
-            max_samples = parse_max_samples(adv.get("max_samples", "auto"), len(self.X_scaled))
-            model, tau, score = train_iforest(
-                self.X_scaled,
-                n_estimators=self.k_spin.value(),
-                contamination=self.contam_spin.value(),
-                max_samples=max_samples,
-                max_features=adv.get("max_features"),
-                bootstrap=adv.get("bootstrap"),
-                random_state=adv.get("random_state"),
-                warm_start=adv.get("warm_start"),
-                n_jobs=adv.get("n_jobs"),
-            )
-            self.model = model
-            self.scores = score
+            params["n_neighbors"] = self.k_spin.value()
+        elif alg == "iforest":
+            params["n_estimators"] = self.k_spin.value()
+            params["contamination"] = self.contam_spin.value()
+            params["max_samples"] = parse_max_samples(params.get("max_samples", "auto"), len(self.X_scaled))
+        else:  # autoencoder
+            params["epochs"] = self.k_spin.value()
 
-        self.meta = {"model_type": alg, "tau": tau, "advanced": adv}
+        rep = ML.train(alg=alg, X=X, params=params)
+        self.scores = rep.scores
+        self.meta = ML.get_meta()
+        tau = float(self.meta.get("tau", 0.95))
         self.save_btn.setEnabled(True)
         self.canvas.slider.setValue(int(tau * 1000))
         self.refresh_plot()
@@ -536,8 +521,6 @@ class UnsupervisedPage(QWidget):
 
     # ---------------- 保存模型 ----------------
     def save_model(self):
-        if self.model is None:
-            return
         name, _ = QFileDialog.getSaveFileName(self, "保存模型", "", "Joblib Files (*.joblib)")
         if name:
-            save_model(Path(name), self.model, self.scaler, self.meta)
+            ML.save(str(Path(name)))
