@@ -70,9 +70,6 @@ class OutlierDetectionPage(QWidget):
             src = self.sup_page if self.data_page.has_target() else self.unsup_page
             self.valid_page.configure(
                 src.selected_columns(),
-                src.model,
-                src.scaler,
-                src.meta,
             )
 
     def next_step(self) -> None:

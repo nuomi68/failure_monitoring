@@ -11,8 +11,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from sklearn.decomposition import PCA
 from sklearn.utils.multiclass import type_of_target
-from sklearn.model_selection import train_test_split
-from tools import scale_features, save_model
+from tools import scale_features
+from backend.ml_interface import ML
 
 
 # ================== 画布 ==================
@@ -190,8 +190,6 @@ class SupervisedPage(QWidget):
         self.y_true: np.ndarray | None = None   # 测试集真实
         self.y_pred: np.ndarray | None = None   # 测试集预测(离散或连续)
         self.test_scores: np.ndarray | None = None  # 测试集概率或预测值
-        self.model: Any | None = None
-        self.scaler: Any | None = None
         self.meta: Dict[str, Any] = {}
         self.is_clf = True
         self.binary = True
@@ -284,68 +282,52 @@ class SupervisedPage(QWidget):
             QMessageBox.warning(self,"提示","请选择特征"); return
 
         X = self.df[cols].astype(float).values
-        self.X_scaled, self.scaler = scale_features(X)
         y = self.df[self.target_col].values
 
         code = self.alg_combo.currentData()
         params_base = self.knn_params if "knn" in code else self.rf_params
-        test_size = float(params_base.get("test_size",0.2))
-        rs = int(params_base.get("random_state",0))
-        stratify = y if (self.is_clf and len(np.unique(y))>1) else None
+        test_size = float(params_base.get("test_size", 0.2))
+        rs = int(params_base.get("random_state", 0))
+        stratify = y if (self.is_clf and len(np.unique(y)) > 1) else None
 
-        X_train, X_test, y_train, y_test = train_test_split(
+        # 为可视化预先处理数据（与接口保持一致）
+        self.X_scaled, _ = scale_features(X)
+        from sklearn.model_selection import train_test_split
+        X_tr, X_te, y_tr, y_te = train_test_split(
             self.X_scaled, y, test_size=test_size, random_state=rs, stratify=stratify
         )
-        self.X_test = X_test
+        self.X_test = X_te
+        self.y_true = y_te
 
-        # 普通参数
         n_main = self.k_spin.value()
-        self.binary = (self.is_clf and len(np.unique(y_train))==2)
         params = params_base.copy()
-        params.pop("test_size")
-
+        params.pop("test_size", None)
+        params["random_state"] = rs
         if "knn" in code:
-            import sklearn.neighbors as N
-            params.pop("random_state")
             params["n_neighbors"] = n_main
-            if self.is_clf:
-                model = N.KNeighborsClassifier(**params)
-            else:
-                model = N.KNeighborsRegressor(**params)
         else:
             params["n_estimators"] = n_main
-            if self.is_clf:
-                from sklearn.ensemble import RandomForestClassifier as RF
-                model = RF(**params)
-            else:
-                from sklearn.ensemble import RandomForestRegressor as RFR
-                model = RFR(**params)
 
-        model.fit(X_train, y_train)
-        self.model = model
-        self.y_true = y_test
+        rep = ML.train(
+            alg=code,
+            X=X,
+            y=y,
+            params=params,
+            test_size=test_size,
+            random_state=rs,
+            stratify=stratify,
+        )
 
-        if self.is_clf:
-            if self.binary:
-                # 测试集正类概率
-                proba = model.predict_proba(X_test)
-                pos_idx = list(model.classes_).index(1) if 1 in model.classes_ else 1
-                self.test_scores = proba[:, pos_idx]
-                tau = 0.5
-                self.meta["tau"] = tau
-                self.canvas.slider.setValue(int(tau*1000))
-                self._update_pred_by_threshold()
-            else:
-                self.test_scores = None
-                self.y_pred = model.predict(X_test)
-        else:
-            self.y_pred = model.predict(X_test)
-            self.test_scores = self.y_pred
+        self.y_pred = rep.y_pred
+        self.test_scores = rep.scores
+        self.binary = self.is_clf and rep.scores is not None
+        self.meta = ML.get_meta()
+        tau = float(self.meta.get("tau", 0.5))
+        if self.binary:
+            self.canvas.slider.setValue(int(tau * 1000))
+            self._update_pred_by_threshold()
 
-        # 计算指标文本
         self._compute_metrics()
-        self.meta["model_type"] = code
-        self.meta["advanced"] = params
         self.save_btn.setEnabled(True)
         self._reset_viz_mode(); self._plot()
 
@@ -353,7 +335,7 @@ class SupervisedPage(QWidget):
         if not (self.is_clf and self.binary and self.test_scores is not None):
             return
         tau = self.meta.get("tau",0.5)
-        classes = list(self.model.classes_)
+        classes = list(self.meta.get("classes_", []))
         # 确定正类 label（若非0/1，取 classes[1] 为正类）
         pos_label = 1 if 1 in classes else classes[1]
         neg_label = [c for c in classes if c!=pos_label][0]
@@ -397,12 +379,11 @@ class SupervisedPage(QWidget):
         self.viz_combo.blockSignals(True); self.viz_combo.clear()
         if self.is_clf:
             base = ["混淆矩阵","指标汇总","PCA 彩色散点"]
-            if self.binary: base.insert(0,"ROC 曲线")
-            if hasattr(self.model,"feature_importances_"): base.append("特征重要性")
+            if self.binary:
+                base.insert(0, "ROC 曲线")
             self.viz_combo.addItems(base)
         else:
             base = ["预测 vs 真实","残差直方图","残差散点","PCA 彩色散点"]
-            if hasattr(self.model,"feature_importances_"): base.append("特征重要性")
             self.viz_combo.addItems(base)
         self.viz_combo.blockSignals(False)
 
@@ -416,16 +397,6 @@ class SupervisedPage(QWidget):
                 self.canvas.plot_confmat(self.y_true, self.y_pred)
             elif choice == "指标汇总":
                 self.canvas.clear()
-            elif choice == "特征重要性" and hasattr(self.model,"feature_importances_"):
-                self.canvas.ax.clear()
-                imps = self.model.feature_importances_
-                idx = np.argsort(imps)[::-1]
-                cols = self._feat_cols()
-                self.canvas.ax.bar(range(len(imps)), imps[idx])
-                self.canvas.ax.set_xticks(range(len(imps)))
-                self.canvas.ax.set_xticklabels([cols[i] for i in idx], rotation=45, ha="right")
-                self.canvas.ax.set_ylabel("importance")
-                self.canvas.fig.tight_layout(); self.canvas.draw()
             elif choice == "PCA 彩色散点":
                 # 分类用真实标签上色
                 self.canvas.plot_pca(self.X_test, self.y_true)
@@ -450,15 +421,6 @@ class SupervisedPage(QWidget):
                 ax.axhline(0,color="gray",ls="--")
                 ax.set_xlabel("预测值"); ax.set_ylabel("残差")
                 self.canvas.fig.tight_layout(); self.canvas.draw()
-            elif choice == "特征重要性" and hasattr(self.model,"feature_importances_"):
-                self.canvas.ax.clear()
-                imps = self.model.feature_importances_
-                idx = np.argsort(imps)[::-1]; cols = self._feat_cols()
-                self.canvas.ax.bar(range(len(imps)), imps[idx])
-                self.canvas.ax.set_xticks(range(len(imps)))
-                self.canvas.ax.set_xticklabels([cols[i] for i in idx], rotation=45, ha="right")
-                self.canvas.ax.set_ylabel("importance")
-                self.canvas.fig.tight_layout(); self.canvas.draw()
             elif choice == "PCA 彩色散点":
                 XY = PCA(2, random_state=0).fit_transform(self.X_test)
                 err = np.abs(self.y_pred - self.y_true)
@@ -481,6 +443,6 @@ class SupervisedPage(QWidget):
 
     # ------------ 保存模型 ------------
     def save_model(self):
-        if self.model is None: return
         name,_ = QFileDialog.getSaveFileName(self,"保存模型","","Joblib Files (*.joblib)")
-        if name: save_model(Path(name), self.model, self.scaler, self.meta)
+        if name:
+            ML.save(str(Path(name)))

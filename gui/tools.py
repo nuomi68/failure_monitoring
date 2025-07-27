@@ -3,7 +3,6 @@ import numpy as np
 from typing import Tuple, Any, Dict
 import matplotlib.pyplot as plt
 from pathlib import Path
-from joblib import dump, load
 import logging
 
 logger = logging.getLogger("failure_monitoring")
@@ -31,14 +30,5 @@ def scale_features(X: np.ndarray):
     Xs = scaler.fit_transform(X)
     return Xs, scaler
 
-def save_model(path: Path, model, scaler, meta):
-    if meta.get("model_type") == "autoencoder":
-        import torch
-        torch.save({
-            "state_dict": model.state_dict(),
-            "scaler": scaler,
-            "meta": meta,
-        }, path)
-    else:
-        import joblib
-        joblib.dump({"model": model, "scaler": scaler, "meta": meta}, path)
+def save_model(*args, **kwargs):
+    raise RuntimeError("save_model has been deprecated; use backend.ml_interface.ML.save")
