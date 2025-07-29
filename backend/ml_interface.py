@@ -38,6 +38,12 @@ class ModelArtifact:
 
 
 @dataclass
+class EnsembleArtifact:
+    members: list[ModelArtifact]
+    method: str = "mean"  # "mean" | "vote"
+
+
+@dataclass
 class TrainReport:
     y_true: Optional[np.ndarray] = None
     y_pred: Optional[np.ndarray] = None
@@ -84,7 +90,7 @@ for _ad in [*SUPERVISED_ADAPTERS, *UNSUPERVISED_ADAPTERS]:
 
 # ---------------------------- 单例模型状态 ----------------------------
 class _State:
-    current: Optional[ModelArtifact] = None
+    current: Optional[ModelArtifact | EnsembleArtifact] = None
 
 
 STATE = _State()
@@ -166,6 +172,7 @@ def _train_impl(
         test_size: float = 0.2,
         random_state: int = 0,
         stratify: Optional[np.ndarray] = None,
+        feature_names: Optional[list[str]] = None,
 ) -> Tuple[ModelArtifact, TrainReport]:
     params = dict(params or {})
     adapter = get_adapter(alg)
@@ -230,6 +237,7 @@ def _train_impl(
             "advanced": params,
             "classes_": getattr(model, "classes_", None),
             "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
+            "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
         }
         art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
         rep = TrainReport(y_true=y_te, y_pred=y_pred, scores=scores, metrics_text=metrics_text)
@@ -241,8 +249,13 @@ def _train_impl(
     model = adapter.fit(model, Xs, None)
     scores = adapter.scores(model, Xs)
     tau = adapter.default_tau(scores)
-    meta = {"model_type": adapter.meta_model_type(), "tau": tau, "advanced": params,
-            "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None"}
+    meta = {
+        "model_type": adapter.meta_model_type(),
+        "tau": tau,
+        "advanced": params,
+        "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
+        "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
+    }
     art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
     rep = TrainReport(scores=scores)
     return art, rep
@@ -271,19 +284,56 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     return y_pred, scores
 
 
+def _predict_ensemble(bundle: EnsembleArtifact, X_table: Dict[str, np.ndarray]):
+    preds = []
+    scores_list = []
+    for art in bundle.members:
+        f_order = art.meta.get("features", [])
+        length = len(next(iter(X_table.values())))
+        X_sub = np.stack([X_table.get(f, np.full(length, np.nan)) for f in f_order], axis=1)
+        y, sc = _predict_impl(art, X_sub)
+        preds.append(y)
+        scores_list.append(sc)
+
+    if bundle.method == "mean":
+        return np.nanmean(preds, axis=0), np.nanmean(scores_list, axis=0)
+    votes = np.stack(preds, axis=1)
+    maj = np.apply_along_axis(lambda r: np.bincount(r.astype(int)).argmax(), 1, votes)
+    return maj, np.nanmean(scores_list, axis=0)
+
+
 # ---------------------------- 对外 API（单例） ----------------------------
 class ML:
     @classmethod
-    def train(cls, alg: str, X: np.ndarray, y: Optional[np.ndarray] = None, **kwargs) -> TrainReport:
-        art, rep = _train_impl(alg=alg, X=X, y=y, **kwargs)
+    def train(
+        cls,
+        alg: str,
+        X: np.ndarray,
+        y: Optional[np.ndarray] = None,
+        *,
+        feature_names: Optional[list[str]] = None,
+        **kwargs,
+    ) -> TrainReport:
+        art, rep = _train_impl(
+            alg=alg,
+            X=X,
+            y=y,
+            feature_names=feature_names,
+            **kwargs,
+        )
         STATE.current = art  # 覆盖旧模型
         return rep
 
     @classmethod
-    def predict(cls, X: np.ndarray):
+    def predict(cls, X: np.ndarray | Dict[str, np.ndarray]):
         if STATE.current is None:
             raise RuntimeError("当前没有已训练/加载的模型。请先调用 train(...) 或 load(...)。")
-        return _predict_impl(STATE.current, X)
+        cur = STATE.current
+        if isinstance(cur, EnsembleArtifact):
+            assert isinstance(X, dict)
+            return _predict_ensemble(cur, X)
+        assert isinstance(X, np.ndarray)
+        return _predict_impl(cur, X)
 
     @classmethod
     def transform(cls, X: np.ndarray):
@@ -295,8 +345,16 @@ class ML:
 
     @classmethod
     def get_meta(cls) -> Dict[str, Any]:
-        if STATE.current is None: return {}
-        return dict(STATE.current.meta)
+        if STATE.current is None:
+            return {}
+        cur = STATE.current
+        if isinstance(cur, EnsembleArtifact):
+            return {
+                "ensemble": True,
+                "method": cur.method,
+                "members": [m.meta for m in cur.members],
+            }
+        return dict(cur.meta)
 
     @classmethod
     def save(cls, path: str) -> None:
@@ -309,6 +367,13 @@ class ML:
         art = load_artifact(path)
         STATE.current = art
         return dict(art.meta)
+
+    @classmethod
+    def load_many(cls, paths: list[str], *, method: str = "mean") -> Dict[str, Any]:
+        arts = [load_artifact(p) for p in paths]
+        STATE.current = EnsembleArtifact(arts, method)
+        union = sorted({f for art in arts for f in art.meta.get("features", [])})
+        return {"ok": True, "method": method, "features_union": union}
 
     @classmethod
     def clear(cls) -> None:
@@ -376,5 +441,11 @@ def load_artifact(path: str) -> ModelArtifact:
     else:
         model = model_field
 
+    if "features" not in meta:
+        try:
+            n_feat = model.n_features_in_
+            meta["features"] = [f"X{i}" for i in range(n_feat)]
+        except Exception:
+            meta["features"] = []
     return ModelArtifact(model=model, scaler=scaler, meta=meta)
 
