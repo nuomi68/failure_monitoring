@@ -354,8 +354,17 @@ class SupervisedPage(QWidget):
             params["n_estimators"] = n_main
 
           # 训练（后端会记录 task/n_classes/is_binary/tau 等 meta）
-        _ = ML.train( alg = code, X = X, y = y, params = params, scaler = scaler_spec,
-            test_size = test_size, random_state = rs, stratify = stratify )
+        _ = ML.train(
+            alg=code,
+            X=X,
+            y=y,
+            params=params,
+            scaler=scaler_spec,
+            test_size=test_size,
+            random_state=rs,
+            stratify=stratify,
+            feature_names=cols,
+        )
 
         X_tr_raw, X_te_raw, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=rs, stratify=stratify)
         self.X_test = ML.transform(X_te_raw)  # 与训练一致的规范化

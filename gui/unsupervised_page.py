@@ -435,7 +435,13 @@ class UnsupervisedPage(QWidget):
             max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(self.X))
             params["max_samples"] = max_samples
 
-        rep = ML.train(alg=alg, X=X, params=params, scaler=scaler_spec)
+        rep = ML.train(
+            alg=alg,
+            X=X,
+            params=params,
+            scaler=scaler_spec,
+            feature_names=cols,
+        )
         self.meta = ML.get_meta()
         self.scores = rep.scores
         self.X_scaled = ML.transform(X)
