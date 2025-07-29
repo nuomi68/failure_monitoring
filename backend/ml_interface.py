@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Protocol, runtime_checkable, Literal
+from pathlib import Path
+import time
 
 import numpy as np
 from sklearn.preprocessing import (
@@ -24,6 +26,8 @@ from sklearn.metrics import (
 )
 import joblib
 import io
+# model registry for auto-saving
+from .model_registry import register as registry_register, ROOT as REGISTRY_ROOT
 # 引入适配器
 from .models.supervised_core import ADAPTERS as SUPERVISED_ADAPTERS
 from .models.unsupervised_core import ADAPTERS as UNSUPERVISED_ADAPTERS
@@ -363,6 +367,17 @@ class ML:
         save_artifact(path, STATE.current)
 
     @classmethod
+    def save_auto(cls, name: str | None = None) -> Dict[str, Any]:
+        if STATE.current is None:
+            raise RuntimeError("没有可保存的模型。")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        fname = f"{ts}_{name or STATE.current.meta.get('model_type','model')}.joblib"
+        path = REGISTRY_ROOT / fname
+        save_artifact(path, STATE.current)
+        registry_register(path, cls.get_meta())
+        return {"ok": True, "path": str(path)}
+
+    @classmethod
     def load(cls, path: str) -> Dict[str, Any]:
         art = load_artifact(path)
         STATE.current = art
@@ -391,6 +406,8 @@ class ML:
         if action == "save":
             cls.save(**kwargs)
             return {"ok": True}
+        if action == "save_auto":
+            return cls.save_auto(**kwargs)
         if action == "load":
             meta = cls.load(**kwargs)
             return {"ok": True, "meta": meta}

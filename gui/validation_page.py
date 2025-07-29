@@ -8,7 +8,6 @@ from functools import partial
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
     QLabel, QPushButton, QHBoxLayout, QMessageBox, QMenu,
-    QFileDialog
 )
 from PyQt6.QtGui import (
     QGuiApplication, QKeySequence, QShortcut, QCursor
@@ -267,12 +266,11 @@ class ValidationPage(QWidget):
         if not ML.get_meta():
             QMessageBox.warning(self, "提示", "暂无可保存的模型")
             return
-        name,_ = QFileDialog.getSaveFileName(self, "保存模型", "", "Joblib Files (*.joblib)")
-        if name:
-            try:
-                ML.save(str(name))
-            except Exception as e:
-                QMessageBox.warning(self, "错误", str(e))
+        try:
+            ret = ML.save_auto()
+            QMessageBox.information(self, "已保存", f"模型已保存到:\n{ret['path']}")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", str(e))
 
     # ------------------------------------------------------------------
     # 工具

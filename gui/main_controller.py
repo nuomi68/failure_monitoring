@@ -32,6 +32,7 @@ class QtLogHandler(logging.Handler):
 
 from set_style import get_sheet
 from outlier_detection import OutlierDetectionPage
+from ensemble_page import EnsemblePage
 
 
 class MainController(QMainWindow):
@@ -78,15 +79,17 @@ class MainController(QMainWindow):
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(4)
 
-        # 三个功能按钮
+        # 功能按钮
         self.btn_online = QPushButton()
         self.btn_anomaly = QPushButton()
         self.btn_damage = QPushButton()
+        self.btn_ensemble = QPushButton()
 
         self.menu_items = [
             (self.btn_online, "📈", "在线监测"),
             (self.btn_anomaly, "🔍", "异常检测"),
             (self.btn_damage, "🔧", "损伤评估"),
+            (self.btn_ensemble, "🧩", "模型集成"),
         ]
 
         for btn, icon, label in self.menu_items:
@@ -112,10 +115,12 @@ class MainController(QMainWindow):
         self.online_page = QWidget()
         self.anomaly_page = OutlierDetectionPage()
         self.damage_page = QWidget()
+        self.ensemble_page = EnsemblePage()
 
         self.stack.addWidget(self.online_page)
         self.stack.addWidget(self.anomaly_page)
         self.stack.addWidget(self.damage_page)
+        self.stack.addWidget(self.ensemble_page)
 
 
 
@@ -135,6 +140,7 @@ class MainController(QMainWindow):
         self.btn_online.clicked.connect(lambda: self.switch_page(self.btn_online, self.online_page))
         self.btn_anomaly.clicked.connect(lambda: self.switch_page(self.btn_anomaly, self.anomaly_page))
         self.btn_damage.clicked.connect(lambda: self.switch_page(self.btn_damage, self.damage_page))
+        self.btn_ensemble.clicked.connect(lambda: self.switch_page(self.btn_ensemble, self.ensemble_page))
 
         # 布局装载
         main_layout.addWidget(self.left_frame)
