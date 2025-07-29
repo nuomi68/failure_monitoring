@@ -23,7 +23,7 @@ from sklearn.metrics import (
     mean_absolute_error, mean_squared_error, r2_score,
 )
 import joblib
-
+import io
 # 引入适配器
 from .models.supervised_core import ADAPTERS as SUPERVISED_ADAPTERS
 from .models.unsupervised_core import ADAPTERS as UNSUPERVISED_ADAPTERS
@@ -68,7 +68,8 @@ class AlgoAdapter(Protocol):
 _REGISTRY: dict[str, AlgoAdapter] = {}
 
 
-def register(adapter: AlgoAdapter): _REGISTRY[adapter.code] = adapter
+def register(adapter: AlgoAdapter):
+    _REGISTRY[adapter.code] = adapter
 
 
 def get_adapter(code: str) -> AlgoAdapter:
@@ -338,11 +339,42 @@ class ML:
 
 # ---------------------------- 持久化 ----------------------------
 def save_artifact(path: str, artifact: ModelArtifact) -> None:
-    obj = {"model": artifact.model, "scaler": artifact.scaler, "meta": artifact.meta,
-           "_interface": "ml_interface.singleton.scaler.v1"}
+    obj: Dict[str, Any] = {"scaler": artifact.scaler, "meta": artifact.meta, "_interface": "ml_interface.singleton.scaler.v4"}
+    model = artifact.model
+    mtype = artifact.meta.get("model_type")
+    adapter = get_adapter(mtype)
+
+    # 优先走适配器的 persist 钩子（如 AE）
+    if hasattr(adapter, "persist"):
+        try:
+            payload = adapter.persist(model)  # type: ignore[attr-defined]
+            obj["model"] = {"_adapter": mtype, "payload": payload}
+            joblib.dump(obj, str(path)); return
+        except Exception as e:
+            # 回退到直接保存（sklearn），AE 不建议回退
+            obj["model"] = model
+
+    else:
+        obj["model"] = model
+
     joblib.dump(obj, str(path))
 
 
 def load_artifact(path: str) -> ModelArtifact:
     obj = joblib.load(str(path))
-    return ModelArtifact(model=obj.get("model"), scaler=obj.get("scaler"), meta=obj.get("meta", {}))
+    meta = obj.get("meta", {})
+    scaler = obj.get("scaler")
+    model_field = obj.get("model")
+
+    if isinstance(model_field, dict) and model_field.get("_adapter"):
+        mtype = model_field["_adapter"]
+        adapter = get_adapter(mtype)
+        if not hasattr(adapter, "restore"):
+            raise RuntimeError(f"适配器 {mtype} 不支持 restore()。")
+        arch = meta.get("ae_arch", {})
+        model = adapter.restore(model_field["payload"], arch)  # type: ignore[attr-defined]
+    else:
+        model = model_field
+
+    return ModelArtifact(model=model, scaler=scaler, meta=meta)
+

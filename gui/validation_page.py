@@ -44,7 +44,8 @@ class ValidationPage(QWidget):
 
         # -------------------- UI --------------------
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(); layout.addWidget(self.table)
+        self.table = QTableWidget()
+        layout.addWidget(self.table)
 
         # 右键菜单
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -61,13 +62,25 @@ class ValidationPage(QWidget):
 
         # 底部按钮
         btn_row = QHBoxLayout()
-        self.undo_btn = QPushButton("撤销"); self.undo_btn.clicked.connect(self._undo); btn_row.addWidget(self.undo_btn)
-        self.redo_btn = QPushButton("重做"); self.redo_btn.clicked.connect(self._redo); btn_row.addWidget(self.redo_btn)
-        self.predict_btn = QPushButton("计算"); self.predict_btn.clicked.connect(self.on_predict); btn_row.addWidget(self.predict_btn)
-        self.clear_btn = QPushButton("清空全部"); self.clear_btn.clicked.connect(self._clear_all); btn_row.addWidget(self.clear_btn)
-        self.save_btn = QPushButton("保存模型"); self.save_btn.clicked.connect(self.save_model); btn_row.addWidget(self.save_btn)
-        self.save_btn.setEnabled(False)
-        self.result_lbl = QLabel("结果: "); btn_row.addWidget(self.result_lbl); btn_row.addStretch(1)
+        self.undo_btn = QPushButton("撤销")
+        self.undo_btn.clicked.connect(self._undo)
+        btn_row.addWidget(self.undo_btn)
+        self.redo_btn = QPushButton("重做")
+        self.redo_btn.clicked.connect(self._redo)
+        btn_row.addWidget(self.redo_btn)
+        self.predict_btn = QPushButton("计算")
+        self.predict_btn.clicked.connect(self.on_predict)
+        btn_row.addWidget(self.predict_btn)
+        self.clear_btn = QPushButton("清空全部")
+        self.clear_btn.clicked.connect(self._clear_all)
+        btn_row.addWidget(self.clear_btn)
+
+        self.result_lbl = QLabel("结果: ")
+        btn_row.addWidget(self.result_lbl)
+        btn_row.addStretch(1)
+        self.save_btn = QPushButton("保存模型")
+        self.save_btn.clicked.connect(self.save_model)
+        btn_row.addWidget(self.save_btn)
         layout.addLayout(btn_row)
 
         self._update_undo_redo_state()
@@ -79,7 +92,8 @@ class ValidationPage(QWidget):
         self.features = list(features)
         self.meta = {}
         self._setup_table()
-        self._clear_history(); self._push_state()  # 初始快照
+        self._clear_history()
+        self._push_state()  # 初始快照
         self.save_btn.setEnabled(bool(ML.get_meta()))
 
     # ------------------------------------------------------------------
@@ -112,7 +126,9 @@ class ValidationPage(QWidget):
         self._update_undo_redo_state()
 
     def _clear_history(self):
-        self._undo_stack.clear(); self._redo_stack.clear(); self._update_undo_redo_state()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._update_undo_redo_state()
 
     def _update_undo_redo_state(self):
         self.undo_btn.setEnabled(len(self._undo_stack) > 1)
@@ -158,7 +174,8 @@ class ValidationPage(QWidget):
     # 右键菜单 & 行列操作
     # ------------------------------------------------------------------
     def _open_context_menu(self, pos: QPoint):
-        r = self.table.rowAt(pos.y()); c = self.table.columnAt(pos.x())
+        r = self.table.rowAt(pos.y())
+        c = self.table.columnAt(pos.x())
         if r < 0:
             return
         menu = QMenu(self.table)
@@ -172,7 +189,8 @@ class ValidationPage(QWidget):
         menu.exec(QCursor.pos())
 
     def _record_then(self, fn, *args):
-        self._push_state(); fn(*args)
+        self._push_state()
+        fn(*args)
 
     # 行列基础操作
     def _insert_row(self, idx):
@@ -220,22 +238,27 @@ class ValidationPage(QWidget):
     def on_predict(self):
         meta = ML.get_meta()
         if not meta:
-            QMessageBox.warning(self, "提示", "请先在上一页训练模型"); return
+            QMessageBox.warning(self, "提示", "请先在上一页训练模型")
+            return
         data_rows, row_map = [], []
         for r in range(self.table.rowCount()):
             try:
                 vals = [float(self._cell_text(r, c)) for c in range(len(self.features))]
             except ValueError:
                 continue
-            data_rows.append(vals); row_map.append(r)
+            data_rows.append(vals)
+            row_map.append(r)
         if not data_rows:
-            QMessageBox.warning(self, "提示", "请在表格中输入 / 粘贴有效数值"); return
+            QMessageBox.warning(self, "提示", "请在表格中输入 / 粘贴有效数值")
+            return
         X = np.asarray(data_rows, dtype=np.float32)
         _pred, scores = ML.predict(X)
         tau = float(meta.get("tau", 0))
         abn = 0
         for idx, row in enumerate(row_map):
-            s = scores[idx]; flag = s > tau; abn += flag
+            s = scores[idx]
+            flag = s > tau
+            abn += flag
             self.table.setItem(row, len(self.features), QTableWidgetItem(f"{s:.4f}"))
             self.table.setItem(row, len(self.features) + 1, QTableWidgetItem("异常" if flag else "正常"))
         self.result_lbl.setText(f"结果: 共 {len(row_map)} 行, 异常 {abn} 行")

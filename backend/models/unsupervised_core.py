@@ -8,7 +8,7 @@ unsupervised_core.py
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Literal, Protocol, runtime_checkable
+from typing import Any, Optional, Literal, Protocol, runtime_checkable, Dict
 import numpy as np
 
 
@@ -170,6 +170,33 @@ class _AutoEncoderAdapter:
     def meta_model_type(self) -> str:
         return "autoencoder"
 
+    # -------- 持久化钩子 --------
+    def persist(self, model: Any) -> Dict[str, Any]:
+        """返回可序列化负载：{'_framework': 'torch', 'state_dict': bytes}"""
+        import torch, io
+        from torch.nn import Module
+        if not isinstance(model, Module):
+            raise TypeError("AE persist 期望传入 torch.nn.Module")
+        buff = io.BytesIO()
+        model_cpu = model.to("cpu")
+        torch.save(model_cpu.state_dict(), buff)
+        return {"_framework": "torch", "state_dict": buff.getvalue()}
+
+    def restore(self, payload: Dict[str, Any], arch: Dict[str, Any]) -> Any:
+        """根据 arch 复构并加载 state_dict。"""
+        import torch, io
+        if payload.get("_framework") != "torch":
+            raise ValueError("不支持的 AE 负载类型")
+        net = self._instantiate(
+            input_dim=int(arch["input_dim"]),
+            hidden=list(arch["hidden"]),
+            latent_dim=int(arch["latent_dim"]),
+            dropout=float(arch.get("dropout", 0.0)),
+        )
+        state = torch.load(io.BytesIO(payload["state_dict"]), map_location="cpu")
+        net.load_state_dict(state)
+        net.eval()
+        return net
 
 ADAPTERS: list[AlgoAdapter] = [
     _KNNUnAdapter(),
