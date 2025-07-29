@@ -1,6 +1,4 @@
 """
-ml_interface_singleton_scaled.py
-
 统一接口层（仅维护一个模型状态）+ 可插拔归一化：
 - 指令式：train / predict / transform / save / load / clear / get_meta
 - 新训练覆盖旧模型
@@ -438,7 +436,7 @@ def save_artifact(path: str, artifact: ModelArtifact) -> None:
 
     else:
         obj["model"] = model
-
+    print(path)
     joblib.dump(obj, str(path))
 
 

@@ -34,7 +34,8 @@ class ValidationPage(QWidget):
         # -------------------- 数据属性 --------------------
         self.meta: Dict[str, Any] = {}
         self.features: List[str] = []
-
+        self._external_mode: bool = False
+        self._external_cb = None  # type: ignore
         # 撤销 / 重做
         self._undo_stack: list[list[list[str]]] = []
         self._redo_stack: list[list[list[str]]] = []
@@ -95,6 +96,16 @@ class ValidationPage(QWidget):
         self._push_state()  # 初始快照
         self.save_btn.setEnabled(bool(ML.get_meta()))
 
+    def enable_external(self, features: List[str], predict_cb) -> None:
+        """
+        外部预测模式：
+        - features: 特征列名
+        - predict_cb: 回调(df: pandas.DataFrame) -> Dict[str, np.ndarray]，
+          返回 {目标名: 预测数组}，表格会据此动态生成结果列
+        """
+        self._external_mode = True
+        self._external_cb = predict_cb
+        self.configure(features)  # 用现有初始化流程
     # ------------------------------------------------------------------
     # 撤销 / 重做 栈
     # ------------------------------------------------------------------
@@ -142,12 +153,15 @@ class ValidationPage(QWidget):
     def _restore_state(self, state: list[list[str]]):
         self._restoring = True
         try:
-            self.table.setRowCount(len(state))
-            self.table.setColumnCount(len(state[0]) if state else len(self.features) + 2)
-            for r, row in enumerate(state):
-                for c, val in enumerate(row):
-                    item = QTableWidgetItem(val)
-                    if c >= len(self.features):  # “得分” 和 “标签”列设为不可编辑
+            # ✅ 没有历史时，也给最少行数，列数按模式取
+            rows = max(len(state), self.MIN_ROWS)
+            cols = (len(state[0]) if state else (len(self.features) if self._external_mode else len(self.features) + 2))
+            self.table.setRowCount(rows)
+            self.table.setColumnCount(cols)
+            for r in range(len(state)):
+                for c in range(len(state[r])):
+                    item = QTableWidgetItem(state[r][c])
+                    if (not self._external_mode) and c >= len(self.features):
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.table.setItem(r, c, item)
         finally:
@@ -231,10 +245,52 @@ class ValidationPage(QWidget):
                 item = QTableWidgetItem()
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(start + r_idx, c_idx, item)
-    # ------------------------------------------------------------------
-    # 预测逻辑（略微整理）
-    # ------------------------------------------------------------------
+
     def on_predict(self):
+        # ---------- 外部模式：由回调提供结果，动态生成目标列 ----------
+        if self._external_mode and self._external_cb is not None:
+            import pandas as pd
+            # 读表 -> DataFrame（空值用 NaN）
+            rows = []
+            for r in range(self.table.rowCount()):
+                row = []
+                for c in range(len(self.features)):
+                    txt = (self._cell_text(r, c) or "").strip()
+                    if txt == "":
+                        row.append(np.nan)
+                    else:
+                        try:
+                            row.append(float(txt))
+                        except Exception:
+                            row.append(np.nan)
+                rows.append(row)
+            df = pd.DataFrame(rows, columns=self.features)
+
+            # 调回调：期望 {目标名: 一维数组}
+            res = self._external_cb(df) or {}
+            if not isinstance(res, dict) or not res:
+                self.result_lbl.setText("结果: 空")
+                return
+
+            targets = list(res.keys())
+            # 重建表头：特征列 + 各目标列
+            self.table.setColumnCount(len(self.features) + len(targets))
+            self.table.setHorizontalHeaderLabels(self.features + targets)
+
+            # 写入结果并将结果列设为只读
+            for i, t in enumerate(targets):
+                arr = np.asarray(res[t]).ravel()
+                for r in range(self.table.rowCount()):
+                    val = "" if r >= len(arr) or (arr[r] != arr[r]) else str(arr[r])  # NaN 检测
+                    item = self.table.item(r, len(self.features) + i)
+                    if item is None:
+                        item = QTableWidgetItem("")
+                        self.table.setItem(r, len(self.features) + i, item)
+                    item.setText(val)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            self.result_lbl.setText(f"结果: 共 {self.table.rowCount()} 行, 目标列 {len(targets)} 个")
+            return
         meta = ML.get_meta()
         if not meta:
             QMessageBox.warning(self, "提示", "请先在上一页训练模型")
@@ -276,16 +332,15 @@ class ValidationPage(QWidget):
     # 工具
     # ------------------------------------------------------------------
     def _setup_table(self):
-        self.table.setColumnCount(len(self.features) + 2)
-        self.table.setHorizontalHeaderLabels(self.features + ["得分", "标签"])
+        if self._external_mode:
+            self.table.setColumnCount(len(self.features))
+            self.table.setHorizontalHeaderLabels(self.features)
+        else:
+            self.table.setColumnCount(len(self.features) + 2)
+            self.table.setHorizontalHeaderLabels(self.features + ["得分", "标签"])
+        # ✅ 初始化空行
         self.table.setRowCount(self.MIN_ROWS)
-        self.table.clearContents()
-        for row in range(self.MIN_ROWS):
-            for col in range(len(self.features) + 2):
-                item = QTableWidgetItem()
-                if col >= len(self.features):  # 最后两列是“得分”和“标签”
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.table.setItem(row, col, item)
+
     def _cell_text(self, row: int, col: int) -> str:
         item = self.table.item(row, col)
         return item.text() if item else ""
