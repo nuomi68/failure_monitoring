@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Any, Dict, Tuple
+import pandas as pd
 import numpy as np
 from backend.ml_interface import ML
 from functools import partial
@@ -33,7 +34,7 @@ class ValidationPage(QWidget):
 
         # -------------------- 数据属性 --------------------
         self.meta: Dict[str, Any] = {}
-        self.features: List[str] = []
+        self.features: List[str] = []  # 若为空，将在 _setup_table/enable_external 中回落为 ["X0"]
         self._external_mode: bool = False
         self._external_cb = None  # type: ignore
         # 撤销 / 重做
@@ -249,7 +250,6 @@ class ValidationPage(QWidget):
     def on_predict(self):
         # ---------- 外部模式：由回调提供结果，动态生成目标列 ----------
         if self._external_mode and self._external_cb is not None:
-            import pandas as pd
             # 读表 -> DataFrame（空值用 NaN）
             rows = []
             for r in range(self.table.rowCount()):

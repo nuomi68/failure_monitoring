@@ -377,7 +377,31 @@ def _predict_grouped(moa: MultiOutputArtifact, X_table: Dict[str, np.ndarray]):
                 out[target] = (y_mean, sc_mean)
     return out
 
-
+def _dict_to_array_for_model(artifact: ModelArtifact, X_table: dict[str, np.ndarray]) -> np.ndarray:
+    """单模型也支持列字典输入：按 meta['features'] 顺序取列，缺失补 NaN。"""
+    import numpy as np
+    feats = artifact.meta.get("features", [])
+    if not feats:
+        feats = sorted(X_table.keys())
+    # 找到长度
+    n = 0
+    for f in feats:
+        if f in X_table:
+            n = len(X_table[f]); break
+    if n == 0 and X_table:
+        n = len(next(iter(X_table.values())))
+    if n == 0:
+        return np.zeros((0, len(feats)))
+    cols = []
+    for f in feats:
+        if f in X_table:
+            col = np.asarray(X_table[f]).ravel()
+            if len(col) != n:
+                col = np.resize(col, (n,))
+        else:
+            col = np.full((n,), np.nan)
+        cols.append(col)
+    return np.stack(cols, axis=1)
 # ---------------------------- 对外 API（单例） ----------------------------
 class ML:
     @classmethod
@@ -421,7 +445,12 @@ class ML:
                 tgt = None
             return {"target": (tgt or "目标"), "labels": y, "scores": sc}
         # 单模型：输入 ndarray
-        assert isinstance(X, np.ndarray)
+          # 单模型：支持 ndarray 或 列字典
+
+        if isinstance(X, dict):
+            X = _dict_to_array_for_model(cur, X)
+        else:
+            assert isinstance(X, np.ndarray)
         y, sc = _predict_impl(cur, X)
         tgt = cur.meta.get("target", "目标")
         return {"target": tgt, "labels": y, "scores": sc}

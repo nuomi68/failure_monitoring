@@ -485,6 +485,8 @@ class EnsemblePage(QWidget):
         - 统一解析返回为 {目标名: 结果数组}，供 ValidationPage 动态生成列
         """
         import numpy as np
+        if df.shape[1] == 0:
+            return {"输出": np.array([])}
 
         # 对齐到 features_union
         if getattr(self, "features", None):
