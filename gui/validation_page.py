@@ -156,13 +156,14 @@ class ValidationPage(QWidget):
         try:
             # ✅ 没有历史时，也给最少行数，列数按模式取
             rows = max(len(state), self.MIN_ROWS)
-            cols = (len(state[0]) if state else (len(self.features) if self._external_mode else len(self.features) + 2))
+            # 新接口：初始仅含特征列，预测后再追加结果列
+            cols = (len(state[0]) if state else len(self.features))
             self.table.setRowCount(rows)
             self.table.setColumnCount(cols)
             for r in range(len(state)):
                 for c in range(len(state[r])):
                     item = QTableWidgetItem(state[r][c])
-                    if (not self._external_mode) and c >= len(self.features):
+                    if c >= len(self.features):
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.table.setItem(r, c, item)
         finally:
@@ -242,10 +243,6 @@ class ValidationPage(QWidget):
                 if c_idx >= len(self.features):
                     break
                 self.table.setItem(start + r_idx, c_idx, QTableWidgetItem(val.strip()))
-            for c_idx in range(len(self.features),len(self.features)+2):
-                item = QTableWidgetItem()
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.table.setItem(start + r_idx, c_idx, item)
 
     def on_predict(self):
         # ---------- 外部模式：由回调提供结果，动态生成目标列 ----------
@@ -291,32 +288,59 @@ class ValidationPage(QWidget):
 
             self.result_lbl.setText(f"结果: 共 {self.table.rowCount()} 行, 目标列 {len(targets)} 个")
             return
-        meta = ML.get_meta()
-        if not meta:
-            QMessageBox.warning(self, "提示", "请先在上一页训练模型")
-            return
-        data_rows, row_map = [], []
+        # ---------- 非外部模式：按最新 ML 接口调用 ----------
+        meta = ML.get_meta() or {}
+        # 收集 DataFrame
+        rows = []
         for r in range(self.table.rowCount()):
+            row = []
+            for c in range(len(self.features)):
+                txt = (self._cell_text(r, c) or "").strip()
+                if txt == "":
+                    row.append(np.nan)
+                else:
+                    try:
+                        row.append(float(txt))
+                    except Exception:
+                        row.append(np.nan)
+            rows.append(row)
+        df = pd.DataFrame(rows, columns=self.features)
+        # 选择输入形态
+        is_multi = bool(meta.get("multi_output", False))
+        is_ens   = bool(meta.get("ensemble", False))
+        try:
+            if is_multi or is_ens:
+                X = {c: df[c].to_numpy() for c in df.columns}
+                ret = ML.predict(X)
+            else:
+                ret = ML.predict(df.to_numpy())
+        except Exception:
+            # 兜底双形态
             try:
-                vals = [float(self._cell_text(r, c)) for c in range(len(self.features))]
-            except ValueError:
-                continue
-            data_rows.append(vals)
-            row_map.append(r)
-        if not data_rows:
-            QMessageBox.warning(self, "提示", "请在表格中输入 / 粘贴有效数值")
+                ret = ML.predict({c: df[c].to_numpy() for c in df.columns})
+            except Exception:
+                ret = ML.predict(df.to_numpy())
+        # 标准化：得到 {target: 1d-array}
+        res = self._normalize_backend_result(ret)
+        if not isinstance(res, dict) or not res:
+            self.result_lbl.setText("结果: 空")
             return
-        X = np.asarray(data_rows, dtype=np.float32)
-        _pred, scores = ML.predict(X)
-        tau = float(meta.get("tau", 0))
-        abn = 0
-        for idx, row in enumerate(row_map):
-            s = scores[idx]
-            flag = s > tau
-            abn += flag
-            self.table.setItem(row, len(self.features), QTableWidgetItem(f"{s:.4f}"))
-            self.table.setItem(row, len(self.features) + 1, QTableWidgetItem("异常" if flag else "正常"))
-        self.result_lbl.setText(f"结果: 共 {len(row_map)} 行, 异常 {abn} 行")
+        targets = list(res.keys())
+        # 重建表头：特征列 + 各目标列
+        self.table.setColumnCount(len(self.features) + len(targets))
+        self.table.setHorizontalHeaderLabels(self.features + targets)
+        # 写入各目标列并设为只读
+        for i, t in enumerate(targets):
+            arr = np.asarray(res[t]).ravel()
+            for r in range(self.table.rowCount()):
+                val = "" if r >= len(arr) or (arr[r] != arr[r]) else str(arr[r])
+                item = self.table.item(r, len(self.features) + i)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    self.table.setItem(r, len(self.features) + i, item)
+                item.setText(val)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.result_lbl.setText(f"结果: 共 {self.table.rowCount()} 行, 目标列 {len(targets)} 个")
 
     def save_model(self):
         if not ML.get_meta():
@@ -332,15 +356,25 @@ class ValidationPage(QWidget):
     # 工具
     # ------------------------------------------------------------------
     def _setup_table(self):
-        if self._external_mode:
-            self.table.setColumnCount(len(self.features))
-            self.table.setHorizontalHeaderLabels(self.features)
-        else:
-            self.table.setColumnCount(len(self.features) + 2)
-            self.table.setHorizontalHeaderLabels(self.features + ["得分", "标签"])
+        # 新接口：初始化仅包含特征列；预测时动态追加目标列
+        self.table.setColumnCount(len(self.features))
+        self.table.setHorizontalHeaderLabels(self.features)
         # ✅ 初始化空行
         self.table.setRowCount(self.MIN_ROWS)
 
     def _cell_text(self, row: int, col: int) -> str:
         item = self.table.item(row, col)
         return item.text() if item else ""
+
+    # --------- 与 EnsemblePage 一致：标准化后端返回 ---------
+    def _normalize_backend_result(self, ret) -> Dict[str, Any]:
+        # MultiOutput: {t: {"labels": y, "scores": s}}
+        if isinstance(ret, dict) and all(isinstance(v, dict) and "labels" in v for v in ret.values()):
+            return {t: v.get("labels") for t, v in ret.items()}
+        # 单模型/旧式集合：{"target": name, "labels": y, "scores": s}
+        if isinstance(ret, dict) and "labels" in ret:
+            return {str(ret.get("target", "输出")): ret.get("labels")}
+        # 兼容极少数旧返回：(y, scores) 或 直接 y
+        if isinstance(ret, tuple) and len(ret) >= 1:
+            return {"输出": ret[0]}
+        return {"输出": ret}
