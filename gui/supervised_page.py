@@ -315,7 +315,7 @@ class SupervisedPage(QWidget):
             self.column_list.addItem(it)
         self._reset_viz_mode()
 
-    def _feat_cols(self):
+    def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
 
     def open_adv_dialog(self):
@@ -328,7 +328,7 @@ class SupervisedPage(QWidget):
         if self.df is None:
             QMessageBox.warning(self,"提示","请先加载数据")
             return
-        cols = self._feat_cols()
+        cols = self.selected_columns()
         if not cols:
             QMessageBox.warning(self,"提示","请选择特征")
             return
@@ -347,6 +347,7 @@ class SupervisedPage(QWidget):
         params = params_base.copy()
         params.pop("test_size", None)
         params["random_state"] = rs
+        params["target_name"] = self.target_col
         if "knn" in code:
             params["n_neighbors"] = n_main
             params.pop("random_state", None)
@@ -369,7 +370,8 @@ class SupervisedPage(QWidget):
         X_tr_raw, X_te_raw, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=rs, stratify=stratify)
         self.X_test = ML.transform(X_te_raw)  # 与训练一致的规范化
         self.y_true = y_te
-        self.y_pred, self.test_scores = ML.predict(X_te_raw)
+        pre =  ML.predict(X_te_raw)
+        self.y_pred, self.test_scores = pre["labels"], pre["scores"]
 
           # 读取后端 meta，决定任务类型
         self.meta = ML.get_meta()

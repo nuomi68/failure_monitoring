@@ -40,6 +40,13 @@ class ModelArtifact:
 
 
 @dataclass
+class MultiOutputArtifact:
+    """多目标分组：同一目标下可集成，不同目标分别输出"""
+    groups: dict[str, list[ModelArtifact]]
+    method: str = "mean"  # 'mean' | 'vote'
+
+
+@dataclass
 class EnsembleArtifact:
     members: list[ModelArtifact]
     method: str = "mean"  # "mean" | "vote"
@@ -92,7 +99,7 @@ for _ad in [*SUPERVISED_ADAPTERS, *UNSUPERVISED_ADAPTERS]:
 
 # ---------------------------- 单例模型状态 ----------------------------
 class _State:
-    current: Optional[ModelArtifact | EnsembleArtifact] = None
+    current: Optional[ModelArtifact | EnsembleArtifact | MultiOutputArtifact] = None
 
 
 STATE = _State()
@@ -176,7 +183,15 @@ def _train_impl(
         stratify: Optional[np.ndarray] = None,
         feature_names: Optional[list[str]] = None,
 ) -> Tuple[ModelArtifact, TrainReport]:
+    # 统一：保存预测目标名称（监督：真实列名；无监督：默认“是否破损”）
     params = dict(params or {})
+    # ---- 提取训练参数里传入的“目标名称”，并从 params 移除，避免传给模型构造 ----
+    target_name = None
+
+
+    if "target_name" in params and params.get("target_name"):
+        target_name = str(params.pop("target_name"))
+
     adapter = get_adapter(alg)
 
     if adapter.kind.startswith("supervised"):
@@ -240,6 +255,11 @@ def _train_impl(
             "classes_": getattr(model, "classes_", None),
             "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
             "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
+            "task": adapter.kind,                      # "supervised_clf" | "supervised_reg"
+            "n_classes": n_classes if adapter.kind == "supervised_clf" else 1,
+            "is_binary": bool(is_binary) if adapter.kind == "supervised_clf" else False,
+            # 监督学习：要求前端传入真实列名；若未传则退回 "目标"
+            "target": (target_name if target_name else "目标"),
         }
         art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
         rep = TrainReport(y_true=y_te, y_pred=y_pred, scores=scores, metrics_text=metrics_text)
@@ -257,6 +277,10 @@ def _train_impl(
         "advanced": params,
         "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
         "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
+        "task": adapter.kind,                         # "unsupervised"
+        "n_classes": 2,
+        "is_binary": True,
+        "target": (target_name if target_name else "是否破损"),
     }
     art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
     rep = TrainReport(scores=scores)
@@ -272,7 +296,20 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     adapter = get_adapter(alg)
 
     if adapter.kind == "unsupervised":
-        return np.array([]), adapter.scores(artifact.model, Xs)
+        # 统一：无监督也返回 (labels, scores)
+        scores = adapter.scores(artifact.model, Xs)
+        tau = artifact.meta.get("tau")
+        if scores is None:
+            return np.array([]), None
+        try:
+            t = float(tau) if tau is not None else None
+        except Exception:
+            t = None
+        if t is None:
+            labels = np.zeros_like(scores, dtype=int)
+        else:
+            labels = (scores >= t).astype(int)
+        return labels, scores
 
     y_pred = adapter.predict(artifact.model, Xs)
     try:
@@ -298,23 +335,60 @@ def _predict_ensemble(bundle: EnsembleArtifact, X_table: Dict[str, np.ndarray]):
         scores_list.append(sc)
 
     if bundle.method == "mean":
-        return np.nanmean(preds, axis=0), np.nanmean(scores_list, axis=0)
+        y_mean = np.nanmean(np.stack(preds, axis=0), axis=0)
+        sc_mean = (None if any(s is None for s in scores_list)
+                   else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+        return y_mean, sc_mean
     votes = np.stack(preds, axis=1)
     maj = np.apply_along_axis(lambda r: np.bincount(r.astype(int)).argmax(), 1, votes)
-    return maj, np.nanmean(scores_list, axis=0)
+    sc_mean = (None if any(s is None for s in scores_list)
+               else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+    return maj, sc_mean
+
+def _predict_grouped(moa: MultiOutputArtifact, X_table: Dict[str, np.ndarray]):
+    """
+    针对 MultiOutputArtifact：对每个目标组分别预测；
+    - 若该目标有多个模型：按 moa.method 集成
+    - 返回 {target: (pred, scores)}
+    """
+    out: dict[str, tuple[np.ndarray, Optional[np.ndarray]]] = {}
+    for target, arts in moa.groups.items():
+        preds, scores_list = [], []
+        for art in arts:
+            f_order = art.meta.get("features", [])
+            length = len(next(iter(X_table.values())))
+            X_sub = np.stack([X_table.get(f, np.full(length, np.nan)) for f in f_order], axis=1)
+            y, sc = _predict_impl(art, X_sub)
+            preds.append(np.asarray(y))
+            scores_list.append(None if sc is None else np.asarray(sc))
+        if len(preds) == 1:
+            out[target] = (preds[0], scores_list[0])
+        else:
+            if moa.method == "vote":
+                votes = np.stack(preds, axis=1)
+                maj = np.apply_along_axis(lambda r: np.bincount(r.astype(int)).argmax(), 1, votes)
+                sc_mean = (None if any(s is None for s in scores_list)
+                           else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+                out[target] = (maj, sc_mean)
+            else:
+                y_mean = np.nanmean(np.stack(preds, axis=0), axis=0)
+                sc_mean = (None if any(s is None for s in scores_list)
+                           else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+                out[target] = (y_mean, sc_mean)
+    return out
 
 
 # ---------------------------- 对外 API（单例） ----------------------------
 class ML:
     @classmethod
     def train(
-        cls,
-        alg: str,
-        X: np.ndarray,
-        y: Optional[np.ndarray] = None,
-        *,
-        feature_names: Optional[list[str]] = None,
-        **kwargs,
+            cls,
+            alg: str,
+            X: np.ndarray,
+            y: Optional[np.ndarray] = None,
+            *,
+            feature_names: Optional[list[str]] = None,
+            **kwargs,
     ) -> TrainReport:
         art, rep = _train_impl(
             alg=alg,
@@ -329,13 +403,28 @@ class ML:
     @classmethod
     def predict(cls, X: np.ndarray | Dict[str, np.ndarray]):
         if STATE.current is None:
-            raise RuntimeError("当前没有已训练/加载的模型。请先调用 train(...) 或 load(...)。")
+            raise RuntimeError("当前没有已训练/加载的模型。请先训练/加载。")
         cur = STATE.current
+        # 多目标：返回 {target: {"labels": y, "scores": s}}
+        if isinstance(cur, MultiOutputArtifact):
+            assert isinstance(X, dict), "MultiOutput 预测需要传入列字典：{feature: ndarray}"
+            grouped = _predict_grouped(cur, X)
+            return {t: {"labels": ys, "scores": sc} for t, (ys, sc) in grouped.items()}
+        # 旧式集合（同目标）：返回 {"target": name, "labels": y, "scores": s}
         if isinstance(cur, EnsembleArtifact):
             assert isinstance(X, dict)
-            return _predict_ensemble(cur, X)
+            y, sc = _predict_ensemble(cur, X)
+            tgt = None
+            try:
+                tgt = cur.members[0].meta.get("target")
+            except Exception:
+                tgt = None
+            return {"target": (tgt or "目标"), "labels": y, "scores": sc}
+        # 单模型：输入 ndarray
         assert isinstance(X, np.ndarray)
-        return _predict_impl(cur, X)
+        y, sc = _predict_impl(cur, X)
+        tgt = cur.meta.get("target", "目标")
+        return {"target": tgt, "labels": y, "scores": sc}
 
     @classmethod
     def transform(cls, X: np.ndarray):
@@ -355,6 +444,12 @@ class ML:
                 "ensemble": True,
                 "method": cur.method,
                 "members": [m.meta for m in cur.members],
+            }
+        if isinstance(cur, MultiOutputArtifact):
+            return {
+                "multi_output": True,
+                "method": cur.method,
+                "groups": {t: [m.meta for m in arts] for t, arts in cur.groups.items()},
             }
         return dict(cur.meta)
 
@@ -383,10 +478,23 @@ class ML:
 
     @classmethod
     def load_many(cls, paths: list[str], *, method: str = "mean") -> Dict[str, Any]:
+        """
+        读取多个模型；自动按目标名分组：
+        - 同一 target 的多个模型：按 method 进行集成（"mean"|"vote"）
+        - 不同 target：分别输出
+        """
         arts = [load_artifact(p) for p in paths]
-        STATE.current = EnsembleArtifact(arts, method)
-        union = sorted({f for art in arts for f in art.meta.get("features", [])})
-        return {"ok": True, "method": method, "features_union": union}
+        # 构建分组
+        groups: dict[str, list[ModelArtifact]] = {}
+        for art in arts:
+            t = art.meta.get("target")
+            if not t:
+                t = art.meta.get("model_type", "目标")
+            groups.setdefault(str(t), []).append(art)
+        STATE.current = MultiOutputArtifact(groups=groups, method=method)
+        features_union = sorted({f for art in arts for f in art.meta.get("features", [])})
+        return {"ok": True, "method": method, "groups": {k: len(v) for k, v in groups.items()},
+                "features_union": features_union}
 
     @classmethod
     def clear(cls) -> None:

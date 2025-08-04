@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 import pandas as pd
 
-from backend import ml_interface as ML
+from backend.ml_interface import ML
 from backend.model_registry import list_all as list_models
 
 from gui.validation_page import ValidationPage
@@ -24,7 +24,7 @@ class EnsemblePage(QWidget):
     """
     def __init__(self) -> None:
         super().__init__()
-        self.is_ensemble = False
+        self.is_ensemble = False  # 保留字段，但不再用于判断调用路径
         # ====== 顶层：左右分栏 ======
         root = QVBoxLayout(self)
         splitter = QSplitter(self)
@@ -253,7 +253,7 @@ class EnsemblePage(QWidget):
             self.selected_models = [{"name": n, "path": p} for n, p in zip(names, paths)]
 
             method = "mean" if self.method_combo.currentText() == "平均" else "vote"
-            info = ML.ML.load_many(paths, method=method)
+            info = ML.load_many(paths, method=method)
 
             # 先拿 features_union 再配置批量表格
             feats = info.get("features_union") if isinstance(info, dict) else None
@@ -261,8 +261,11 @@ class EnsemblePage(QWidget):
                 feats = []
             self.features = list(feats)
 
-            meta = ML.ML.get_meta() or {}
-            self.is_ensemble = bool(meta.get("ensemble", True))
+            meta = ML.get_meta() or {}
+            # 统一判定：multi_output 优先；否则 ensemble；否则 single
+            self.backend_meta = meta
+            self.is_ensemble = bool(meta.get("multi_output", False) or meta.get("ensemble", False))
+            # ↑ 仅作展示用途，实际预测路径依据 backend_meta 决定
 
             # ✅ 现在再启用批量表格的外部模式（用正确的 features 初始化）
             self.batch_editor.enable_external(self.features, self._predict_targets_for_df)
@@ -338,6 +341,19 @@ class EnsemblePage(QWidget):
         df = pd.DataFrame([data], columns=cols)
         return df
 
+
+    # --------- 辅助：标准化后端返回为 {target: labels_ndarray} ---------
+    def _normalize_backend_result(self, ret) -> Dict[str, Any]:
+        # MultiOutput: {t: {"labels": y, "scores": s}}
+        if isinstance(ret, dict) and all(isinstance(v, dict) and "labels" in v for v in ret.values()):
+            return {t: v.get("labels") for t, v in ret.items()}
+        # 单模型/旧式集合：{"target": name, "labels": y, "scores": s}
+        if isinstance(ret, dict) and "labels" in ret:
+            return {str(ret.get("target", "输出")): ret.get("labels")}
+        # 兼容极少数旧返回：(y, scores) 或 直接 y
+        if isinstance(ret, tuple) and len(ret) >= 1:
+            return {"输出": ret[0]}
+        return {"输出": ret}
 
     # ========================= 结果与导出 =========================
     def _fill_result_table(self, y) -> None:
@@ -419,6 +435,7 @@ class EnsemblePage(QWidget):
         return fallback or str(member_meta.get("model_type", "输出"))
 
     def _aggregate_by_target(self, items, method: str) -> Dict[str, Any]:
+        # 该函数仍保留，但在新路径中不再调用（后端已完成聚合/分组）
         """
         items: [(target_name, y_array), ...]
         return: {target -> aggregated_array}
@@ -464,8 +481,8 @@ class EnsemblePage(QWidget):
     def _predict_targets_for_df(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         批量表格编辑器的回调：
-        - 逐成员预测，按目标分组，然后按“平均/投票”聚合
-        - 返回 {目标名: 聚合后的数组}，供 ValidationPage 动态生成列
+        - 直接调用后端 ML.predict（后端已完成“按目标分组与同目标集成”）
+        - 统一解析返回为 {目标名: 结果数组}，供 ValidationPage 动态生成列
         """
         import numpy as np
 
@@ -476,31 +493,25 @@ class EnsemblePage(QWidget):
                     df[f] = np.nan
             df = df[self.features]
 
-        # 如果不是集成或没有成员，就直接用当前模型推一个“输出”
-        if not getattr(self, "is_ensemble", False) or not getattr(self, "selected_models", None):
-            X = df.to_numpy()
-            ret = ML.ML.predict(X)
-            y = ret[0] if isinstance(ret, tuple) else ret
-            return {"输出": y}
+        # 按照后端 meta 决定输入形态
+        meta = getattr(self, "backend_meta", {}) or {}
+        is_multi = bool(meta.get("multi_output", False))
+        is_ens = bool(meta.get("ensemble", False))
 
-        # 从已选模型逐个加载进行预测（保持与勾选一致）
-        items = []  # (target_name, y_array)
-        paths = [m["path"] for m in self.selected_models]
-        for m in self.selected_models:
-            cur_meta = ML.ML.load(m["path"])   # 暂切到该模型
-            feats = list(cur_meta.get("features", df.columns.tolist()))
-            for f in feats:
-                if f not in df.columns:
-                    df[f] = np.nan
-            X = df[feats].to_numpy()
-            ret = ML.ML.predict(X)
-            y_single = ret[0] if isinstance(ret, tuple) else ret
-            tname = self._resolve_target_name(cur_meta, m["name"])
-            items.append((tname, y_single))
+        try:
+            if is_multi or is_ens:
+                # MultiOutput / Ensemble：后端期望列字典
+                X_table = {c: df[c].to_numpy() for c in df.columns}
+                ret = ML.predict(X_table)
+            else:
+                # 单模型：后端期望 ndarray
+                ret = ML.predict(df.to_numpy())
+        except Exception:
+            # 万一后端接口有变动，降级尝试两种形态
+            try:
+                ret = ML.predict({c: df[c].to_numpy() for c in df.columns})
+            except Exception:
+                ret = ML.predict(df.to_numpy())
 
-        # 恢复为集成（维持全局状态）
-        method = "mean" if self.method_combo.currentText() == "平均" else "vote"
-        ML.ML.load_many(paths, method=method)
-
-        # 按目标聚合
-        return self._aggregate_by_target(items, method)
+        # 统一整理为 {目标: 数组}
+        return self._normalize_backend_result(ret)
