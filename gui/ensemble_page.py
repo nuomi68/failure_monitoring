@@ -123,12 +123,13 @@ class EnsemblePage(QWidget):
         self.batch_tab = QWidget()
         bt_layout = QVBoxLayout(self.batch_tab)
 
-        helper = QLabel("粘贴 CSV（首行为列名）；或点击“打开CSV”从文件导入。会按加载后的特征自动对齐/补齐缺失列。")
+        helper = QLabel("可整体粘贴表格，但需手动对其相应的列")
         bt_layout.addWidget(helper)
 
 
         # 嵌入表格编辑器（沿用 ValidationPage，但外部模式）
         self.batch_editor = ValidationPage()
+        self.batch_editor.save_btn.setEnabled(False)
         bt_layout.addWidget(self.batch_editor)
 
 
@@ -434,34 +435,6 @@ class EnsemblePage(QWidget):
                 return str(adv[key])
         return fallback or str(member_meta.get("model_type", "输出"))
 
-    def _aggregate_by_target(self, items, method: str) -> Dict[str, Any]:
-        # 该函数仍保留，但在新路径中不再调用（后端已完成聚合/分组）
-        """
-        items: [(target_name, y_array), ...]
-        return: {target -> aggregated_array}
-        """
-        import numpy as np
-        groups: Dict[str, list] = {}
-        for t, y in items:
-            arr = np.asarray(y).ravel() if hasattr(y, "__len__") else np.asarray([y])
-            groups.setdefault(t, []).append(arr)
-
-        out: Dict[str, np.ndarray] = {}
-        for t, arrs in groups.items():
-            # 对齐长度（取最短）
-            m = min(len(a) for a in arrs)
-            stack = np.vstack([a[:m] for a in arrs])
-            if method == "vote":
-                # 多数投票（类别需为整数）
-                from collections import Counter
-                def vote_col(col):
-                    cnt = Counter(col.astype(int))
-                    return max(cnt.items(), key=lambda kv: kv[1])[0]
-                out[t] = np.apply_along_axis(vote_col, 0, stack)
-            else:
-                out[t] = np.nanmean(stack, axis=0)
-        return out
-
     def _predict_single(self) -> None:
         try:
             df = self._collect_single_row()
@@ -494,26 +467,38 @@ class EnsemblePage(QWidget):
                 if f not in df.columns:
                     df[f] = np.nan
             df = df[self.features]
+        # 只保留“整行非 NaN”的样本做预测
+        mask = df.notna().all(axis=1).to_numpy()
+        valid_idx = np.flatnonzero(mask)
+        if valid_idx.size == 0:
+            return {}  # 本次没有完整行，直接返回空
+        df_valid = df.iloc[valid_idx].reset_index(drop=True)
 
-        # 按照后端 meta 决定输入形态
+        # 按后端 meta 决定输入形态
         meta = getattr(self, "backend_meta", {}) or {}
         is_multi = bool(meta.get("multi_output", False))
         is_ens = bool(meta.get("ensemble", False))
 
+        # 仅把完整行送去预测
         try:
             if is_multi or is_ens:
-                # MultiOutput / Ensemble：后端期望列字典
-                X_table = {c: df[c].to_numpy() for c in df.columns}
+                X_table = {c: df_valid[c].to_numpy() for c in df_valid.columns}
                 ret = ML.predict(X_table)
             else:
-                # 单模型：后端期望 ndarray
-                ret = ML.predict(df.to_numpy())
+                ret = ML.predict(df_valid.to_numpy())
         except Exception:
-            # 万一后端接口有变动，降级尝试两种形态
             try:
-                ret = ML.predict({c: df[c].to_numpy() for c in df.columns})
+                ret = ML.predict({c: df_valid[c].to_numpy() for c in df_valid.columns})
             except Exception:
-                ret = ML.predict(df.to_numpy())
+                ret = ML.predict(df_valid.to_numpy())
 
-        # 统一整理为 {目标: 数组}
-        return self._normalize_backend_result(ret)
+        # 归一化子结果，并回填到原长度（未参与预测的行为 NaN）
+        sub = self._normalize_backend_result(ret)  # {target: 1d}
+        out: Dict[str, Any] = {}
+        n = len(df)
+        for t, arr in sub.items():
+            arr = np.asarray(arr).ravel()
+            full = np.full((n,), np.nan)
+            full[valid_idx[: len(arr)]] = arr[: len(valid_idx)]
+            out[t] = full
+        return out

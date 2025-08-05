@@ -305,26 +305,45 @@ class ValidationPage(QWidget):
                         row.append(np.nan)
             rows.append(row)
         df = pd.DataFrame(rows, columns=self.features)
+          # 只保留整行非 NaN 的样本
+        mask = df.notna().all(axis=1).to_numpy()
+        valid_idx = np.flatnonzero(mask)
+
+        if valid_idx.size == 0:
+            self.result_lbl.setText("结果: 本次没有完整行，已跳过")
+            # 清理旧的结果列
+            self.table.setColumnCount(len(self.features))
+            self.table.setHorizontalHeaderLabels(self.features)
+            return
+        df_valid = df.iloc[valid_idx].reset_index(drop=True)
         # 选择输入形态
         is_multi = bool(meta.get("multi_output", False))
         is_ens   = bool(meta.get("ensemble", False))
         try:
             if is_multi or is_ens:
-                X = {c: df[c].to_numpy() for c in df.columns}
+                X = {c: df_valid[c].to_numpy() for c in df_valid.columns}
                 ret = ML.predict(X)
             else:
-                ret = ML.predict(df.to_numpy())
+                ret = ML.predict(df_valid.to_numpy())
         except Exception:
             # 兜底双形态
             try:
-                ret = ML.predict({c: df[c].to_numpy() for c in df.columns})
+                ret = ML.predict({c: df_valid[c].to_numpy() for c in df_valid.columns})
             except Exception:
-                ret = ML.predict(df.to_numpy())
+                ret = ML.predict(df_valid.to_numpy())
         # 标准化：得到 {target: 1d-array}
-        res = self._normalize_backend_result(ret)
-        if not isinstance(res, dict) or not res:
+        sub = self._normalize_backend_result(ret)
+        if not isinstance(sub, dict) or not sub:
             self.result_lbl.setText("结果: 空")
             return
+        n = len(df)
+        res: Dict[str, np.ndarray] = {}
+
+        for t, arr in sub.items():
+            arr = np.asarray(arr).ravel()
+            full = np.full((n,), np.nan)
+            full[valid_idx[: len(arr)]] = arr[: len(valid_idx)]
+            res[t] = full
         targets = list(res.keys())
         # 重建表头：特征列 + 各目标列
         self.table.setColumnCount(len(self.features) + len(targets))
@@ -340,7 +359,9 @@ class ValidationPage(QWidget):
                     self.table.setItem(r, len(self.features) + i, item)
                 item.setText(val)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.result_lbl.setText(f"结果: 共 {self.table.rowCount()} 行, 目标列 {len(targets)} 个")
+        dropped = (len(df) - len(valid_idx))
+        hint = f"，跳过 {dropped} 行" if dropped > 0 else ""
+        self.result_lbl.setText(f"结果: 共 {self.table.rowCount()} 行, 目标列 {len(targets)} 个{hint}")
 
     def save_model(self):
         if not ML.get_meta():
