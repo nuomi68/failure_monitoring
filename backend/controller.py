@@ -2,7 +2,6 @@ from pathlib import Path
 
 import torch
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error
 import pandas as pd
 
 from data_utils import load_dataset, build_windows, compute_relative_errors
@@ -20,13 +19,14 @@ CSV_PATH = Path(__file__).resolve().parents[1] / "data/20230510-20240924_merged.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def prepare_data(look_back: int):
-    data, feature_names, scaler = load_dataset(str(CSV_PATH))
+def prepare_data(csv_path: str, look_back: int, time_format: str | None = None):
+    """Load data from ``csv_path`` and split it into train/val windows."""
+    data, feature_names, scaler = load_dataset(csv_path, time_format)
     X, y = build_windows(data[:-5], look_back)
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
-    return (X_train, y_train), (X_val, y_val), feature_names, scaler
+    return (X_train, y_train), (X_val, y_val), data, feature_names, scaler
 
 
 # 全局配置：想跑哪些模型就在列表里写上名字，注释掉就不跑
@@ -76,38 +76,40 @@ DATA_CFG = {
     "timesnet": 32,       # 新增
 }
 
-def run_all_models():
-    # 不同模型需要不同 look_back
 
+def run_all_models(csv_path: str = str(CSV_PATH), time_format: str | None = None):
+    """Train all active models on the dataset located at ``csv_path``."""
+    data_scaled, feature_names, scaler = load_dataset(csv_path, time_format)
     trained_models = {}
 
     for name in ACTIVE_MODELS:
-        look_back = DATA_CFG.get(name,14)
-        (X_tr, y_tr), (X_val, y_val), _, feats_scaled = prepare_data(look_back)
+        look_back = DATA_CFG.get(name, 14)
+        X, y = build_windows(data_scaled[:-5], look_back)
+        X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
         print(f"Training {name.upper()} …")
         train_fn = MODEL_REGISTRY[name]["train"]
         result = train_fn(X_tr, y_tr, X_val, y_val)
 
-        # 解析返回值：神经网返回 (model, loss)，树模型返回 (model, mae)
-        if len(result) == 2:
+        if isinstance(result, tuple):
             model_obj, metric = result
-            if name in ("gru", "tcn", "tsmixer"):
+            if name in ("gru", "tcn", "tsmixer", "timesnet"):
                 print(f"{name.upper()} Val Loss: {metric:.4f}")
             else:
                 print(f"{name.upper()} MAE: {metric:.4f}")
         else:
-            model_obj = result  # 万一只有 model
+            model_obj = result
 
         trained_models[name] = model_obj
 
-    # 训练完毕后统一做 multi-step 预测
-    predict_next_steps(trained_models,feats_scaled)
+    predictions = predict_next_steps(trained_models, data_scaled, feature_names, scaler)
+    return trained_models, data_scaled, feature_names, scaler, predictions
 
-def predict_next_steps(trained_models: dict,feats_scaled, steps: int = 5):
+
+def predict_next_steps(trained_models: dict, data_scaled, feature_names, scaler, steps: int = 5):
     """对所有 ACTIVE_MODELS 做逐步预测，并打印相对误差"""
-    data_scaled, feature_names, scaler = load_dataset(str(CSV_PATH))
     features = pd.DataFrame(scaler.inverse_transform(data_scaled), columns=feature_names)
+    results = []
 
     for i in range(1, steps + 1):
         preds = {}
@@ -118,18 +120,18 @@ def predict_next_steps(trained_models: dict,feats_scaled, steps: int = 5):
             pred = MODEL_REGISTRY[name]["predict"](model_obj, seq)
             preds[name] = scaler.inverse_transform(pred.reshape(1, -1)).squeeze()
 
-        preds["eval"] = 0.5*(preds["tsmixer"]+preds["timesnet"])
-        # 真值
+        if "tsmixer" in preds and "timesnet" in preds:
+            preds["eval"] = 0.5 * (preds["tsmixer"] + preds["timesnet"])
+
         true_series = features.iloc[-i].astype(float)
-        # 构造 DataFrame
         df = pd.DataFrame({name: preds[name] for name in preds}, index=feature_names)
         df.insert(0, "True", true_series)
 
-        # 计算误差
         rel_err_df, max_err, mean_err = compute_relative_errors(df)
-        print(f"\n—— 第 {i} 步预测 ——")
-        # 合并显示
         conc = pd.concat([df, rel_err_df.add_suffix("_err")], axis=1)
+        results.append({"step": i, "table": conc, "max_err": max_err, "mean_err": mean_err})
+
+        print(f"\n—— 第 {i} 步预测 ——")
         with pd.option_context(
                 'display.max_rows', None,
                 'display.max_columns', None,
@@ -138,5 +140,9 @@ def predict_next_steps(trained_models: dict,feats_scaled, steps: int = 5):
             print(conc)
         print("最大相对误差：", max_err)
         print("平均相对误差：", mean_err)
+
+    return results
+
+
 if __name__ == "__main__":
     run_all_models()

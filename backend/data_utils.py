@@ -5,15 +5,33 @@ from sklearn.preprocessing import StandardScaler
 TIME_COL = "TIME"
 
 
-def load_dataset(path: str):
-    """Load and preprocess the dataset used by all models."""
-    df = pd.read_excel(path)
+def load_dataset(path: str, time_format: str | None = None):
+    """Load and preprocess the dataset used by all models.
+
+    Parameters
+    ----------
+    path:
+        Path to the CSV/Excel file.
+    time_format:
+        Optional ``strftime`` format string that describes how the ``TIME``
+        column is formatted in ``path``. If omitted, pandas will attempt to
+        infer the format automatically.
+    """
+
+    if path.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(path)
+    else:
+        df = pd.read_csv(path)
+
     df.columns = df.columns.str.strip()
-    df[TIME_COL] = pd.to_datetime(df[TIME_COL], format="%Y年%m月%d日%H%M")
+    if time_format:
+        df[TIME_COL] = pd.to_datetime(df[TIME_COL], format=time_format)
+    else:
+        df[TIME_COL] = pd.to_datetime(df[TIME_COL])
     df = df.sort_values(TIME_COL).reset_index(drop=True)
 
     features = (
-        df.drop(columns=[TIME_COL, "值", "XE-133", "CS-137","KR-89"], errors="ignore")
+        df.drop(columns=[TIME_COL, "值", "XE-133", "CS-137", "KR-89"], errors="ignore")
         .apply(pd.to_numeric, errors="coerce")
         .ffill()
         .fillna(0)
