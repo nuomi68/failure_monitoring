@@ -33,7 +33,7 @@ class QtLogHandler(logging.Handler):
 from set_style import get_sheet
 from outlier_detection import OutlierDetectionPage
 from ensemble_page import EnsemblePage
-
+from time_series_page import TimeSeriesPage
 
 class MainController(QMainWindow):
     """主界面控制器
@@ -80,13 +80,13 @@ class MainController(QMainWindow):
         left_layout.setSpacing(4)
 
         # 功能按钮
-        self.btn_online = QPushButton()
+        self.btn_nuclide = QPushButton()
         self.btn_anomaly = QPushButton()
         self.btn_damage = QPushButton()
         self.btn_ensemble = QPushButton()
 
         self.menu_items = [
-            (self.btn_online, "📈", "在线监测"),
+            (self.btn_nuclide, "📈", "核素预测"),
             (self.btn_anomaly, "🔍", "异常检测"),
             (self.btn_damage, "🔧", "损伤评估"),
             (self.btn_ensemble, "🧩", "模型集成"),
@@ -112,12 +112,11 @@ class MainController(QMainWindow):
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         self.stack = QStackedWidget()
-        self.online_page = QWidget()
         self.anomaly_page = OutlierDetectionPage()
         self.damage_page = QWidget()
         self.ensemble_page = EnsemblePage()
-
-        self.stack.addWidget(self.online_page)
+        self.nuclide_page = TimeSeriesPage()
+        self.stack.addWidget(self.nuclide_page)
         self.stack.addWidget(self.anomaly_page)
         self.stack.addWidget(self.damage_page)
         self.stack.addWidget(self.ensemble_page)
@@ -125,8 +124,8 @@ class MainController(QMainWindow):
 
 
         # 默认选中第一页
-        self.btn_online.setChecked(True)
-        self.stack.setCurrentWidget(self.online_page)
+        self.btn_nuclide.setChecked(True)
+        self.stack.setCurrentWidget(self.nuclide_page)
 
         # 底部日志窗口
         self.log_view = QPlainTextEdit()
@@ -137,11 +136,11 @@ class MainController(QMainWindow):
         right_layout.addWidget(self.log_view)
 
         # 按钮点击切换页面
-        self.btn_online.clicked.connect(lambda: self.switch_page(self.btn_online, self.online_page))
+        self.btn_nuclide.clicked.connect(lambda: self.switch_page(self.btn_nuclide, self.nuclide_page))
         self.btn_anomaly.clicked.connect(lambda: self.switch_page(self.btn_anomaly, self.anomaly_page))
         self.btn_damage.clicked.connect(lambda: self.switch_page(self.btn_damage, self.damage_page))
         self.btn_ensemble.clicked.connect(lambda: self.switch_page(self.btn_ensemble, self.ensemble_page))
-
+        self.btn_ensemble.clicked.connect(lambda: self.switch_page(self.btn_ensemble, self.ensemble_page))
         # 布局装载
         main_layout.addWidget(self.left_frame)
         main_layout.addWidget(right_widget, 4)

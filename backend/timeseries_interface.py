@@ -35,13 +35,13 @@ def handle_uploaded_file(file_path: str, time_format: str | None = None) -> dict
         Dictionary with trained models, scaled data, feature names,
         fitted scaler and initial prediction results.
     """
-    upload_dir = Path(__file__).resolve().parents[1] / "data"
-    upload_dir.mkdir(exist_ok=True)
-    saved_path = upload_dir / Path(file_path).name
-    shutil.copy(file_path, saved_path)
+    # upload_dir = Path(__file__).resolve().parents[1] / "data"
+    # upload_dir.mkdir(exist_ok=True)
+    # saved_path = upload_dir / Path(file_path).name
+    # shutil.copy(file_path, saved_path)
 
     models, data_scaled, feature_names, scaler, preds = run_all_models(
-        str(saved_path), time_format
+        str(file_path), time_format
     )
     return {
         "models": models,

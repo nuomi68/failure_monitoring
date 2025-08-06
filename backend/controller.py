@@ -4,7 +4,7 @@ import torch
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
-from data_utils import load_dataset, build_windows, compute_relative_errors
+from backend.data_utils import load_dataset, build_windows, compute_relative_errors
 
 from backend.models import (
     gru_model,
