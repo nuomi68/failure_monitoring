@@ -227,6 +227,38 @@ class ModelManager:
         """获取某一模型的元数据，如果不存在则返回 ``None``。"""
         return self.models_registry.get(model_id)
 
+    def refresh_models(self) -> List[Dict[str, Any]]:
+        """刷新模型与数据集注册表，清理已失效的记录。
+
+        - 若数据集文件缺失，将其从数据集注册表移除；
+        - 若模型文件缺失，或其关联的数据集不存在，同样移除模型记录。
+
+        :returns: 更新后的模型元数据列表。
+        """
+        # 先刷新数据集，移除磁盘上不存在的文件
+        removed_datasets: List[str] = []
+        for did, meta in list(self.datasets_registry.items()):
+            data_path = self.artifacts_dir / meta["path"]
+            if not data_path.exists():
+                removed_datasets.append(did)
+                self.datasets_registry.pop(did, None)
+        if removed_datasets:
+            self._write_json(self.datasets_registry, self.datasets_registry_file)
+
+        # 再刷新模型，如果模型文件不存在或其数据集已经移除，则删除模型记录
+        removed_models: List[str] = []
+        for mid, meta in list(self.models_registry.items()):
+            model_path = self.artifacts_dir / meta["artifacts"]["model_path"]
+            dataset_id = meta.get("dataset_id")
+            dataset_missing = dataset_id not in self.datasets_registry
+            if (not model_path.exists()) or dataset_missing:
+                removed_models.append(mid)
+                self.models_registry.pop(mid, None)
+        if removed_models:
+            self._write_json(self.models_registry, self.models_registry_file)
+
+        return list(self.models_registry.values())
+
     def train(
         self,
         dataset_id: str,
@@ -472,12 +504,44 @@ class ModelManager:
         :returns: 包含 ``model`` 和 ``meta`` 的字典；其中 ``model`` 是保存的模型对象，``meta`` 是注册表中的元数据。
         :raises KeyError: 如果模型 ID 不存在。
         """
+        # 首先刷新注册表，清除可能已被删除的模型文件
+        self.refresh_models()
         if model_id not in self.models_registry:
             raise KeyError(f"未找到模型 {model_id}")
+
         meta = self.models_registry[model_id]
         model_path = self.artifacts_dir / meta["artifacts"]["model_path"]
         with open(model_path, "r", encoding="utf-8") as f:
             model_obj = json.load(f)
+
+        # 载入数据集并恢复运行时状态，便于后续预测
+        dataset_id = meta.get("dataset_id")
+        if dataset_id not in self.datasets_registry:
+            # 数据集已丢失，同步移除模型记录
+            self.models_registry.pop(model_id, None)
+            self._write_json(self.models_registry, self.models_registry_file)
+            raise KeyError(f"模型关联的数据集 {dataset_id} 不存在")
+        df = self.load_dataset(dataset_id)
+        time_col = self.datasets_registry[dataset_id]["time_col"]
+        feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
+        if feat_df.empty:
+            raise ValueError("数据集中不包含数值列，无法加载模型。")
+
+        scaler = StandardScaler()
+        data_scaled = scaler.fit_transform(feat_df.values.astype(float))
+        feature_names = feat_df.columns.tolist()
+
+        rt = _RuntimeSingleton.get()
+        model_type = meta.get("model_type")
+        rt.trained_models[model_type] = model_obj
+        look_back = int(meta.get("params", {}).get("look_back", DATA_CFG.get(model_type, 14)))
+        rt.look_back_map[model_type] = look_back
+        rt.scaler = scaler
+        rt.feature_names = feature_names
+        rt.data_scaled = data_scaled
+        rt.dataset_id = dataset_id
+
+
         return {"model": model_obj, "meta": meta}
 
     def get_advanced_params(self, model_type: str) -> Dict[str, Any]:
