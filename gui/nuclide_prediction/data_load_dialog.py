@@ -74,19 +74,18 @@ class DataFrameModel(QAbstractTableModel):
         r, c = index.row(), index.column()
         val = self._df.iat[r, c]
 
+        if role == Qt.ItemDataRole.BackgroundRole:
+            color = self._row_colors.get(r)
+            if color is not None:
+                return color
+            if is_nan_like(val):
+                return QBrush(Qt.GlobalColor.red).color().lighter(170)
+
         if role == Qt.ItemDataRole.DisplayRole:
             # 显示时对缺失值用空字符串，美观一些
             if is_nan_like(val):
                 return ""
             return str(val)
-
-        if role == Qt.ItemDataRole.BackgroundRole:
-            color = self._row_colors.get(r)
-            if color is not None:
-                return color
-            # 缺失值浅红背景
-            if is_nan_like(val):
-                return QBrush(Qt.GlobalColor.red).color().lighter(170)
 
         return QVariant()
 
@@ -135,16 +134,13 @@ class DataFrameModel(QAbstractTableModel):
         except Exception:
             self._df.iat[r, c] = pd.NA
         self.dataChanged.emit(index, index, [role])
-        if self._df.iloc[r].notna().all():
+        if r == self.rowCount() - 1 and self._df.iloc[r].notna().all():
             self.row_filled_sig.emit(r)
         return True
 
     # 行背景色控制
-    def set_row_color(self, row: int, color: QColor | None):
-        if color is None:
-            self._row_colors.pop(row, None)
-        else:
-            self._row_colors[row] = color
+    def set_row_color(self, row: int, color: QColor):
+        self._row_colors[row] = color
         if 0 <= row < self.rowCount() and self.columnCount() > 0:
             tl = self.index(row, 0)
             br = self.index(row, self.columnCount() - 1)
@@ -153,10 +149,11 @@ class DataFrameModel(QAbstractTableModel):
     def clear_row_colors(self):
         if not self._row_colors:
             return
+        rows = list(self._row_colors.keys())
         self._row_colors.clear()
-        if self.rowCount() > 0 and self.columnCount() > 0:
-            tl = self.index(0, 0)
-            br = self.index(self.rowCount() - 1, self.columnCount() - 1)
+        if rows and self.columnCount() > 0:
+            tl = self.index(min(rows), 0)
+            br = self.index(max(rows), self.columnCount() - 1)
             self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
 
 

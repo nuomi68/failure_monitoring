@@ -34,6 +34,11 @@ from gui.tools import logger,TrainWorker
 from .data_load_dialog import DataLoadDialog, DataFrameModel
 from .param_panel import ParamPanel
 
+# ========================== 行配色常量 ========================== #
+GREEN = QColor(Qt.GlobalColor.green).lighter(160)
+BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
+PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
+
 class TimeSeriesPage(QWidget):
     """主页面：左侧数据表 + 右侧模型控制（单模型工作流）。"""
 
@@ -144,7 +149,10 @@ class TimeSeriesPage(QWidget):
 
         # 左侧展示
         self._df = df.copy()
-        self._refresh_table_model()
+        self._input_rows = None
+        self._pend_row = None
+        self._pred_row = None
+        self._set_table_model(self._df)
         if self._time_col is not None:
             model = self.table.model()
             for col in range(model.columnCount()):
@@ -216,7 +224,10 @@ class TimeSeriesPage(QWidget):
                 df = self.manager.load_dataset(dataset_id)
                 self._df = df
                 self._dataset_id = dataset_id
-                self._refresh_table_model()
+                self._input_rows = None
+                self._pend_row = None
+                self._pred_row = None
+                self._set_table_model(self._df)
                 self.dataset_label.setText(f"数据集：{dataset_id}（来自模型）")
                 self.btn_predict.setEnabled(False)
                 self._orig_rows = 0
@@ -278,11 +289,13 @@ class TimeSeriesPage(QWidget):
         self._trained_metrics = result["metrics"]
         self._trained_params = self.param_panel.params()
         self._trained_model_type = self.model_type_combo.currentText().strip()
+        self._look_back = int(result.get("extra", {}).get("look_back", self._look_back))
         for k, v in self._trained_metrics.items():
             logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
         self._orig_rows = len(self._df) if self._df is not None else 0
         self._ensure_blank_row()
+        self._init_input_window()
         self.table.scrollToBottom()
         self.btn_predict.setEnabled(True)
 
@@ -323,13 +336,66 @@ class TimeSeriesPage(QWidget):
     # ============================================================
     # 预测与表格辅助
     # ============================================================
-    def _refresh_table_model(self):
-        if self._df is None:
-            self.table.setModel(None)
-            return
-        mdl = DataFrameModel(self._df)
-        mdl.row_filled_sig.connect(lambda r: self._ensure_blank_row())
+    def _set_table_model(self, df: pd.DataFrame):
+        mdl = DataFrameModel(df)
+        mdl.row_filled_sig.connect(self._on_row_filled)
         self.table.setModel(mdl)
+        self._apply_row_colors()
+
+    # --------- 颜色相关状态 --------- #
+    _look_back: int = 14           # 训练完成后会被真实参数覆盖
+    _input_rows: list[int] | None = None
+    _pend_row: int | None = None
+    _pred_row: int | None = None
+
+    # --------- 颜色刷新 --------- #
+    def _apply_row_colors(self):
+        mdl = self.table.model()
+        if not isinstance(mdl, DataFrameModel):
+            return
+        mdl.clear_row_colors()
+        if self._input_rows:
+            for r in self._input_rows:
+                mdl.set_row_color(r, GREEN)
+        if self._pend_row is not None:
+            mdl.set_row_color(self._pend_row, PEND)
+        if self._pred_row is not None:
+            mdl.set_row_color(self._pred_row, BLUE)
+
+    # --------- 训练完成后初始化窗口 --------- #
+    def _init_input_window(self):
+        win_end = len(self._df) - 2
+        win_start = max(0, win_end - self._look_back + 1)
+        self._input_rows = list(range(win_start, win_end + 1))
+        self._pend_row = len(self._df) - 1
+        self._pred_row = None
+        self._apply_row_colors()
+
+    # --------- 用户填满尾行 --------- #
+    def _on_row_filled(self, row: int):
+        if row != self._pend_row:
+            return
+        self._input_rows.append(row)
+        while len(self._input_rows) > self._look_back:
+            self._input_rows.pop(0)
+        self._ensure_blank_row()
+        self._pend_row = len(self._df) - 1
+        self._apply_row_colors()
+
+    # --------- 预测辅助 --------- #
+    def _advance_window_before_predict(self):
+        if self._pred_row is not None:
+            self._input_rows.append(self._pred_row)
+            while len(self._input_rows) > self._look_back:
+                self._input_rows.pop(0)
+            self._pred_row = None
+
+    def _register_new_prediction(self):
+        self._pred_row = len(self._df) - 1
+        self._ensure_blank_row()
+        self._pend_row = len(self._df) - 1
+        self._apply_row_colors()
+        self._orig_rows = len(self._df) - 1
 
     def _ensure_blank_row(self):
         if self._df is None:
@@ -343,13 +409,14 @@ class TimeSeriesPage(QWidget):
             mdl = self.table.model()
             if hasattr(mdl, "setDataFrame"):
                 mdl.setDataFrame(self._df)
-            if hasattr(mdl, "set_row_color"):
-                mdl.set_row_color(len(self._df) - 1, QColor(Qt.GlobalColor.green).lighter(160))
 
     def _on_predict(self):
         if not self._dataset_id:
             QMessageBox.warning(self, "提示", "请先训练/加载模型后再预测。")
             return
+
+        # ① 先把之前的蓝色行并入窗口
+        self._advance_window_before_predict()
 
         new_part = self._df.iloc[self._orig_rows:].copy()
         if self._time_col:
@@ -374,7 +441,7 @@ class TimeSeriesPage(QWidget):
         table = res[0]["table"]
         logger.info("\n" + table.to_string())
 
-        # 将预测结果回填到表格末尾
+        # 将预测结果回填到表格尾部（覆盖空白行）
         model_col = self._trained_model_type or self.model_type_combo.currentText().strip()
         pred_series = table.get(model_col)
         if pred_series is None:
@@ -386,20 +453,12 @@ class TimeSeriesPage(QWidget):
             else:
                 v = pred_series.get(col, pd.NA)
                 row_vals.append(float(v) if pd.notna(v) else pd.NA)
-        self._df.loc[len(self._df)] = row_vals
+        # 用预测结果覆盖最后一行
+        self._df.iloc[-1] = row_vals
         mdl = self.table.model()
         if hasattr(mdl, "setDataFrame"):
             mdl.setDataFrame(self._df)
 
-        # 高亮：输入窗口浅绿，预测结果浅蓝
-        if hasattr(mdl, "set_row_color"):
-            for r in range(self._orig_rows, self._orig_rows + len(new_part)):
-                mdl.set_row_color(r, QColor(Qt.GlobalColor.green).lighter(160))
-            pred_idx = len(self._df) - 1
-            mdl.set_row_color(pred_idx, QColor(Qt.GlobalColor.blue).lighter(160))
-
+        self._register_new_prediction()
         self.status_label.setText("✅ 预测已完成，结果见列表。")
-
-        self._orig_rows = len(self._df)
-        self._ensure_blank_row()
         self.table.scrollToBottom()
