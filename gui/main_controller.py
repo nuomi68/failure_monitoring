@@ -33,7 +33,7 @@ class QtLogHandler(logging.Handler):
 from set_style import get_sheet
 from outlier_detection import OutlierDetectionPage
 from ensemble_page import EnsemblePage
-from time_series_page import TimeSeriesPage
+from nuclide_prediction.time_series_page import TimeSeriesPage
 
 class MainController(QMainWindow):
     """主界面控制器

@@ -30,10 +30,8 @@ from PyQt6.QtWidgets import (
 # —— 后端 ——
 from backend.timeseries_interface import ModelManager
 
-# —— 外部弹窗与表格模型（你已有的文件，接口保持不变） ——
-# 要求包含：DataLoadDialog（loaded_dataframe/time_column/time_format/file_path）与 DataFrameModel
-from data_load_dialog import DataLoadDialog, DataFrameModel
-
+from .data_load_dialog import DataLoadDialog, DataFrameModel
+from .param_panel import ParamPanel
 
 class TimeSeriesPage(QWidget):
     """主页面：左侧数据表 + 右侧模型控制（单模型工作流）。"""
@@ -97,9 +95,8 @@ class TimeSeriesPage(QWidget):
 
         # 训练参数 JSON
         right.addWidget(QLabel("训练参数（JSON）"))
-        self.param_edit = QTextEdit()
-        self.param_edit.setPlaceholderText('{\n  "look_back": 32\n}')
-        right.addWidget(self.param_edit)
+        self.param_panel = ParamPanel(self.manager, self)
+        right.addWidget(self.param_panel)
 
         # 训练/保存
         self.btn_train = QPushButton("训练模型")

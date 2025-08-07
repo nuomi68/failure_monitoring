@@ -401,3 +401,12 @@ class ModelManager:
         with open(model_path, "r", encoding="utf-8") as f:
             model_obj = json.load(f)
         return {"model": model_obj, "meta": meta}
+
+    def get_advanced_params(self, model_type: str) -> Dict[str, Any]:
+        """返回不同模型可调的高级参数默认值"""
+        presets = {
+            "tsmixer": {"d_model": 64, "num_layers": 4},
+            "timesnet": {"d_model": 32, "num_blocks": 3},
+            # 继续补充…
+        }
+        return presets.get(model_type, {})
