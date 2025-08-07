@@ -359,6 +359,36 @@ class ModelManager:
             results.append({"step": i, "table": df})
         return results
 
+    def append_observations(self, df_new: pd.DataFrame) -> None:
+        """追加新的观测数据到当前数据集并更新运行时状态。"""
+        if df_new is None or df_new.empty:
+            return
+        rt = _RuntimeSingleton.get()
+        dataset_id = rt.dataset_id
+        if dataset_id is None:
+            raise RuntimeError("没有已加载的数据集。")
+        manifest = self.datasets_registry.get(dataset_id)
+        if manifest is None:
+            raise KeyError(f"未找到数据集 {dataset_id}")
+
+        # 追加到磁盘数据集
+        data_path = self.artifacts_dir / manifest["path"]
+        df_old = pd.read_parquet(data_path)
+        df_all = pd.concat([df_old, df_new], ignore_index=True)
+        df_all.to_parquet(data_path, index=False)
+
+        # 更新注册表信息
+        manifest["n_rows"] = len(df_all)
+        manifest["sha256"] = self._calc_sha256(df_all)
+        self.datasets_registry[dataset_id] = manifest
+        self._write_json(self.datasets_registry, self.datasets_registry_file)
+
+        # 更新运行时缩放后的数据
+        if rt.scaler is not None and rt.feature_names is not None and rt.data_scaled is not None:
+            X_new = df_new[rt.feature_names].apply(pd.to_numeric).to_numpy()
+            X_scaled = rt.scaler.transform(X_new)
+            rt.data_scaled = np.concatenate([rt.data_scaled, X_scaled], axis=0)
+
     def save_model(
         self,
         model_id: Optional[str],

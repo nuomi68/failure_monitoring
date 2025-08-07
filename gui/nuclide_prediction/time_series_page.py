@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,
     QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog
@@ -56,6 +57,9 @@ class TimeSeriesPage(QWidget):
 
         # 当前选中（或刚保存）的模型 ID（用于“加载已有模型”时）
         self._model_id: Optional[str] = None
+
+        # 训练时已有的行数（用于识别新增观测）
+        self._orig_rows: int = 0
 
         # ================= 左侧：数据表格 =================
         self.table = QTableView()
@@ -107,6 +111,11 @@ class TimeSeriesPage(QWidget):
         self.btn_save.clicked.connect(self._on_save_model)
         right.addWidget(self.btn_save)
 
+        self.btn_predict = QPushButton("预测下一步")
+        self.btn_predict.setEnabled(False)
+        self.btn_predict.clicked.connect(self._on_predict)
+        right.addWidget(self.btn_predict)
+
         # 状态与结果
         self.status_label = QLabel("")
         right.addWidget(self.status_label)
@@ -135,9 +144,9 @@ class TimeSeriesPage(QWidget):
 
         # 左侧展示
         self._df = df.copy()
-        model =DataFrameModel(self._df)
-        self.table.setModel(model)
+        self._refresh_table_model()
         if self._time_col is not None:
+            model = self.table.model()
             for col in range(model.columnCount()):
                 hh = self.table.horizontalHeader()
                 header_text = model.headerData(col, Qt.Orientation.Horizontal)
@@ -154,6 +163,8 @@ class TimeSeriesPage(QWidget):
             return
         self._dataset_id = manifest.get("dataset_id")
         self.dataset_label.setText(f"数据集：{self._dataset_id}（行 {manifest.get('n_rows')}, 列 {manifest.get('n_cols')}）")
+        self.btn_predict.setEnabled(False)
+        self._orig_rows = 0
 
         # 提前把时间信息传给后端（若有对应方法）
         if hasattr(self.manager, "set_time_column") and self._time_col:
@@ -205,8 +216,10 @@ class TimeSeriesPage(QWidget):
                 df = self.manager.load_dataset(dataset_id)
                 self._df = df
                 self._dataset_id = dataset_id
-                self.table.setModel(DataFrameModel(df))
+                self._refresh_table_model()
                 self.dataset_label.setText(f"数据集：{dataset_id}（来自模型）")
+                self.btn_predict.setEnabled(False)
+                self._orig_rows = 0
             except Exception as exc:
                 QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
 
@@ -268,6 +281,10 @@ class TimeSeriesPage(QWidget):
         for k, v in self._trained_metrics.items():
             logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
+        self._orig_rows = len(self._df) if self._df is not None else 0
+        self._ensure_blank_row()
+        self.table.scrollToBottom()
+        self.btn_predict.setEnabled(True)
 
     # ============================================================
     # 保存
@@ -302,3 +319,87 @@ class TimeSeriesPage(QWidget):
         self.status_label.setText(f"模型已保存：{model_id}")
         QMessageBox.information(self, "成功", f"模型已保存为 {model_id}")
         self._refresh_model_list()
+
+    # ============================================================
+    # 预测与表格辅助
+    # ============================================================
+    def _refresh_table_model(self):
+        if self._df is None:
+            self.table.setModel(None)
+            return
+        mdl = DataFrameModel(self._df)
+        mdl.row_filled_sig.connect(lambda r: self._ensure_blank_row())
+        self.table.setModel(mdl)
+
+    def _ensure_blank_row(self):
+        if self._df is None:
+            return
+        if self._df.empty or self._df.iloc[-1].notna().all():
+            new_row = [pd.NA] * len(self._df.columns)
+            if self._time_col and self._time_col in self._df.columns:
+                idx = self._df.columns.get_loc(self._time_col)
+                new_row[idx] = ""
+            self._df.loc[len(self._df)] = new_row
+            mdl = self.table.model()
+            if hasattr(mdl, "setDataFrame"):
+                mdl.setDataFrame(self._df)
+            if hasattr(mdl, "set_row_color"):
+                mdl.set_row_color(len(self._df) - 1, QColor(Qt.GlobalColor.green).lighter(160))
+
+    def _on_predict(self):
+        if not self._dataset_id:
+            QMessageBox.warning(self, "提示", "请先训练/加载模型后再预测。")
+            return
+
+        new_part = self._df.iloc[self._orig_rows:].copy()
+        if self._time_col:
+            subset = [c for c in new_part.columns if c != self._time_col]
+            new_part = new_part.dropna(subset=subset, how="any")
+        else:
+            new_part = new_part.dropna(how="any")
+        new_part = new_part.apply(pd.to_numeric, errors="ignore")
+        if not new_part.empty:
+            try:
+                self.manager.append_observations(new_part)
+            except Exception as exc:
+                QMessageBox.critical(self, "错误", f"追加观测失败：{exc}")
+                return
+
+        try:
+            res = self.manager.predict(steps=1)
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"预测失败：{exc}")
+            return
+
+        table = res[0]["table"]
+        logger.info("\n" + table.to_string())
+
+        # 将预测结果回填到表格末尾
+        model_col = self._trained_model_type or self.model_type_combo.currentText().strip()
+        pred_series = table.get(model_col)
+        if pred_series is None:
+            pred_series = table.iloc[:, 0]
+        row_vals = []
+        for col in self._df.columns:
+            if col == self._time_col:
+                row_vals.append("")
+            else:
+                v = pred_series.get(col, pd.NA)
+                row_vals.append(float(v) if pd.notna(v) else pd.NA)
+        self._df.loc[len(self._df)] = row_vals
+        mdl = self.table.model()
+        if hasattr(mdl, "setDataFrame"):
+            mdl.setDataFrame(self._df)
+
+        # 高亮：输入窗口浅绿，预测结果浅蓝
+        if hasattr(mdl, "set_row_color"):
+            for r in range(self._orig_rows, self._orig_rows + len(new_part)):
+                mdl.set_row_color(r, QColor(Qt.GlobalColor.green).lighter(160))
+            pred_idx = len(self._df) - 1
+            mdl.set_row_color(pred_idx, QColor(Qt.GlobalColor.blue).lighter(160))
+
+        self.status_label.setText("✅ 预测已完成，结果见列表。")
+
+        self._orig_rows = len(self._df)
+        self._ensure_blank_row()
+        self.table.scrollToBottom()

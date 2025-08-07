@@ -23,8 +23,8 @@ from typing import Optional, Any, Dict, Set
 
 import pandas as pd
 
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant
-from PyQt6.QtGui import QBrush
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog,  QLineEdit, QTableView,
@@ -52,9 +52,12 @@ def is_nan_like(val: Any) -> bool:
 class DataFrameModel(QAbstractTableModel):
     """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值做背景高亮。"""
 
+    row_filled_sig = pyqtSignal(int)
+
     def __init__(self, df: pd.DataFrame):
         super().__init__()
         self._df = df
+        self._row_colors: Dict[int, QColor] = {}
 
     # 行数/列数
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
@@ -78,6 +81,9 @@ class DataFrameModel(QAbstractTableModel):
             return str(val)
 
         if role == Qt.ItemDataRole.BackgroundRole:
+            color = self._row_colors.get(r)
+            if color is not None:
+                return color
             # 缺失值浅红背景
             if is_nan_like(val):
                 return QBrush(Qt.GlobalColor.red).color().lighter(170)
@@ -105,6 +111,53 @@ class DataFrameModel(QAbstractTableModel):
 
     def dataframe(self) -> pd.DataFrame:
         return self._df
+
+    # 允许编辑最后一行
+    def flags(self, index: QModelIndex):
+        base = super().flags(index)
+        if index.row() == self.rowCount() - 1:
+            return base | Qt.ItemFlag.ItemIsEditable
+        return base
+
+    def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole):
+        if role != Qt.ItemDataRole.EditRole or not index.isValid():
+            return False
+        r, c = index.row(), index.column()
+        col_name = self._df.columns[c]
+        try:
+            if pd.api.types.is_numeric_dtype(self._df[col_name]):
+                if value == "":
+                    self._df.iat[r, c] = pd.NA
+                else:
+                    self._df.iat[r, c] = float(value)
+            else:
+                self._df.iat[r, c] = value
+        except Exception:
+            self._df.iat[r, c] = pd.NA
+        self.dataChanged.emit(index, index, [role])
+        if self._df.iloc[r].notna().all():
+            self.row_filled_sig.emit(r)
+        return True
+
+    # 行背景色控制
+    def set_row_color(self, row: int, color: QColor | None):
+        if color is None:
+            self._row_colors.pop(row, None)
+        else:
+            self._row_colors[row] = color
+        if 0 <= row < self.rowCount() and self.columnCount() > 0:
+            tl = self.index(row, 0)
+            br = self.index(row, self.columnCount() - 1)
+            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
+
+    def clear_row_colors(self):
+        if not self._row_colors:
+            return
+        self._row_colors.clear()
+        if self.rowCount() > 0 and self.columnCount() > 0:
+            tl = self.index(0, 0)
+            br = self.index(self.rowCount() - 1, self.columnCount() - 1)
+            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
 
 
 class MissingRowsProxyModel(QSortFilterProxyModel):
