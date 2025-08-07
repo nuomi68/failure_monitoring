@@ -53,7 +53,8 @@ class TimeSeriesPage(QWidget):
         super().__init__(parent)
         self.manager = ModelManager()
 
-        # 清洗后的 DataFrame 与时间设定
+        # 原始数据与当前工作数据
+        self._base_df: Optional[pd.DataFrame] = None
         self._df: Optional[pd.DataFrame] = None
         self._time_col: Optional[str] = None
         self._time_fmt: str = "%Y年%m月%d日%H%M"
@@ -154,8 +155,9 @@ class TimeSeriesPage(QWidget):
         self._time_col = dlg.time_column()
         self._time_fmt = dlg.time_format()
 
-        # 左侧展示
-        self._df = df.copy()
+        # 保留原始数据副本并展示到左侧
+        self._base_df = df.copy()
+        self._df = self._base_df.copy()
         self._input_rows = None
         self._pend_row = None
         self._pred_row = None
@@ -172,7 +174,7 @@ class TimeSeriesPage(QWidget):
                     break
         # 通过 ModelManager 注册数据集，拿到 dataset_id
         try:
-            manifest = self.manager.register_dataset(df, self._time_col or "", self._time_fmt or "")
+            manifest = self.manager.register_dataset(self._base_df, self._time_col or "", self._time_fmt or "")
         except Exception as exc:
             QMessageBox.critical(self, "错误", f"注册数据集失败：{exc}")
             return
@@ -229,7 +231,8 @@ class TimeSeriesPage(QWidget):
         if dataset_id:
             try:
                 df = self.manager.load_dataset(dataset_id)
-                self._df = df
+                self._base_df = df.copy()
+                self._df = self._base_df.copy()
                 self._dataset_id = dataset_id
                 self._input_rows = None
                 self._pend_row = None

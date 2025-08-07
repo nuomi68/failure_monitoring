@@ -143,6 +143,7 @@ class ModelManager:
         # 加载或初始化注册表
         self.datasets_registry: Dict[str, Dict[str, Any]] = self._load_json(self.datasets_registry_file) or {}
         self.models_registry: Dict[str, Dict[str, Any]] = self._load_json(self.models_registry_file) or {}
+        self.datasets_cache: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # 基础工具函数
@@ -176,46 +177,24 @@ class ModelManager:
     # 数据集管理
     # ------------------------------------------------------------------
     def register_dataset(self, df: pd.DataFrame, time_col: str, time_format: str) -> Dict[str, Any]:
-        """持久化保存清洗后的数据集并返回数据集清单。
-
-        :param df: 清洗好的 ``DataFrame``；时间列应当已经解析为 ``datetime`` 或正确的字符串格式。
-        :param time_col: 时间列的列名。
-        :param time_format: 时间列的字符串格式，用于后续解析。
-        :returns: 数据集清单字典，包含数据集 ID、保存路径、时间列信息、行列数等元数据。
-        """
-        # 生成唯一的数据集 ID，使用时间戳和短 UUID 组合
+        """注册数据集（仅缓存，不立即持久化）。"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         uid = uuid.uuid4().hex[:8]
         dataset_id = f"{timestamp}-DATA-{uid}"
 
-        dataset_dir = self.datasets_dir / dataset_id
-        dataset_dir.mkdir(parents=True, exist_ok=True)
+        self.datasets_cache[dataset_id] = {
+            "df": df.copy(),
+            "time_col": time_col,
+            "time_format": time_format,
+        }
 
-        # 保存数据为 parquet 格式（适合存储表格数据）
-        data_path = dataset_dir / "data.parquet"
-        df.to_parquet(data_path, index=False)
-
-        # 计算一些元信息
         manifest: Dict[str, Any] = {
             "dataset_id": dataset_id,
-            "path": str(data_path.relative_to(self.artifacts_dir)),
             "time_col": time_col,
             "time_format": time_format,
             "n_rows": len(df),
             "n_cols": len(df.columns),
-            "columns": df.columns.tolist(),
-            "sha256": self._calc_sha256(df),
-            "created_at": datetime.now().isoformat(),
         }
-
-        # 写入清单文件
-        manifest_path = dataset_dir / "dataset_manifest.json"
-        self._write_json(manifest, manifest_path)
-
-        # 更新全局注册表并持久化
-        self.datasets_registry[dataset_id] = manifest
-        self._write_json(self.datasets_registry, self.datasets_registry_file)
-
         return manifest
 
     def load_dataset(self, dataset_id: str) -> pd.DataFrame:
@@ -225,6 +204,8 @@ class ModelManager:
         :returns: 载入的数据 ``DataFrame``。
         :raises KeyError: 当数据集 ID 不存在时抛出异常。
         """
+        if dataset_id in self.datasets_cache:
+            return self.datasets_cache[dataset_id]["df"].copy()
         if dataset_id not in self.datasets_registry:
             raise KeyError(f"未找到数据集 {dataset_id}")
         manifest = self.datasets_registry[dataset_id]
@@ -257,10 +238,14 @@ class ModelManager:
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
         """
         # 1) 校验并载入数据
-        if dataset_id not in self.datasets_registry:
+        if dataset_id in self.datasets_cache:
+            df = self.datasets_cache[dataset_id]["df"]
+            time_col = self.datasets_cache[dataset_id]["time_col"]
+        elif dataset_id in self.datasets_registry:
+            df = self.load_dataset(dataset_id)
+            time_col = self.datasets_registry[dataset_id]["time_col"]
+        else:
             raise KeyError(f"未找到数据集 {dataset_id}")
-        df = self.load_dataset(dataset_id)
-        time_col = self.datasets_registry[dataset_id]["time_col"]
 
         # 2) 只用数值特征（去掉时间列）
         feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
@@ -360,34 +345,50 @@ class ModelManager:
         return results
 
     def append_observations(self, df_new: pd.DataFrame) -> None:
-        """追加新的观测数据到当前数据集并更新运行时状态。"""
+        """追加新的观测数据到当前数据集的运行时状态（不落盘）。"""
         if df_new is None or df_new.empty:
             return
         rt = _RuntimeSingleton.get()
-        dataset_id = rt.dataset_id
-        if dataset_id is None:
+        if rt.dataset_id is None:
             raise RuntimeError("没有已加载的数据集。")
-        manifest = self.datasets_registry.get(dataset_id)
-        if manifest is None:
-            raise KeyError(f"未找到数据集 {dataset_id}")
 
-        # 追加到磁盘数据集
-        data_path = self.artifacts_dir / manifest["path"]
-        df_old = pd.read_parquet(data_path)
-        df_all = pd.concat([df_old, df_new], ignore_index=True)
-        df_all.to_parquet(data_path, index=False)
-
-        # 更新注册表信息
-        manifest["n_rows"] = len(df_all)
-        manifest["sha256"] = self._calc_sha256(df_all)
-        self.datasets_registry[dataset_id] = manifest
-        self._write_json(self.datasets_registry, self.datasets_registry_file)
-
-        # 更新运行时缩放后的数据
         if rt.scaler is not None and rt.feature_names is not None and rt.data_scaled is not None:
             X_new = df_new[rt.feature_names].apply(pd.to_numeric).to_numpy()
             X_scaled = rt.scaler.transform(X_new)
             rt.data_scaled = np.concatenate([rt.data_scaled, X_scaled], axis=0)
+
+    def _ensure_dataset_persisted(self, dataset_id: str) -> None:
+        """若数据集尚未持久化，则在保存模型前写入磁盘并登记。"""
+        if dataset_id in self.datasets_registry or dataset_id not in self.datasets_cache:
+            return
+
+        info = self.datasets_cache.pop(dataset_id)
+        df = info["df"]
+        time_col = info["time_col"]
+        time_format = info["time_format"]
+
+        dataset_dir = self.datasets_dir / dataset_id
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        data_path = dataset_dir / "data.parquet"
+        df.to_parquet(data_path, index=False)
+
+        manifest: Dict[str, Any] = {
+            "dataset_id": dataset_id,
+            "path": str(data_path.relative_to(self.artifacts_dir)),
+            "time_col": time_col,
+            "time_format": time_format,
+            "n_rows": len(df),
+            "n_cols": len(df.columns),
+            "columns": df.columns.tolist(),
+            "sha256": self._calc_sha256(df),
+            "created_at": datetime.now().isoformat(),
+        }
+
+        manifest_path = dataset_dir / "dataset_manifest.json"
+        self._write_json(manifest, manifest_path)
+
+        self.datasets_registry[dataset_id] = manifest
+        self._write_json(self.datasets_registry, self.datasets_registry_file)
 
     def save_model(
         self,
@@ -410,6 +411,9 @@ class ModelManager:
         :param metrics: 训练评估指标字典。
         :returns: 最终保存的模型 ID。
         """
+        # 保存模型前确保数据集已落盘
+        self._ensure_dataset_persisted(dataset_id)
+
         # 如果没有提供 ID，则创建一个新的
         is_new = model_id is None
         if is_new:

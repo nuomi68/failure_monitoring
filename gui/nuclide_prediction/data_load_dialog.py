@@ -214,11 +214,9 @@ class DataLoadDialog(QDialog):
         # ---------- 顶部：选择文件 / 时间列与格式 ----------
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择 CSV 或 Excel 文件...")
-        btn_browse = QPushButton("浏览...")
-        btn_browse.clicked.connect(self._browse)
-
-        btn_read = QPushButton("读取/预览")
-        btn_read.clicked.connect(self._read_preview)
+        self.path_edit.setReadOnly(True)
+        btn_load = QPushButton("选择并加载")
+        btn_load.clicked.connect(self._choose_and_load)
 
         self.time_col_combo = QComboBox()
         self.time_col_combo.setEnabled(False)
@@ -278,8 +276,7 @@ class DataLoadDialog(QDialog):
         top = QGridLayout()
         top.addWidget(QLabel("文件"), 0, 0)
         top.addWidget(self.path_edit, 0, 1, 1, 2)
-        top.addWidget(btn_browse, 0, 3)
-        top.addWidget(btn_read, 0, 4)
+        top.addWidget(btn_load, 0, 3)
 
         top.addWidget(QLabel("时间列"), 1, 0)
         top.addWidget(self.time_col_combo, 1, 1)
@@ -315,17 +312,19 @@ class DataLoadDialog(QDialog):
 
     # ---------- 槽函数 ----------
 
-    def _browse(self):
-        """选择文件路径。"""
+    def _choose_and_load(self):
+        """选择文件并直接加载预览。"""
         path, _ = QFileDialog.getOpenFileName(
             self, "选择数据文件", "", "All Supported (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx)"
         )
         if path:
             self.path_edit.setText(path)
+            self._read_preview(path)
 
-    def _read_preview(self):
+    def _read_preview(self, path: Optional[str] = None):
         """读取文件，初始化工作 DataFrame 和各个控件。"""
-        path = self.path_edit.text().strip()
+        if path is None:
+            path = self.path_edit.text().strip()
         if not path:
             QMessageBox.warning(self, "提示", "请选择文件。")
             return
