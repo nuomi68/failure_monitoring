@@ -344,18 +344,28 @@ class ModelManager:
             results.append({"step": i, "table": df})
         return results
 
+    # ===== 🔄 追加新观测到运行时 ===== #
     def append_observations(self, df_new: pd.DataFrame) -> None:
-        """追加新的观测数据到当前数据集的运行时状态（不落盘）。"""
+        """
+        把 **原始量纲** 的观测行追加到运行时 cache，供后续预测滚动窗口使用。
+        `df_new` 只需包含训练阶段用到的特征列（不用时间列）。
+        """
         if df_new is None or df_new.empty:
             return
-        rt = _RuntimeSingleton.get()
-        if rt.dataset_id is None:
-            raise RuntimeError("没有已加载的数据集。")
 
-        if rt.scaler is not None and rt.feature_names is not None and rt.data_scaled is not None:
-            X_new = df_new[rt.feature_names].apply(pd.to_numeric).to_numpy()
-            X_scaled = rt.scaler.transform(X_new)
-            rt.data_scaled = np.concatenate([rt.data_scaled, X_scaled], axis=0)
+        rt = _RuntimeSingleton.get()
+        if rt.scaler is None or rt.data_scaled is None or rt.feature_names is None:
+            raise RuntimeError("请先完成训练，再追加观测。")
+
+        # 1) 按训练时的列顺序取数值
+        try:
+            df_use = df_new[rt.feature_names].astype(float)
+        except KeyError as exc:
+            raise ValueError(f"追加观测缺少列: {exc}") from exc
+
+        # 2) 同一 scaler 做 transform，拼接到 data_scaled
+        new_scaled = rt.scaler.transform(df_use.values)
+        rt.data_scaled = np.vstack([rt.data_scaled, new_scaled])
 
     def _ensure_dataset_persisted(self, dataset_id: str) -> None:
         """若数据集尚未持久化，则在保存模型前写入磁盘并登记。"""

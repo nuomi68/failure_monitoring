@@ -471,6 +471,13 @@ class TimeSeriesPage(QWidget):
         if hasattr(mdl, "setDataFrame"):
             mdl.setDataFrame(self._df)
 
+        # 🔑 把 *刚生成的预测行* 也写回运行时 —— 下一次窗口才能用到它
+        try:
+            df_pred = pd.DataFrame([pred_series.values], columns=pred_series.index)
+            self.manager.append_observations(df_pred)
+        except Exception as exc:
+            logger.warning(f"追加预测观测失败: {exc}")
+
         self._register_new_prediction()
         self.status_label.setText("✅ 预测已完成，结果见列表。")
         self.table.scrollToBottom()
