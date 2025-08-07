@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 # —— 后端 ——
 from backend.timeseries_interface import ModelManager
-from gui.tools import logger
+from gui.tools import logger,TrainWorker
 
 from .data_load_dialog import DataLoadDialog, DataFrameModel
 from .param_panel import ParamPanel
@@ -236,43 +236,38 @@ class TimeSeriesPage(QWidget):
     # 训练
     # ============================================================
     def _on_train(self):
-        """使用当前数据集与参数训练单一模型。"""
         if not self._dataset_id:
-            QMessageBox.warning(self, "提示", "请先通过弹窗加载并清洗数据集。")
+            QMessageBox.warning(self, "提示", "先加载数据集")
             return
-
-        model_type = self.model_type_combo.currentText().strip()
-        params = self.param_panel.params()
-
         self.status_label.setText("训练中…")
+        self.btn_train.setEnabled(False)
 
-        try:
-            result = self.manager.train(
-                self._dataset_id, model_type, params, log_callback=lambda m: logger.info(m)
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "错误", f"训练失败：{exc}")
+        w = TrainWorker(
+            self.manager,
+            self._dataset_id,
+            self.model_type_combo.currentText().strip(),
+            self.param_panel.params(),
+            self
+        )
+        w.log_sig.connect(lambda m: logger.info(m))  # 日志滚动
+        w.done_sig.connect(self._on_train_finished)  # 收尾
+        w.start()
+        self._worker = w  # 防 GC
+
+    def _on_train_finished(self, payload: dict):
+        self.btn_train.setEnabled(True)
+        if not payload["ok"]:
+            QMessageBox.critical(self, "错误", f"训练失败：{payload['err']}")
             self.status_label.setText("训练失败")
             return
-
-        # 缓存训练结果用于保存
-        self._trained_model = result.get("model")
-        self._trained_metrics = result.get("metrics") or {}
-        self._trained_params = params
-        self._trained_model_type = model_type
-
-        # 展示指标与额外信息
-        lines = [f"{k}: {v}" for k, v in self._trained_metrics.items()]
-        extra = result.get("extra", {})
-        if extra:
-            lines.append("预测值: " + str(extra.get("prediction", {})))
-            lines.append("真实值: " + str(extra.get("last_true", {})))
-        for line in lines:
-            logger.info(line)
+        result = payload["res"]
+        self._trained_model = result["model"]
+        self._trained_metrics = result["metrics"]
+        self._trained_params = self.param_panel.params()
+        self._trained_model_type = self.model_type_combo.currentText().strip()
+        for k, v in self._trained_metrics.items():
+            logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
-
-        # 新训练的模型，清空已选模型 ID
-        self._model_id = None
 
     # ============================================================
     # 保存

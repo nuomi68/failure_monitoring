@@ -1,8 +1,5 @@
-from sklearn.preprocessing import StandardScaler
-import numpy as np
-from typing import Tuple, Any, Dict
-import matplotlib.pyplot as plt
-from pathlib import Path
+
+from PyQt6.QtCore import QThread, pyqtSignal
 import logging
 
 logger = logging.getLogger("failure_monitoring")
@@ -24,11 +21,20 @@ if not logger.handlers:
     logger.addHandler(console_handler)
     logger.propagate = False
 
-# ================= 工具函数 =================
-def scale_features(X: np.ndarray):
-    scaler = StandardScaler()
-    Xs = scaler.fit_transform(X)
-    return Xs, scaler
 
-def save_model(*args, **kwargs):
-    raise RuntimeError("save_model has been deprecated; use backend.ml_interface.ML.save")
+class TrainWorker(QThread):
+    log_sig  = pyqtSignal(str)           # 实时日志
+    done_sig = pyqtSignal(dict)          # 训练返回值或异常
+
+    def __init__(self, mgr, ds_id, m_type, params, parent=None):
+        super().__init__(parent)
+        self.mgr, self.ds_id, self.m_type, self.params = mgr, ds_id, m_type, params
+
+    def run(self):
+        def _log(msg: str):              # 供后端回调
+            self.log_sig.emit(msg)
+        try:
+            res = self.mgr.train(self.ds_id, self.m_type, self.params, log_callback=_log)
+            self.done_sig.emit({"ok": True, "res": res})
+        except Exception as e:
+            self.done_sig.emit({"ok": False, "err": str(e)})
