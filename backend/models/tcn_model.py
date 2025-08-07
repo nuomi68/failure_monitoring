@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 
 import torch
 from torch import nn
@@ -84,6 +84,7 @@ def train_tcn(
     levels: int = 2,
     k: int = 2,
     drop: float = 0.2,
+    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[nn.Module, float]:
     dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
     dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
@@ -93,14 +94,17 @@ def train_tcn(
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
     best = math.inf
-    for _ in range(epochs):
+    for epoch in range(1, epochs + 1):
         model.train()
+        train_loss = 0.0
         for xb, yb in dtrain:
             xb, yb = xb.to(device), yb.to(device)
             optimiser.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
             optimiser.step()
+            train_loss += loss.item() * xb.size(0)
+        train_loss /= len(dtrain.dataset)
 
         model.eval()
         vloss = 0.0
@@ -110,6 +114,11 @@ def train_tcn(
                 vloss += criterion(model(xb), yb).item() * xb.size(0)
         vloss /= len(dval.dataset)
         best = min(best, vloss)
+
+        if log_callback:
+            log_callback(
+                f"[TCN] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
+            )
 
     return model, best
 

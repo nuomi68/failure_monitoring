@@ -1,5 +1,5 @@
 import math
-from typing import Tuple, List
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -96,6 +96,7 @@ def train_timesnet(
     batch_size: int = 16,
     d_model: int = 32,
     num_blocks: int = 3,
+    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[nn.Module, float]:
     """TimesNet 训练，返回模型与验证集 MSE。"""
     train_loader = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
@@ -106,15 +107,17 @@ def train_timesnet(
     criterion = nn.MSELoss()
 
     best = math.inf
-    for _ in range(epochs):
+    for epoch in range(1, epochs + 1):
         # --- train ---
-        model.train()
+        model.train(); train_loss = 0.0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             optim.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
             optim.step()
+            train_loss += loss.item() * xb.size(0)
+        train_loss /= len(train_loader.dataset)
 
         # --- validate ---
         model.eval(); vloss = 0.0
@@ -124,6 +127,11 @@ def train_timesnet(
                 vloss += criterion(model(xb), yb).item() * xb.size(0)
         vloss /= len(val_loader.dataset)
         best = min(best, vloss)
+
+        if log_callback:
+            log_callback(
+                f"[TimesNet] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
+            )
 
     return model, best
 

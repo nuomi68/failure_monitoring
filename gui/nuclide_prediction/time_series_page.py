@@ -22,12 +22,13 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QTableView,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,
     QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog
 )
 
 # —— 后端 ——
 from backend.timeseries_interface import ModelManager
+from tools import logger
 
 from .data_load_dialog import DataLoadDialog, DataFrameModel
 from .param_panel import ParamPanel
@@ -109,9 +110,6 @@ class TimeSeriesPage(QWidget):
         # 状态与结果
         self.status_label = QLabel("")
         right.addWidget(self.status_label)
-        self.result_view = QTextEdit()
-        self.result_view.setReadOnly(True)
-        right.addWidget(self.result_view, stretch=1)
 
         # 总体布局
         root = QHBoxLayout(self)
@@ -223,7 +221,8 @@ class TimeSeriesPage(QWidget):
         self.param_panel.set_params(params)
 
         metrics = meta.get("metrics", {})
-        self.result_view.setPlainText("\n".join(f"{k}: {v}" for k, v in metrics.items()))
+        for line in [f"{k}: {v}" for k, v in metrics.items()]:
+            logger.info(line)
         self.status_label.setText(f"已加载模型 {model_id}")
         self._model_id = model_id
 
@@ -246,10 +245,11 @@ class TimeSeriesPage(QWidget):
         params = self.param_panel.params()
 
         self.status_label.setText("训练中…")
-        self.result_view.clear()
 
         try:
-            result = self.manager.train(self._dataset_id, model_type, params)
+            result = self.manager.train(
+                self._dataset_id, model_type, params, log_callback=lambda m: logger.info(m)
+            )
         except Exception as exc:
             QMessageBox.critical(self, "错误", f"训练失败：{exc}")
             self.status_label.setText("训练失败")
@@ -267,7 +267,8 @@ class TimeSeriesPage(QWidget):
         if extra:
             lines.append("预测值: " + str(extra.get("prediction", {})))
             lines.append("真实值: " + str(extra.get("last_true", {})))
-        self.result_view.setPlainText("\n".join(lines) or "训练完成。")
+        for line in lines:
+            logger.info(line)
         self.status_label.setText("训练完成（未保存）")
 
         # 新训练的模型，清空已选模型 ID

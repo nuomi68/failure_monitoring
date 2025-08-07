@@ -24,7 +24,7 @@ import pandas as pd
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from sklearn.model_selection import train_test_split
 
 
@@ -246,7 +246,13 @@ class ModelManager:
         """获取某一模型的元数据，如果不存在则返回 ``None``。"""
         return self.models_registry.get(model_id)
 
-    def train(self, dataset_id: str, model_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def train(
+        self,
+        dataset_id: str,
+        model_type: str,
+        params: Dict[str, Any],
+        log_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
         """
@@ -282,7 +288,9 @@ class ModelManager:
             raise KeyError(f"未知的模型类型: {model_type}")
         train_fn = MODEL_REGISTRY[model_type]["train"]
         if model_type in {"rf", "xgb"}:
-            result = train_fn(X_tr, y_tr, X_val, y_val, **train_params)
+            result = train_fn(
+                X_tr, y_tr, X_val, y_val, log_callback=log_callback, **train_params
+            )
         else:
             result = train_fn(
                 X_tr,
@@ -291,6 +299,7 @@ class ModelManager:
                 y_val,
                 batch_size=batch_size,
                 epochs=epochs,
+                log_callback=log_callback,
                 **train_params,
             )
 
