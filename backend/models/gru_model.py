@@ -4,7 +4,6 @@ from typing import Tuple
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import mean_absolute_error
 
 
 def _to_tensor(arr, device):
@@ -24,9 +23,9 @@ class SeqDataset(Dataset):
 
 
 class GRUForecaster(nn.Module):
-    def __init__(self, num_feat: int, hidden_size: int = 32, num_layers: int = 2):
+    def __init__(self, num_feat: int, hidden_size: int = 32, num_layers: int = 2, dropout: float = 0.3):
         super().__init__()
-        self.gru = nn.GRU(num_feat, hidden_size, num_layers, batch_first=True, dropout=0.3)
+        self.gru = nn.GRU(num_feat, hidden_size, num_layers, batch_first=True, dropout=dropout)
         self.fc = nn.Linear(hidden_size, num_feat)
 
     def forward(self, x):
@@ -34,12 +33,24 @@ class GRUForecaster(nn.Module):
         return self.fc(out[:, -1])
 
 
-def train_gru(X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs=50) -> Tuple[nn.Module, float]:
+def train_gru(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    device: str = "cpu",
+    lr: float = 1e-3,
+    epochs: int = 50,
+    batch_size: int = 16,
+    hidden_size: int = 32,
+    num_layers: int = 2,
+    dropout: float = 0.3,
+) -> Tuple[nn.Module, float]:
     """Train a GRU forecasting model and return the model and validation MAE."""
-    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=16, shuffle=True)
-    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=16)
+    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
-    model = GRUForecaster(X_train.shape[-1]).to(device)
+    model = GRUForecaster(X_train.shape[-1], hidden_size=hidden_size, num_layers=num_layers, dropout=dropout).to(device)
     criterion = nn.MSELoss()
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -53,7 +64,8 @@ def train_gru(X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs=50) 
             loss.backward()
             optimiser.step()
 
-        model.eval(); vloss = 0.0
+        model.eval()
+        vloss = 0.0
         with torch.no_grad():
             for xb, yb in dval:
                 xb, yb = xb.to(device), yb.to(device)

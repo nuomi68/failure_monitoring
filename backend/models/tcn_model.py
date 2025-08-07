@@ -71,11 +71,24 @@ class TCNForecaster(nn.Module):
         return self.fc(last)
 
 
-def train_tcn(X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs=50) -> Tuple[nn.Module, float]:
-    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=16, shuffle=True)
-    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=16)
+def train_tcn(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    device: str = "cpu",
+    lr: float = 1e-3,
+    epochs: int = 50,
+    batch_size: int = 16,
+    hid: int = 32,
+    levels: int = 2,
+    k: int = 2,
+    drop: float = 0.2,
+) -> Tuple[nn.Module, float]:
+    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
-    model = TCNForecaster(X_train.shape[-1]).to(device)
+    model = TCNForecaster(X_train.shape[-1], hid=hid, levels=levels, k=k, drop=drop).to(device)
     criterion = nn.MSELoss()
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -89,7 +102,8 @@ def train_tcn(X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs=50) 
             loss.backward()
             optimiser.step()
 
-        model.eval(); vloss = 0.0
+        model.eval()
+        vloss = 0.0
         with torch.no_grad():
             for xb, yb in dval:
                 xb, yb = xb.to(device), yb.to(device)

@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -89,12 +88,12 @@ class TimeSeriesPage(QWidget):
         # 模型类型
         right.addWidget(QLabel("模型类型"))
         self.model_type_combo = QComboBox()
-        # 可按需补充你后端真实支持的类型
-        self.model_type_combo.addItems(["tsmixer", "timesnet", "示例模型"])
+        # 后端可选模型
+        self.model_type_combo.addItems(["gru", "tcn", "tsmixer", "rf", "xgb", "timesnet"])
         right.addWidget(self.model_type_combo)
 
-        # 训练参数 JSON
-        right.addWidget(QLabel("训练参数（JSON）"))
+        # 训练参数
+        right.addWidget(QLabel("训练参数"))
         self.param_panel = ParamPanel(self.manager, self)
         right.addWidget(self.param_panel)
 
@@ -221,10 +220,7 @@ class TimeSeriesPage(QWidget):
             self.model_type_combo.setCurrentText(model_type)
 
         params = meta.get("params", {})
-        try:
-            self.param_edit.setPlainText(json.dumps(params, ensure_ascii=False, indent=2))
-        except Exception:
-            self.param_edit.setPlainText(str(params))
+        self.param_panel.set_params(params)
 
         metrics = meta.get("metrics", {})
         self.result_view.setPlainText("\n".join(f"{k}: {v}" for k, v in metrics.items()))
@@ -247,15 +243,7 @@ class TimeSeriesPage(QWidget):
             return
 
         model_type = self.model_type_combo.currentText().strip()
-
-        # 解析参数 JSON
-        try:
-            params = json.loads(self.param_edit.toPlainText().strip() or "{}")
-            if not isinstance(params, dict):
-                raise ValueError("参数必须为 JSON 对象。")
-        except Exception as exc:
-            QMessageBox.warning(self, "提示", f"参数解析失败：{exc}")
-            return
+        params = self.param_panel.params()
 
         self.status_label.setText("训练中…")
         self.result_view.clear()

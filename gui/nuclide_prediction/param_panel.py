@@ -78,6 +78,14 @@ class ParamPanel(QWidget):
         base.update(self._adv_params)
         return base
 
+    def set_params(self, params: Dict[str, Any]) -> None:
+        """回填参数到面板，包括基础与高级部分"""
+        self.batch.setValue(int(params.get("batch_size", 32)))
+        self.epochs.setValue(int(params.get("epochs", 50)))
+        self.look_back.setValue(int(params.get("look_back", 32)))
+        adv = {k: v for k, v in params.items() if k not in {"batch_size", "epochs", "look_back"}}
+        self._adv_params = adv
+
     # ------------------------------------------------------------------ #
     #                         内部：高级参数弹窗                            #
     # ------------------------------------------------------------------ #
@@ -96,6 +104,7 @@ class ParamPanel(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "错误", f"获取高级参数失败：{exc}")
             return
+        init_params.update(self._adv_params)
 
         # 弹窗渲染
         dlg = _AdvParamDialog(init_params, self)

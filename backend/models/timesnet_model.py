@@ -85,19 +85,23 @@ class TimesNet(nn.Module):
 
 
 # ------- 训练 / 预测 接口 -------------
-def train_timesnet(X_train, y_train, X_val, y_val,
-                   device: str = "cpu",
-                   lr: float = 1e-3,
-                   epochs: int = 50,
-                   d_model: int = 32,
-                   num_blocks: int = 3) -> Tuple[nn.Module, float]:
+def train_timesnet(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    device: str = "cpu",
+    lr: float = 1e-3,
+    epochs: int = 50,
+    batch_size: int = 16,
+    d_model: int = 32,
+    num_blocks: int = 3,
+) -> Tuple[nn.Module, float]:
     """TimesNet 训练，返回模型与验证集 MSE。"""
-    train_loader = DataLoader(SeqDataset(X_train, y_train), batch_size=16, shuffle=True)
-    val_loader = DataLoader(SeqDataset(X_val, y_val), batch_size=16)
+    train_loader = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
-    model = TimesNet(num_feat=X_train.shape[-1],
-                     d_model=d_model,
-                     num_blocks=num_blocks).to(device)
+    model = TimesNet(num_feat=X_train.shape[-1], d_model=d_model, num_blocks=num_blocks).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 

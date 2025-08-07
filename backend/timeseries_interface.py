@@ -41,38 +41,49 @@ from backend.models import (
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # 把所有模型的 train 和 predict 函数映射到同一个结构
 MODEL_REGISTRY = {
-    # "gru": {
-    #     "train": lambda X_tr, y_tr, X_val, y_val: gru_model.train_gru(X_tr, y_tr, X_val, y_val, device=DEVICE),
-    #     "predict": lambda model, seq: gru_model.predict(model, seq, device=DEVICE),
-    # },
-    # "tcn": {
-    #     "train": lambda X_tr, y_tr, X_val, y_val: tcn_model.train_tcn(X_tr, y_tr, X_val, y_val, device=DEVICE),
-    #     "predict": lambda model, seq: tcn_model.predict(model, seq, device=DEVICE),
-    # },
+    "gru": {
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: gru_model.train_gru(
+            X_tr, y_tr, X_val, y_val, device=DEVICE, **kw
+        ),
+        "predict": lambda model, seq: gru_model.predict(model, seq, device=DEVICE),
+    },
+    "tcn": {
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: tcn_model.train_tcn(
+            X_tr, y_tr, X_val, y_val, device=DEVICE, **kw
+        ),
+        "predict": lambda model, seq: tcn_model.predict(model, seq, device=DEVICE),
+    },
     "tsmixer": {
-        "train": lambda X_tr, y_tr, X_val, y_val: tsmixer_model.train_tsmixer(X_tr, y_tr, X_val, y_val, device=DEVICE),
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: tsmixer_model.train_tsmixer(
+            X_tr, y_tr, X_val, y_val, device=DEVICE, **kw
+        ),
         "predict": lambda model, seq: tsmixer_model.predict(model, seq, device=DEVICE),
     },
-    # "rf": {
-    #     "train": lambda X_tr, y_tr, X_val, y_val: random_forest_model.train_rf(
-    #         X_tr, y_tr, X_val, y_val, n_estimators=400, random_state=42, n_jobs=-1
-    #     ),
-    #     "predict": lambda model, seq: random_forest_model.predict(model, seq),
-    # },
-    # "xgb": {
-    #     "train": lambda X_tr, y_tr, X_val, y_val: xgboost_model.train_xgb(X_tr, y_tr, X_val, y_val),
-    #     "predict": lambda model, seq: xgboost_model.predict(model, seq),
-    # },
+    "rf": {
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: random_forest_model.train_rf(
+            X_tr, y_tr, X_val, y_val, **kw
+        ),
+        "predict": lambda model, seq: random_forest_model.predict(model, seq),
+    },
+    "xgb": {
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: xgboost_model.train_xgb(
+            X_tr, y_tr, X_val, y_val, **kw
+        ),
+        "predict": lambda model, seq: xgboost_model.predict(model, seq),
+    },
     "timesnet": {
-        "train": lambda X_tr, y_tr, X_val, y_val: timesnet_model.train_timesnet(
-            X_tr, y_tr, X_val, y_val, device=DEVICE, d_model=32, num_blocks=3),
+        "train": lambda X_tr, y_tr, X_val, y_val, **kw: timesnet_model.train_timesnet(
+            X_tr, y_tr, X_val, y_val, device=DEVICE, **kw
+        ),
         "predict": lambda model, seq: timesnet_model.predict(model, seq, device=DEVICE),
     },
 }
 DATA_CFG = {
+    "gru": 32,
     "tcn": 14,
     "tsmixer": 32,
     "rf": 5,
+    "xgb": 14,
     "timesnet": 32,       # 新增
 }
 
@@ -258,8 +269,11 @@ class ModelManager:
 
         # 4) 构造窗口
         default_lb = DATA_CFG.get(model_type, 14)  # controller 里给的默认窗口长度
-        look_back = int(params.get("look_back", default_lb))
-        holdout = int(params.get("holdout", 5))  # 留出最后 N 条不参与窗口构造，默认 5（与 controller 用法一致）
+        train_params = params.copy()
+        look_back = int(train_params.pop("look_back", default_lb))
+        holdout = int(train_params.pop("holdout", 5))  # 留出最后 N 条不参与窗口构造，默认 5（与 controller 用法一致）
+        batch_size = int(train_params.pop("batch_size", 16))
+        epochs = int(train_params.pop("epochs", 50))
         X, y = build_windows(data_scaled[:-holdout], look_back)  # 与 controller 的写法对齐
         X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
@@ -267,7 +281,18 @@ class ModelManager:
         if model_type not in MODEL_REGISTRY:
             raise KeyError(f"未知的模型类型: {model_type}")
         train_fn = MODEL_REGISTRY[model_type]["train"]
-        result = train_fn(X_tr, y_tr, X_val, y_val)
+        if model_type in {"rf", "xgb"}:
+            result = train_fn(X_tr, y_tr, X_val, y_val, **train_params)
+        else:
+            result = train_fn(
+                X_tr,
+                y_tr,
+                X_val,
+                y_val,
+                batch_size=batch_size,
+                epochs=epochs,
+                **train_params,
+            )
 
         # controller 的返回有两种：直接模型 或 (模型, metric) 元组
         if isinstance(result, tuple):
@@ -405,8 +430,11 @@ class ModelManager:
     def get_advanced_params(self, model_type: str) -> Dict[str, Any]:
         """返回不同模型可调的高级参数默认值"""
         presets = {
-            "tsmixer": {"d_model": 64, "num_layers": 4},
-            "timesnet": {"d_model": 32, "num_blocks": 3},
-            # 继续补充…
+            "gru": {"lr": 1e-3, "hidden_size": 32, "num_layers": 2, "dropout": 0.3},
+            "tcn": {"lr": 1e-3, "hid": 32, "levels": 2, "k": 2, "drop": 0.2},
+            "tsmixer": {"lr": 1e-3, "num_blocks": 4, "ff_dim": 128, "dropout": 0.1},
+            "rf": {"n_estimators": 400, "random_state": 42, "n_jobs": -1},
+            "xgb": {"n_estimators": 600, "learning_rate": 0.05, "max_depth": 6},
+            "timesnet": {"lr": 1e-3, "d_model": 32, "num_blocks": 3},
         }
         return presets.get(model_type, {})

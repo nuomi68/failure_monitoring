@@ -24,25 +24,35 @@ class SeqDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def build_model(seq_len: int, num_feat: int) -> TSMixer:
+def build_model(seq_len: int, num_feat: int, num_blocks: int = 4, ff_dim: int = 128, dropout: float = 0.1) -> TSMixer:
     return TSMixer(
         sequence_length=seq_len,
         prediction_length=1,
         input_channels=num_feat,
         output_channels=num_feat,
-        num_blocks=4,
-        ff_dim=128,
-        dropout_rate=0.1,
+        num_blocks=num_blocks,
+        ff_dim=ff_dim,
+        dropout_rate=dropout,
     )
 
 
 def train_tsmixer(
-    X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs=50
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    device: str = "cpu",
+    lr: float = 1e-3,
+    epochs: int = 50,
+    batch_size: int = 16,
+    num_blocks: int = 4,
+    ff_dim: int = 128,
+    dropout: float = 0.1,
 ) -> Tuple[TSMixer, float]:
-    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=16, shuffle=True)
-    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=16)
+    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
-    model = build_model(X_train.shape[1], X_train.shape[2]).to(device)
+    model = build_model(X_train.shape[1], X_train.shape[2], num_blocks=num_blocks, ff_dim=ff_dim, dropout=dropout).to(device)
     criterion = nn.MSELoss()
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
 
@@ -57,7 +67,8 @@ def train_tsmixer(
             loss.backward()
             optimiser.step()
 
-        model.eval(); vloss = 0.0
+        model.eval()
+        vloss = 0.0
         with torch.no_grad():
             for xb, yb in dval:
                 xb, yb = xb.to(device), yb.to(device)
