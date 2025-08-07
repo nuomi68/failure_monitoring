@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 # —— 后端 ——
 from backend.timeseries_interface import ModelManager
-from tools import logger
+from gui.tools import logger
 
 from .data_load_dialog import DataLoadDialog, DataFrameModel
 from .param_panel import ParamPanel

@@ -1,4 +1,6 @@
 import matplotlib
+import os
+
 matplotlib.rcParams['font.family'] = ['Microsoft YaHei', 'SimHei', 'sans-serif']
 matplotlib.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
 light_palette = {
@@ -44,7 +46,11 @@ light_palette = {
 
 def get_sheet(style_color:str):
     # 读取 QSS 模板
-    with open("style_sheet_template.qss", encoding="utf-8") as f:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 拼接目标文件路径
+    qss_path = os.path.join(current_dir, "style_sheet_template.qss")
+    with open(qss_path , encoding="utf-8") as f:
         template = f.read()
 
     palette = {}

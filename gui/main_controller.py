@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 
 import logging
 
-from tools import logger
+from gui.tools import logger
 
 class QtLogHandler(logging.Handler):
     """Simple logging handler that appends logs to a QPlainTextEdit."""
@@ -30,10 +30,10 @@ class QtLogHandler(logging.Handler):
         msg = self.format(record)
         self.widget.appendPlainText(msg)
 
-from set_style import get_sheet
-from outlier_detection import OutlierDetectionPage
-from ensemble_page import EnsemblePage
-from nuclide_prediction.time_series_page import TimeSeriesPage
+from gui.set_style import get_sheet
+from gui.outlier_detection import OutlierDetectionPage
+from gui.ensemble_page import EnsemblePage
+from gui.nuclide_prediction.time_series_page import TimeSeriesPage
 
 class MainController(QMainWindow):
     """主界面控制器

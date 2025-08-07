@@ -11,9 +11,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from calculator_widget import CalculatorWidget
-from feature_preview import FeaturePreviewWidget,HeatmapCanvas
-from tools import logger
+from gui.calculator_widget import CalculatorWidget
+from gui.feature_preview import FeaturePreviewWidget,HeatmapCanvas
+from gui.tools import logger
 
 class DataHandlePage(QWidget):
     """Data preprocessing interface embedding the ML window."""
@@ -226,7 +226,7 @@ class DataHandlePage(QWidget):
 
     def load_dev_file(self):
         """开发阶段：写死加载一个本地 Excel 文件"""
-        path = "../data/20230510-20240924_merged.xlsx"  # ← 改成你自己的路径
+        path = "./data/20230510-20240924_merged.xlsx"
         try:
             df = pd.read_excel(path)
         except Exception as e:

@@ -127,7 +127,7 @@ class ModelManager:
 
     def __init__(self) -> None:
         # 确定基础目录：当前文件位于 backend 子目录下，因此父目录的父目录为项目根
-        project_root = Path(__file__).resolve().parents[1]
+        project_root = Path(__file__).resolve().parents[1]/"models_saved"
         self.artifacts_dir = project_root / "artifacts"
         self.datasets_dir = self.artifacts_dir / "datasets"
         self.models_dir = self.artifacts_dir / "models"
