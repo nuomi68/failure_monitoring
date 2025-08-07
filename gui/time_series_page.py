@@ -1,305 +1,323 @@
 
 # -*- coding: utf-8 -*-
 """
-主要功能：
-   - 左侧显示最终清洗后的数据表（开启横向滚动条、列宽随内容自适应）。
-   - 右侧为模型控制区：选择模型、参数(JSON)、训练/加载/保存模型。
-   - 与后端 ModelManager 兼容：仍然支持 manager.train(path, fmt) 的旧接口；
-     若后端实现了 list_models/set_model/set_params/set_time_column/set_time_format/load_model/save_model 等，
-     会自动调用，无则忽略。
+合并版前端（最终）：
+- 弹窗数据清洗（沿用你的外部 data_load_dialog.DataLoadDialog，不改接口）。
+- 训练/保存交互采用 time_series_page2 的单模型流程（只针对单一模型，不再一次性训练全部）。
+- 后端统一通过 backend.timeseries_interface.ModelManager：
+    * register_dataset(df, time_col, time_format) -> manifest{dataset_id,...}
+    * list_models() / get_model_meta(model_id) / load_dataset(dataset_id)
+    * train(dataset_id, model_type, params) -> {model, metrics, extra?}
+    * save_model(model_id|None, name, model_type, dataset_id, params, model_obj, metrics) -> model_id
 
 注意：
-- 弹窗中强制“缺失清零”后才能返回主界面，因此主界面的表格不再需要缺失提示。
+- 本前端不再依赖 controller.run_all_models；controller 仅供你对照后端实现参考。
+- 主界面左侧表格开启“按内容自适应 + 横向滚动”，便于查看宽表。
 """
 
 from __future__ import annotations
 
 import json
-import os
-from typing import Optional, Any, Dict, Set
+from typing import Any, Dict, Optional
 
 import pandas as pd
-
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant
-from PyQt6.QtGui import QBrush
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-    QPushButton, QLabel, QFileDialog, QTextEdit, QLineEdit, QTableView,
-    QHeaderView, QComboBox, QDialog, QDialogButtonBox, QMessageBox, QGroupBox,
-    QCheckBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QTableView,
+    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog
 )
 
-
-# ====== 引入后端 ======
+# —— 后端 ——
 from backend.timeseries_interface import ModelManager
-from data_load_dialog import DataLoadDialog,DataFrameModel
+
+# —— 外部弹窗与表格模型（你已有的文件，接口保持不变） ——
+# 要求包含：DataLoadDialog（loaded_dataframe/time_column/time_format/file_path）与 DataFrameModel
+from data_load_dialog import DataLoadDialog, DataFrameModel
 
 
 class TimeSeriesPage(QWidget):
-    """主页面：左侧数据表 + 右侧模型控制。"""
+    """主页面：左侧数据表 + 右侧模型控制（单模型工作流）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.manager = ModelManager()
 
-        self._df: Optional[pd.DataFrame] = None           # 清洗后的数据
-        self._data_path: Optional[str] = None              # 源文件路径（可供后端使用）
-        self._time_col: Optional[str] = None               # 选择的时间列名
-        self._time_fmt: str = "%Y年%m月%d日%H%M"            # 时间格式
+        # 清洗后的 DataFrame 与时间设定
+        self._df: Optional[pd.DataFrame] = None
+        self._time_col: Optional[str] = None
+        self._time_fmt: str = "%Y年%m月%d日%H%M"
 
-        # ---------- 左侧：数据表（主界面也加横向滚动） ----------
+        # 注册后的数据集 ID（训练/保存均依赖它）
+        self._dataset_id: Optional[str] = None
+
+        # 最近一次训练产物（保存时使用）
+        self._trained_model: Optional[Any] = None
+        self._trained_metrics: Optional[Dict[str, Any]] = None
+        self._trained_params: Optional[Dict[str, Any]] = None
+        self._trained_model_type: Optional[str] = None
+
+        # 当前选中（或刚保存）的模型 ID（用于“加载已有模型”时）
+        self._model_id: Optional[str] = None
+
+        # ================= 左侧：数据表格 =================
         self.table = QTableView()
         hh = self.table.horizontalHeader()
-        # 主界面改为“按内容自适应 + 横向滚动”，避免列过多时被挤压
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.table.setAlternatingRowColors(True)
-
-        # ---------- 顶部工具栏 ----------
-        btn_load = QPushButton("加载数据...")
-        btn_load.clicked.connect(self._open_load_dialog)
-
-        btn_template = QPushButton("导出模板")
-        btn_template.clicked.connect(self._save_template)
-
-        self.status_label = QLabel("未训练")
-        self.status_label.setMinimumWidth(120)
-
-        # ---------- 右侧：模型控制区 ----------
-        model_box = QGroupBox("模型与参数")
-        model_layout = QFormLayout()
-
-        # 模型选择：若后端提供 list_models() 则填充；否则允许手动输入
-        self.model_combo = QComboBox()
-        model_names = []
-        if hasattr(self.manager, "list_models"):
-            try:
-                model_names = list(getattr(self.manager, "list_models")())
-            except Exception:
-                model_names = []
-        if not model_names:
-            self.model_combo.setEditable(True)
-            self.model_combo.setPlaceholderText("模型名称（可留空使用默认）")
-        else:
-            self.model_combo.addItems(model_names)
-        model_layout.addRow(QLabel("选择模型"), self.model_combo)
-
-        # 参数 JSON
-        self.param_edit = QTextEdit()
-        self.param_edit.setPlaceholderText('可选：输入参数 JSON，例如 {"learning_rate": 0.01, "max_depth": 6}')
-        self.param_edit.setFixedHeight(90)
-        model_layout.addRow(QLabel("参数(JSON)"), self.param_edit)
-
-        # 时间设置显示（只读，来源于弹窗选择）
-        self.time_info = QLabel("时间列：-   格式：-")
-        model_layout.addRow(QLabel("时间设置"), self.time_info)
-
-        # 按钮：训练/加载/保存模型
-        self.btn_train = QPushButton("训练模型")
-        self.btn_train.clicked.connect(self._train)
-
-        self.btn_load_model = QPushButton("加载已训练模型...")
-        self.btn_load_model.clicked.connect(self._load_model)
-        if not hasattr(self.manager, "load_model"):
-            self.btn_load_model.setEnabled(False)
-
-        self.btn_save_model = QPushButton("保存当前模型...")
-        self.btn_save_model.clicked.connect(self._save_model)
-        if not hasattr(self.manager, "save_model"):
-            self.btn_save_model.setEnabled(False)
-
-        model_layout.addRow(self.btn_train)
-        model_layout.addRow(self.btn_load_model)
-        model_layout.addRow(self.btn_save_model)
-        model_box.setLayout(model_layout)
-
-        # 训练日志/结果
-        self.result_view = QTextEdit()
-        self.result_view.setReadOnly(True)
-
-        # ---------- 总体布局 ----------
-        top_bar = QHBoxLayout()
-        top_bar.addWidget(btn_load)
-        top_bar.addWidget(btn_template)
-        top_bar.addStretch(1)
-        top_bar.addWidget(self.status_label)
 
         left = QVBoxLayout()
-        left.addLayout(top_bar)
         left.addWidget(QLabel("数据预览"))
         left.addWidget(self.table, stretch=1)
-        left.addWidget(QLabel("训练日志 / 结果"))
-        left.addWidget(self.result_view, stretch=1)
 
+        # ================= 右侧：控制面板 =================
         right = QVBoxLayout()
-        right.addWidget(model_box)
-        right.addStretch(1)
 
-        container = QHBoxLayout(self)
-        container.addLayout(left, stretch=3)
-        container.addLayout(right, stretch=2)
+        # 数据集状态与“加载数据”按钮
+        self.dataset_label = QLabel("未加载数据集")
+        right.addWidget(self.dataset_label)
+        btn_load = QPushButton("加载数据…")
+        btn_load.clicked.connect(self._open_load_dialog)
+        right.addWidget(btn_load)
 
-    # ---------- 业务逻辑 ----------
+        # 已保存模型下拉（从注册表读取）
+        right.addWidget(QLabel("选择已保存模型"))
+        self.model_list_combo = QComboBox()
+        self.model_list_combo.currentIndexChanged.connect(self._on_model_selected)
+        right.addWidget(self.model_list_combo)
+        self._refresh_model_list()
 
+        # 模型类型
+        right.addWidget(QLabel("模型类型"))
+        self.model_type_combo = QComboBox()
+        # 可按需补充你后端真实支持的类型
+        self.model_type_combo.addItems(["tsmixer", "timesnet", "示例模型"])
+        right.addWidget(self.model_type_combo)
+
+        # 训练参数 JSON
+        right.addWidget(QLabel("训练参数（JSON）"))
+        self.param_edit = QTextEdit()
+        self.param_edit.setPlaceholderText('{\n  "look_back": 32\n}')
+        right.addWidget(self.param_edit)
+
+        # 训练/保存
+        self.btn_train = QPushButton("训练模型")
+        self.btn_train.clicked.connect(self._on_train)
+        right.addWidget(self.btn_train)
+
+        self.btn_save = QPushButton("保存模型")
+        self.btn_save.clicked.connect(self._on_save_model)
+        right.addWidget(self.btn_save)
+
+        # 状态与结果
+        self.status_label = QLabel("")
+        right.addWidget(self.status_label)
+        self.result_view = QTextEdit()
+        self.result_view.setReadOnly(True)
+        right.addWidget(self.result_view, stretch=1)
+
+        # 总体布局
+        root = QHBoxLayout(self)
+        root.addLayout(left, stretch=3)
+        root.addLayout(right, stretch=2)
+
+    # ============================================================
+    # 数据加载（外部弹窗 → 本地注册数据集）
+    # ============================================================
     def _open_load_dialog(self):
-        """打开“加载数据”弹窗；只有清洗完成的数据才会放入主界面表格。"""
+        """弹出清洗弹窗；确认后注册数据集并在左侧显示。"""
         dlg = DataLoadDialog(self, default_time_fmt=self._time_fmt)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            df = dlg.loaded_dataframe()
-            if df is None:
-                return
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
 
-            # 弹窗保证“缺失清零”，直接载入主界面
-            self._df = df
-            self._data_path = dlg.file_path()
-            self._time_col = dlg.time_column()
-            self._time_fmt = dlg.time_format()
+        df = dlg.loaded_dataframe()
+        if df is None:
+            QMessageBox.warning(self, "提示", "未获取到清洗后的数据。")
+            return
 
-            self.time_info.setText(f"时间列：{self._time_col or '-'}   格式：{self._time_fmt or '-'}")
+        self._time_col = dlg.time_column()
+        self._time_fmt = dlg.time_format()
 
-            # 放入主界面的表格
-            model = DataFrameModel(self._df)
-            self.table.setModel(model)
-            if self._time_col is not None:
-                for col in range(model.columnCount()):
-                    hh = self.table.horizontalHeader()
-                    header_text = model.headerData(col, Qt.Orientation.Horizontal)
-                    if header_text == self._time_col:
-                        hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-                        self.table.resizeColumnsToContents()
-                        hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-                        break
-            # 告知后端（若实现了对应方法）
-            if self._time_col and hasattr(self.manager, "set_time_column"):
-                try:
-                    getattr(self.manager, "set_time_column")(self._time_col)
-                except Exception:
-                    pass
-
-            if hasattr(self.manager, "set_time_format"):
-                try:
-                    getattr(self.manager, "set_time_format")(self._time_fmt)
-                except Exception:
-                    pass
-
-    def _parse_params(self) -> Optional[Dict[str, Any]]:
-        """解析参数 JSON（为空则返回 {}）。"""
-        text = self.param_edit.toPlainText().strip()
-        if not text:
-            return {}
+        # 左侧展示
+        self._df = df.copy()
+        model =DataFrameModel(self._df)
+        self.table.setModel(model)
+        if self._time_col is not None:
+            for col in range(model.columnCount()):
+                hh = self.table.horizontalHeader()
+                header_text = model.headerData(col, Qt.Orientation.Horizontal)
+                if header_text == self._time_col:
+                    hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+                    self.table.resizeColumnsToContents()
+                    hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+                    break
+        # 通过 ModelManager 注册数据集，拿到 dataset_id
         try:
-            params = json.loads(text)
+            manifest = self.manager.register_dataset(df, self._time_col or "", self._time_fmt or "")
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"注册数据集失败：{exc}")
+            return
+        self._dataset_id = manifest.get("dataset_id")
+        self.dataset_label.setText(f"数据集：{self._dataset_id}（行 {manifest.get('n_rows')}, 列 {manifest.get('n_cols')}）")
+
+        # 提前把时间信息传给后端（若有对应方法）
+        if hasattr(self.manager, "set_time_column") and self._time_col:
+            try:
+                self.manager.set_time_column(self._time_col)
+            except Exception:
+                pass
+        if hasattr(self.manager, "set_time_format") and self._time_fmt:
+            try:
+                self.manager.set_time_format(self._time_fmt)
+            except Exception:
+                pass
+
+    # ============================================================
+    # 已保存模型列表 & 选择
+    # ============================================================
+    def _refresh_model_list(self):
+        """从注册表刷新模型列表。"""
+        self.model_list_combo.blockSignals(True)
+        self.model_list_combo.clear()
+        self.model_list_combo.addItem("(无)")
+        try:
+            for meta in self.manager.list_models():
+                text = f"{meta.get('name', meta.get('model_id'))} ({meta.get('model_id')})"
+                self.model_list_combo.addItem(text, userData=meta.get("model_id"))
+        except Exception:
+            pass
+        self.model_list_combo.blockSignals(False)
+
+    def _on_model_selected(self):
+        """选择已保存模型 → 自动加载对应数据集与参数。"""
+        idx = self.model_list_combo.currentIndex()
+        if idx <= 0:
+            return
+        model_id = self.model_list_combo.currentData()
+        if not model_id:
+            return
+
+        try:
+            meta = self.manager.get_model_meta(model_id) or {}
+        except Exception as exc:
+            QMessageBox.warning(self, "提示", f"读取模型元数据失败：{exc}")
+            return
+
+        # 载入数据集
+        dataset_id = meta.get("dataset_id")
+        if dataset_id:
+            try:
+                df = self.manager.load_dataset(dataset_id)
+                self._df = df
+                self._dataset_id = dataset_id
+                self.table.setModel(DataFrameModel(df))
+                self.dataset_label.setText(f"数据集：{dataset_id}（来自模型）")
+            except Exception as exc:
+                QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
+
+        # 回填模型类型 & 参数
+        model_type = meta.get("model_type", "")
+        if model_type and self.model_type_combo.findText(model_type) == -1:
+            self.model_type_combo.addItem(model_type)
+        if model_type:
+            self.model_type_combo.setCurrentText(model_type)
+
+        params = meta.get("params", {})
+        try:
+            self.param_edit.setPlainText(json.dumps(params, ensure_ascii=False, indent=2))
+        except Exception:
+            self.param_edit.setPlainText(str(params))
+
+        metrics = meta.get("metrics", {})
+        self.result_view.setPlainText("\n".join(f"{k}: {v}" for k, v in metrics.items()))
+        self.status_label.setText(f"已加载模型 {model_id}")
+        self._model_id = model_id
+
+        # 清空未保存的训练缓存
+        self._trained_model = None
+        self._trained_metrics = None
+        self._trained_params = None
+        self._trained_model_type = None
+
+    # ============================================================
+    # 训练
+    # ============================================================
+    def _on_train(self):
+        """使用当前数据集与参数训练单一模型。"""
+        if not self._dataset_id:
+            QMessageBox.warning(self, "提示", "请先通过弹窗加载并清洗数据集。")
+            return
+
+        model_type = self.model_type_combo.currentText().strip()
+
+        # 解析参数 JSON
+        try:
+            params = json.loads(self.param_edit.toPlainText().strip() or "{}")
             if not isinstance(params, dict):
-                raise ValueError("参数 JSON 须为对象（形如 {\"key\": value}）。")
-            return params
-        except Exception as e:
-            QMessageBox.warning(self, "参数错误", f"解析参数失败：{e}")
-            return None
-
-    def _apply_model_and_params(self) -> bool:
-        """将模型名与参数（若提供）下发给后端（若后端实现了相关方法）。"""
-        model_name = self.model_combo.currentText().strip()
-        if model_name and hasattr(self.manager, "set_model"):
-            try:
-                getattr(self.manager, "set_model")(model_name)
-            except Exception as e:
-                QMessageBox.warning(self, "提示", f"设置模型失败：{e}")
-                return False
-
-        params = self._parse_params()
-        if params is None:
-            return False
-        if params and hasattr(self.manager, "set_params"):
-            try:
-                getattr(self.manager, "set_params")(params)
-            except Exception as e:
-                QMessageBox.warning(self, "提示", f"设置参数失败：{e}")
-                return False
-        return True
-
-    def _train(self):
-        """训练入口：要求先完成数据加载与清洗。"""
-        if self._df is None:
-            QMessageBox.warning(self, "提示", "请先加载并清洗数据。")
-            return
-        if not self._apply_model_and_params():
+                raise ValueError("参数必须为 JSON 对象。")
+        except Exception as exc:
+            QMessageBox.warning(self, "提示", f"参数解析失败：{exc}")
             return
 
-        self.status_label.setText("训练中...")
+        self.status_label.setText("训练中…")
         self.result_view.clear()
 
-        fmt = self._time_fmt or None
         try:
-            # 兼容旧接口（你当前后端就是这样使用的）
-            self.manager.train(self._data_path, fmt)
-        except Exception as e:
+            result = self.manager.train(self._dataset_id, model_type, params)
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"训练失败：{exc}")
             self.status_label.setText("训练失败")
-            QMessageBox.critical(self, "训练失败", f"{e}")
             return
 
-        # 结果/状态展示（尽量容错）
-        try:
-            self.status_label.setText(getattr(self.manager, "status", "训练完成"))
-            lines = []
-            last_preds = getattr(self.manager, "last_predictions", None)
-            if last_preds is not None:
-                for res in last_preds:
-                    step = res.get("step", "?")
-                    msg = f"第 {step} 步"
-                    if "max_err" in res:
-                        msg += f": max_err={float(pd.Series(res['max_err']).max()):.4f}"
-                    if "mean_err" in res:
-                        msg += f", mean_err={float(pd.Series(res['mean_err']).mean()):.4f}"
-                    lines.append(msg)
-            self.result_view.setPlainText("\n".join(lines) if lines else "训练完成。")
-        except Exception:
-            self.result_view.setPlainText("训练完成。")
+        # 缓存训练结果用于保存
+        self._trained_model = result.get("model")
+        self._trained_metrics = result.get("metrics") or {}
+        self._trained_params = params
+        self._trained_model_type = model_type
 
-    def _load_model(self):
-        """加载已训练模型（若后端实现）。"""
-        if not hasattr(self.manager, "load_model"):
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "选择模型文件", "", "All Files (*)")
-        if not path:
-            return
-        try:
-            getattr(self.manager, "load_model")(path)
-            QMessageBox.information(self, "成功", "模型加载完成。")
-        except Exception as e:
-            QMessageBox.critical(self, "失败", f"加载模型失败：{e}")
+        # 展示指标与额外信息
+        lines = [f"{k}: {v}" for k, v in self._trained_metrics.items()]
+        extra = result.get("extra", {})
+        if extra:
+            lines.append("预测值: " + str(extra.get("prediction", {})))
+            lines.append("真实值: " + str(extra.get("last_true", {})))
+        self.result_view.setPlainText("\n".join(lines) or "训练完成。")
+        self.status_label.setText("训练完成（未保存）")
 
-    def _save_model(self):
-        """保存当前模型（若后端实现）。"""
-        if not hasattr(self.manager, "save_model"):
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "保存模型为", "model.bin", "All Files (*)")
-        if not path:
-            return
-        try:
-            getattr(self.manager, "save_model")(path)
-            QMessageBox.information(self, "成功", "模型保存完成。")
-        except Exception as e:
-            QMessageBox.critical(self, "失败", f"保存模型失败：{e}")
+        # 新训练的模型，清空已选模型 ID
+        self._model_id = None
 
-    def _save_template(self):
-        """导出一个最小 Excel 模板供参考。"""
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存模板", "time_series_template.xlsx", "Excel Files (*.xlsx)"
-        )
-        if not path:
+    # ============================================================
+    # 保存
+    # ============================================================
+    def _on_save_model(self):
+        """保存当前训练结果为新模型，并刷新模型列表。"""
+        if self._trained_model is None or self._trained_metrics is None:
+            QMessageBox.warning(self, "提示", "请先训练模型，再保存。")
             return
-        df = pd.DataFrame(
-            {
-                "TIME": ["2024年01月01日0000", "2024年01月01日0100"],
-                "value1": [1.0, 1.5],
-                "value2": [2.0, 2.5],
-            }
-        )
+        if not self._dataset_id:
+            QMessageBox.warning(self, "提示", "缺少数据集 ID，无法保存模型。")
+            return
+
+        name, ok = QInputDialog.getText(self, "模型名称", "请输入模型名称：")
+        if not ok or not name.strip():
+            return
+
         try:
-            df.to_excel(path, index=False)
-        except Exception as e:
-            QMessageBox.critical(self, "失败", f"保存模板失败：{e}")
+            model_id = self.manager.save_model(
+                model_id=None,
+                name=name.strip(),
+                model_type=self._trained_model_type or self.model_type_combo.currentText(),
+                dataset_id=self._dataset_id,
+                params=self._trained_params or {},
+                model_obj=self._trained_model,
+                metrics=self._trained_metrics or {},
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"保存模型失败：{exc}")
             return
-        QMessageBox.information(self, "成功", f"已保存模板：{path}")
+
+        self.status_label.setText(f"模型已保存：{model_id}")
+        QMessageBox.information(self, "成功", f"模型已保存为 {model_id}")
+        self._refresh_model_list()
