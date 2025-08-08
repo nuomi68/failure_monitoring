@@ -89,49 +89,76 @@ class TimeSeriesPage(QWidget):
         # ================= 右侧：控制面板 =================
         right = QVBoxLayout()
 
-        # 数据集状态与“加载数据”按钮
+        # —— 顶部状态 ——
         self.dataset_label = QLabel("未加载数据集")
+        self.dataset_label.setWordWrap(True)
         right.addWidget(self.dataset_label)
-        btn_load = QPushButton("加载数据…")
-        btn_load.clicked.connect(self._open_load_dialog)
-        right.addWidget(btn_load)
 
-        # 已保存模型下拉（从注册表读取）
-        right.addWidget(QLabel("选择已保存模型"))
+        # —— 表单区域：模型与参数 ——
+        from PyQt6.QtWidgets import QFormLayout, QGroupBox, QGridLayout, QSizePolicy, QSpacerItem
+
+        form_box = QGroupBox("模型与参数")
+        form = QFormLayout(form_box)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        # 已保存模型
         self.model_list_combo = QComboBox()
         self.model_list_combo.currentIndexChanged.connect(self._on_model_selected)
-        right.addWidget(self.model_list_combo)
+        form.addRow("已保存模型", self.model_list_combo)
         self._refresh_model_list()
 
         # 模型类型
-        right.addWidget(QLabel("模型类型"))
         self.model_type_combo = QComboBox()
-        # 后端可选模型
         self.model_type_combo.addItems(["gru", "tcn", "tsmixer", "rf", "xgb", "timesnet"])
-        right.addWidget(self.model_type_combo)
+        form.addRow("模型类型", self.model_type_combo)
 
         # 训练参数
-        right.addWidget(QLabel("训练参数"))
         self.param_panel = ParamPanel(self.manager, self)
-        right.addWidget(self.param_panel)
+        form.addRow("训练参数", self.param_panel)
 
-        # 训练/保存
-        self.btn_train = QPushButton("训练模型")
-        self.btn_train.clicked.connect(self._on_train)
-        right.addWidget(self.btn_train)
+        right.addWidget(form_box)
 
-        self.btn_save = QPushButton("保存模型")
+        # —— 操作区域：两列按钮网格 ——
+        ops_box = QGroupBox("操作")
+        ops = QGridLayout(ops_box)
+        ops.setHorizontalSpacing(8)
+        ops.setVerticalSpacing(8)
+
+        def _prep_btn(btn: QPushButton, primary: bool = False):
+            btn.setMinimumHeight(36)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            if primary:
+                btn.setStyleSheet("font-weight:600;")
+            return btn
+
+        btn_load = _prep_btn(QPushButton("加载数据…"))
+        btn_load.clicked.connect(self._open_load_dialog)
+
+        self.btn_save = _prep_btn(QPushButton("保存模型"))
         self.btn_save.clicked.connect(self._on_save_model)
-        right.addWidget(self.btn_save)
 
-        self.btn_predict = QPushButton("预测下一步")
+        self.btn_train = _prep_btn(QPushButton("训练模型"), primary=True)
+        self.btn_train.clicked.connect(self._on_train)
+
+        self.btn_predict = _prep_btn(QPushButton("预测下一步"), primary=True)
         self.btn_predict.setEnabled(False)
         self.btn_predict.clicked.connect(self._on_predict)
-        right.addWidget(self.btn_predict)
 
-        # 状态与结果
+        # 2×2 栅格排布
+        ops.addWidget(btn_load, 0, 0)
+        ops.addWidget(self.btn_save, 0, 1)
+        ops.addWidget(self.btn_train, 1, 0)
+        ops.addWidget(self.btn_predict, 1, 1)
+
+        right.addWidget(ops_box)
+
+        # —— 状态栏（置底） ——
         self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
         right.addWidget(self.status_label)
+
+        # 填充弹性，推送状态栏到底部
+        right.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
         # 总体布局
         root = QHBoxLayout(self)
