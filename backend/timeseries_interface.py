@@ -578,3 +578,6 @@ class ModelManager:
             "timesnet": {"lr": 1e-3, "d_model": 32, "num_blocks": 3},
         }
         return presets.get(model_type, {})
+
+    def get_all_model_name(self):
+        return MODEL_REGISTRY.keys()

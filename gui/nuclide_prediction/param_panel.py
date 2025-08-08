@@ -4,7 +4,7 @@
 """
 from typing import Any, Dict
 from PyQt6.QtWidgets import (
-    QWidget, QFormLayout, QSpinBox, QPushButton, QDialog,
+    QWidget, QFormLayout, QSpinBox, QPushButton, QDialog,QComboBox,
     QDialogButtonBox, QLineEdit, QMessageBox
 )
 
@@ -91,12 +91,19 @@ class ParamPanel(QWidget):
     # ------------------------------------------------------------------ #
     def _open_adv_dialog(self) -> None:
         # 从主窗口拿当前模型类型
-        main = self.window()
-        model_type = self.parent().model_type_combo
-        if model_type is None or not model_type.currentText().strip():
+        combo: QComboBox | None = self.window().findChild(QComboBox, "model_type_combo")
+
+        if combo is None:
+            w = self.parentWidget()
+            while w is not None and not hasattr(w, "model_type_combo"):
+                w = w.parentWidget()
+            if w is not None:
+                combo = getattr(w, "model_type_combo", None)
+
+        if combo is None or not combo.currentText().strip():
             QMessageBox.warning(self, "提示", "请先选择模型类型")
             return
-        model_type = model_type.currentText().strip()
+        model_type = combo.currentText().strip()
 
         # ❶ 后端拉取高级参数模版（需在 ModelManager 实现 get_advanced_params）
         try:

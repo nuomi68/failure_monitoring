@@ -23,7 +23,8 @@ import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,QFormLayout,
+    QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
     QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog,QStyledItemDelegate
 )
 
@@ -46,6 +47,8 @@ class SolidColorDelegate(QStyledItemDelegate):
        if bg:
            painter.fillRect(option.rect, bg)
        super().paint(painter, option, index)
+
+
 class TimeSeriesPage(QWidget):
     """主页面：左侧数据表 + 右侧模型控制（单模型工作流）。"""
 
@@ -93,9 +96,27 @@ class TimeSeriesPage(QWidget):
         self.dataset_label = QLabel("未加载数据集")
         self.dataset_label.setWordWrap(True)
         right.addWidget(self.dataset_label)
+        top_btn_box = QWidget()  # 创建一个容器 Widget
+        top_btn_layout = QHBoxLayout(top_btn_box)  # 使用水平布局
+        top_btn_layout.setContentsMargins(0, 0, 0, 0)  # 移除默认边距
 
-        # —— 表单区域：模型与参数 ——
-        from PyQt6.QtWidgets import QFormLayout, QGroupBox, QGridLayout, QSizePolicy, QSpacerItem
+        def _prep_btn(btn: QPushButton, primary: bool = False):
+            btn.setMinimumHeight(36)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            if primary:
+                btn.setStyleSheet("font-weight:600;")
+            return btn
+
+        btn_load = _prep_btn(QPushButton("加载数据"))
+        btn_load.clicked.connect(self._open_load_dialog)
+        top_btn_layout.addWidget(btn_load)
+
+        # 模型管理按钮
+        self.btn_model_mgr = _prep_btn(QPushButton("加载模型"))
+        self.btn_model_mgr.clicked.connect(self._open_model_manager)
+        top_btn_layout.addWidget(self.btn_model_mgr)
+
+        right.addWidget(top_btn_box)
 
         form_box = QGroupBox("模型与参数")
         form = QFormLayout(form_box)
@@ -109,7 +130,9 @@ class TimeSeriesPage(QWidget):
 
         # 模型类型
         self.model_type_combo = QComboBox()
-        self.model_type_combo.addItems(["gru", "tcn", "tsmixer", "rf", "xgb", "timesnet"])
+        all_model =self.manager.get_all_model_name()
+        self.model_type_combo.addItems(all_model)
+        self.model_type_combo.setObjectName("model_type_combo")
         form.addRow("模型类型", self.model_type_combo)
 
         # 训练参数
@@ -124,16 +147,6 @@ class TimeSeriesPage(QWidget):
         ops.setHorizontalSpacing(8)
         ops.setVerticalSpacing(8)
 
-        def _prep_btn(btn: QPushButton, primary: bool = False):
-            btn.setMinimumHeight(36)
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            if primary:
-                btn.setStyleSheet("font-weight:600;")
-            return btn
-
-        btn_load = _prep_btn(QPushButton("加载数据…"))
-        btn_load.clicked.connect(self._open_load_dialog)
-
         self.btn_save = _prep_btn(QPushButton("保存模型"))
         self.btn_save.clicked.connect(self._on_save_model)
 
@@ -145,10 +158,10 @@ class TimeSeriesPage(QWidget):
         self.btn_predict.clicked.connect(self._on_predict)
 
         # 2×2 栅格排布
-        ops.addWidget(btn_load, 0, 0)
+        ops.addWidget(self.btn_train, 0, 0)
         ops.addWidget(self.btn_save, 0, 1)
-        ops.addWidget(self.btn_train, 1, 0)
-        ops.addWidget(self.btn_predict, 1, 1)
+        ops.addWidget(self.btn_predict, 1, 0)
+        #ops.addWidget(, 1, 1)
 
         right.addWidget(ops_box)
 
@@ -346,6 +359,7 @@ class TimeSeriesPage(QWidget):
         for k, v in self._trained_metrics.items():
             logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
+        self._df = self._base_df.copy()
         self._orig_rows = len(self._df) if self._df is not None else 0
         self._ensure_blank_row()
         self._init_input_window()
