@@ -270,7 +270,8 @@ class TimeSeriesPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "提示", f"加载模型失败：{exc}")
             return
-
+        self._time_col = meta.get("time_col")
+        self._time_fmt = meta.get("time_format")
         dataset_id = meta.get("dataset_id")
         if dataset_id:
             try:
@@ -289,6 +290,16 @@ class TimeSeriesPage(QWidget):
                 self.btn_predict.setEnabled(True)
                 # 回填特征选择（若模型保存了 feature_cols）
                 feat = meta.get("params", {}).get("feature_cols")
+                if hasattr(self.manager, "set_time_column") and self._time_col:
+                    try:
+                        self.manager.set_time_column(self._time_col)
+                    except Exception:
+                        pass
+                if hasattr(self.manager, "set_time_format") and self._time_fmt:
+                    try:
+                        self.manager.set_time_format(self._time_fmt)
+                    except Exception:
+                        pass
                 cols_for_selector = [c for c in self._base_df.columns.tolist() if c != (self._time_col or "")]
                 self.feature_selector.set_columns(cols_for_selector)
                 if isinstance(feat, list) and feat:
