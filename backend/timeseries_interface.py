@@ -260,6 +260,84 @@ class ModelManager:
 
         return list(self.models_registry.values())
 
+    # ---------- 模型维护 API ----------
+    def rename_model(self, model_id: str, new_name: str) -> bool:
+        """仅修改注册表中的 name 字段。"""
+        try:
+            if model_id not in self.models_registry:
+                return False
+            self.models_registry[model_id]["name"] = new_name
+            self._write_json(self.models_registry, self.models_registry_file)
+            return True
+        except Exception:
+            return False
+
+    def delete_model(self, model_id: str) -> bool:
+        """删除注册表条目并清理模型目录/文件。"""
+        import shutil
+        try:
+            meta = self.models_registry.pop(model_id, None)
+            if meta:
+                model_path = self.artifacts_dir / meta["artifacts"]["model_path"]
+                shutil.rmtree(model_path.parent, ignore_errors=True)
+            self._write_json(self.models_registry, self.models_registry_file)
+            return True
+        except Exception:
+            return False
+
+    def export_model(self, model_id: str, out_zip_path: str) -> bool:
+        """打包模型目录及 meta.json 为 zip。"""
+        import os, json, zipfile
+        try:
+            if model_id not in self.models_registry:
+                return False
+            meta = self.models_registry[model_id]
+            model_dir = (self.artifacts_dir / meta["artifacts"]["model_path"]).parent
+            with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for root, _, files in os.walk(model_dir):
+                    for f in files:
+                        p = os.path.join(root, f)
+                        zf.write(p, arcname=os.path.relpath(p, model_dir))
+                zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+            return True
+        except Exception:
+            return False
+
+    def import_model(self, zip_path: str) -> bool:
+        """从 zip 包导入模型并登记注册表。"""
+        import zipfile, json, uuid, os
+        try:
+            if not os.path.exists(zip_path):
+                return False
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                try:
+                    meta = json.loads(zf.read("meta.json").decode("utf-8"))
+                except Exception:
+                    meta = {}
+                new_id = meta.get("model_id")
+                while (not new_id) or (new_id in self.models_registry):
+                    new_id = uuid.uuid4().hex[:8]
+                meta["model_id"] = new_id
+                target_dir = self.models_dir / new_id
+                target_dir.mkdir(parents=True, exist_ok=True)
+                for name in zf.namelist():
+                    if name.endswith("/") or name == "meta.json":
+                        continue
+                    out = target_dir / name
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out, "wb") as f:
+                        f.write(zf.read(name))
+                meta["artifacts"] = {
+                    "model_path": str((target_dir / "model.pkl").relative_to(self.artifacts_dir)),
+                    "config_path": str((target_dir / "config.json").relative_to(self.artifacts_dir)),
+                    "metrics_path": str((target_dir / "metrics.json").relative_to(self.artifacts_dir)),
+                }
+                self.models_registry[new_id] = meta
+                self._write_json(self.models_registry, self.models_registry_file)
+            return True
+        except Exception:
+            return False
+
     def train(
         self,
         dataset_id: str,

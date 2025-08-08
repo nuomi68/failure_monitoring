@@ -33,6 +33,7 @@ from backend.timeseries_interface import ModelManager
 from gui.tools import logger,TrainWorker
 
 from .data_load_dialog import DataLoadDialog, DataFrameModel
+from .model_manager_dialog import ModelManagerDialog
 from .param_panel import ParamPanel
 
 # ========================== 行配色常量 ========================== #
@@ -121,12 +122,6 @@ class TimeSeriesPage(QWidget):
         form_box = QGroupBox("模型与参数")
         form = QFormLayout(form_box)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        # 已保存模型
-        self.model_list_combo = QComboBox()
-        self.model_list_combo.currentIndexChanged.connect(self._on_model_selected)
-        form.addRow("已保存模型", self.model_list_combo)
-        self._refresh_model_list()
 
         # 模型类型
         self.model_type_combo = QComboBox()
@@ -234,43 +229,20 @@ class TimeSeriesPage(QWidget):
                 self.manager.set_time_format(self._time_fmt)
             except Exception:
                 pass
+    # ---------- 模型管理 ----------
+    def _open_model_manager(self):
+        dlg = ModelManagerDialog(self.manager, self)
+        dlg.model_loaded.connect(self._load_model_by_id)
+        dlg.exec()
 
-    # ============================================================
-    # 已保存模型列表 & 选择
-    # ============================================================
-    def _refresh_model_list(self):
-        """从注册表刷新模型列表。"""
-        self.model_list_combo.blockSignals(True)
-        self.model_list_combo.clear()
-        self.model_list_combo.addItem("(无)")
+    def _load_model_by_id(self, model_id: str):
         try:
-            valid_models = self.manager.refresh_models()
-            for meta in valid_models:
-                text = f"{meta.get('name', meta.get('model_id'))} ({meta.get('model_id')})"
-                self.model_list_combo.addItem(text, userData=meta.get("model_id"))
-        except Exception:
-            pass
-        self.model_list_combo.blockSignals(False)
-
-    def _on_model_selected(self):
-        """选择已保存模型 → 自动加载对应数据集与参数。"""
-        idx = self.model_list_combo.currentIndex()
-        if idx <= 0:
-            return
-        model_id = self.model_list_combo.currentData()
-        if not model_id:
-            return
-
-        try:
-            load_ret = self.manager.load_model(model_id)  # <-- 关键补丁
+            load_ret = self.manager.load_model(model_id)
             meta = load_ret["meta"]
         except Exception as exc:
-          # 如果文件丢了，再刷新一次列表并提示
-            self._refresh_model_list()
             QMessageBox.warning(self, "提示", f"加载模型失败：{exc}")
             return
 
-        # 载入数据集
         dataset_id = meta.get("dataset_id")
         if dataset_id:
             try:
@@ -290,7 +262,6 @@ class TimeSeriesPage(QWidget):
             except Exception as exc:
                 QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
 
-        # 回填模型类型 & 参数
         model_type = meta.get("model_type", "")
         if model_type and self.model_type_combo.findText(model_type) == -1:
             self.model_type_combo.addItem(model_type)
@@ -308,20 +279,16 @@ class TimeSeriesPage(QWidget):
 
         self._look_back = int(meta.get("params", {}).get("look_back", self._look_back))
 
-        # 清空未保存的训练缓存
         self._trained_model = None
         self._trained_metrics = None
         self._trained_params = None
         self._trained_model_type = None
 
         self._ensure_blank_row()
-
-        # 2) 初始化绿色输入窗口（look_back 行、pending 行状态）
         self._init_input_window()
-
-        # 3) 启用预测按钮，滚动到最底
         self.btn_predict.setEnabled(True)
         self.table.scrollToBottom()
+
     # ============================================================
     # 训练
     # ============================================================
@@ -398,7 +365,7 @@ class TimeSeriesPage(QWidget):
 
         self.status_label.setText(f"模型已保存：{model_id}")
         QMessageBox.information(self, "成功", f"模型已保存为 {model_id}")
-        self._refresh_model_list()
+
 
     # ============================================================
     # 预测与表格辅助
