@@ -23,9 +23,9 @@ import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog,QStyledItemDelegate
+    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog, QStyledItemDelegate
 )
 
 # —— 后端 ——
@@ -35,6 +35,7 @@ from gui.tools import logger,TrainWorker
 from .data_load_dialog import DataLoadDialog, DataFrameModel
 from .model_manager_dialog import ModelManagerDialog
 from .param_panel import ParamPanel
+from ..feature_selector_widget import FeatureSelectorWidget
 
 # ========================== 行配色常量 ========================== #
 GREEN = QColor(Qt.GlobalColor.green).lighter(160)
@@ -77,6 +78,8 @@ class TimeSeriesPage(QWidget):
 
         # 训练时已有的行数（用于识别新增观测）
         self._orig_rows: int = 0
+        # 当前选择用于训练/预测的特征列（默认全选，不含时间列）
+        self._feature_cols: list[str] = []
 
         # ================= 左侧：数据表格 =================
         self.table = QTableView()
@@ -135,6 +138,14 @@ class TimeSeriesPage(QWidget):
         form.addRow("训练参数", self.param_panel)
 
         right.addWidget(form_box)
+
+        # —— 特征选择（来自 data_handle 的“字段选择”思路，做成可复用组件） ——
+        self.fs_box = QGroupBox("特征选择（默认全选）")
+        fs_v = QVBoxLayout(self.fs_box)
+        self.feature_selector = FeatureSelectorWidget(self.fs_box)
+        self.feature_selector.selectionChanged.connect(self._on_feature_selection_changed)
+        fs_v.addWidget(self.feature_selector)
+        right.addWidget(self.fs_box)
 
         # —— 操作区域：两列按钮网格 ——
         ops_box = QGroupBox("操作")
@@ -218,6 +229,13 @@ class TimeSeriesPage(QWidget):
         self.btn_predict.setEnabled(False)
         self._orig_rows = 0
 
+        # 初始化“特征选择”：默认全选（去掉时间列）
+        cols_for_selector = [c for c in self._base_df.columns.tolist() if c != (self._time_col or "")]
+        self.feature_selector.set_columns(cols_for_selector)
+        self._feature_cols = cols_for_selector
+        # 由选择同步一次 _df（虽然现在等于全选）
+        self._rebuild_work_df()
+
         # 提前把时间信息传给后端（若有对应方法）
         if hasattr(self.manager, "set_time_column") and self._time_col:
             try:
@@ -259,6 +277,14 @@ class TimeSeriesPage(QWidget):
                 self.btn_predict.setEnabled(False)
                 self._orig_rows = 0
                 self.btn_predict.setEnabled(True)
+                # 回填特征选择（若模型保存了 feature_cols）
+                feat = meta.get("params", {}).get("feature_cols")
+                cols_for_selector = [c for c in self._base_df.columns.tolist() if c != (self._time_col or "")]
+                self.feature_selector.set_columns(cols_for_selector)
+                if isinstance(feat, list) and feat:
+                    self.feature_selector.set_selected([c for c in feat if c in cols_for_selector])
+                self._feature_cols = self.feature_selector.selected()
+                self._rebuild_work_df()
             except Exception as exc:
                 QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
 
@@ -299,11 +325,12 @@ class TimeSeriesPage(QWidget):
         self.status_label.setText("训练中…")
         self.btn_train.setEnabled(False)
 
+        params = {**self.param_panel.params(), "feature_cols": list(self._feature_cols)}
         w = TrainWorker(
             self.manager,
             self._dataset_id,
             self.model_type_combo.currentText().strip(),
-            self.param_panel.params(),
+            params,
             self
         )
         w.log_sig.connect(lambda m: logger.info(m))  # 日志滚动
@@ -326,7 +353,8 @@ class TimeSeriesPage(QWidget):
         for k, v in self._trained_metrics.items():
             logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
-        self._df = self._base_df.copy()
+        # 训练使用的是选择后的 df，但 _base_df 保持完整
+        self._rebuild_work_df()
         self._orig_rows = len(self._df) if self._df is not None else 0
         self._ensure_blank_row()
         self._init_input_window()
@@ -355,7 +383,8 @@ class TimeSeriesPage(QWidget):
                 name=name.strip(),
                 model_type=self._trained_model_type or self.model_type_combo.currentText(),
                 dataset_id=self._dataset_id,
-                params=self._trained_params or {},
+                # 把所选特征一并保存到 params，方便下次加载回填
+                params={**(self._trained_params or {}), "feature_cols": list(self._feature_cols)},
                 model_obj=self._trained_model,
                 metrics=self._trained_metrics or {},
             )
@@ -397,6 +426,28 @@ class TimeSeriesPage(QWidget):
             mdl.set_row_color(self._pend_row, PEND)
         if self._pred_row is not None:
             mdl.set_row_color(self._pred_row, BLUE)
+
+    # --------- 特征选择回调 --------- #
+    def _on_feature_selection_changed(self, cols: list[str]):
+        """当用户调整特征列时刷新工作数据表"""
+        self._feature_cols = cols
+        self._rebuild_work_df()
+
+    def _rebuild_work_df(self):
+        """根据当前选择的特征列重建 _df 并刷新表格模型"""
+        if self._base_df is None:
+            self._df = None
+            self._set_table_model(pd.DataFrame())
+            return
+        cols = []
+        if self._time_col and self._time_col in self._base_df.columns:
+            cols.append(self._time_col)
+        if self._feature_cols:
+            cols.extend([c for c in self._feature_cols if c in self._base_df.columns and c != self._time_col])
+        else:
+            cols.extend([c for c in self._base_df.columns if c != self._time_col])
+        self._df = self._base_df[cols].copy()
+        self._set_table_model(self._df)
 
     # --------- 训练完成后初始化窗口 --------- #
     def _init_input_window(self):
