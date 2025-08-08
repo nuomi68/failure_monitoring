@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 import  torch
 import numpy as np
 import pandas as pd
+import joblib
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass, field
@@ -466,10 +467,15 @@ class ModelManager:
         model_dir = self.models_dir / model_id
         model_dir.mkdir(parents=True, exist_ok=True)
 
-        # 保存模型对象（示例将字典保存为 JSON）
-        model_path = model_dir / "model.json"
-        with open(model_path, "w", encoding="utf-8") as f:
-            json.dump(model_obj, f, ensure_ascii=False, indent=2)
+        if isinstance(model_obj, str) and model_obj.startswith("in-memory:"):
+            in_mem_type = model_obj.split(":", 1)[1]
+            real = _RuntimeSingleton.get().trained_models.get(in_mem_type)
+            if real is None:
+                raise ValueError("内存中找不到对应已训练模型，请先训练后再保存。")
+            model_obj = real
+        # 保存模型对象到二进制文件，避免字符串化导致加载后类型错误
+        model_path = model_dir / "model.pkl"
+        joblib.dump(model_obj, model_path)
 
         # 保存参数和指标
         config_path = model_dir / "config.json"
@@ -477,7 +483,8 @@ class ModelManager:
         self._write_json(params, config_path)
         self._write_json(metrics, metrics_path)
 
-        # 更新模型注册表
+        # 更新模型注册表，附带训练所用特征列
+        rt = _RuntimeSingleton.get()
         meta = {
             "model_id": model_id,
             "name": name,
@@ -491,6 +498,7 @@ class ModelManager:
             },
             "params": params,
             "metrics": metrics,
+            "feature_names": rt.feature_names or [],
         }
         self.models_registry[model_id] = meta
         self._write_json(self.models_registry, self.models_registry_file)
@@ -511,8 +519,12 @@ class ModelManager:
 
         meta = self.models_registry[model_id]
         model_path = self.artifacts_dir / meta["artifacts"]["model_path"]
-        with open(model_path, "r", encoding="utf-8") as f:
-            model_obj = json.load(f)
+        # 使用 joblib 反序列化模型；若旧模型仍为 JSON，保留回退处理
+        if model_path.suffix == ".json":
+            with open(model_path, "r", encoding="utf-8") as f:
+                model_obj = json.load(f)
+        else:
+            model_obj = joblib.load(model_path)
 
         # 载入数据集并恢复运行时状态，便于后续预测
         dataset_id = meta.get("dataset_id")
@@ -522,16 +534,28 @@ class ModelManager:
             self._write_json(self.models_registry, self.models_registry_file)
             raise KeyError(f"模型关联的数据集 {dataset_id} 不存在")
         df = self.load_dataset(dataset_id)
-        time_col = self.datasets_registry[dataset_id]["time_col"]
-        feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
-        if feat_df.empty:
-            raise ValueError("数据集中不包含数值列，无法加载模型。")
+
+        feature_names = meta.get("feature_names")
+        if feature_names:
+            try:
+                feat_df = df[feature_names].astype(float)
+            except KeyError as exc:
+                raise ValueError(f"数据集中缺少列: {exc}") from exc
+        else:
+            time_col = self.datasets_registry[dataset_id]["time_col"]
+            feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
+            if feat_df.empty:
+                raise ValueError("数据集中不包含数值列，无法加载模型。")
+            feature_names = feat_df.columns.tolist()
 
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(feat_df.values.astype(float))
-        feature_names = feat_df.columns.tolist()
 
+        # ---- 在加载阶段也需构造与训练完成后一致的运行时状态 ----
+        # 避免旧状态残留，先重置再写入
+        _RuntimeSingleton.reset()
         rt = _RuntimeSingleton.get()
+
         model_type = meta.get("model_type")
         rt.trained_models[model_type] = model_obj
         look_back = int(meta.get("params", {}).get("look_back", DATA_CFG.get(model_type, 14)))
@@ -540,7 +564,6 @@ class ModelManager:
         rt.feature_names = feature_names
         rt.data_scaled = data_scaled
         rt.dataset_id = dataset_id
-
 
         return {"model": model_obj, "meta": meta}
 

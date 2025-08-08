@@ -24,7 +24,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView,
-    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog
+    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog,QStyledItemDelegate
 )
 
 # —— 后端 ——
@@ -204,7 +204,8 @@ class TimeSeriesPage(QWidget):
         self.model_list_combo.clear()
         self.model_list_combo.addItem("(无)")
         try:
-            for meta in self.manager.list_models():
+            valid_models = self.manager.refresh_models()
+            for meta in valid_models:
                 text = f"{meta.get('name', meta.get('model_id'))} ({meta.get('model_id')})"
                 self.model_list_combo.addItem(text, userData=meta.get("model_id"))
         except Exception:
@@ -221,9 +222,12 @@ class TimeSeriesPage(QWidget):
             return
 
         try:
-            meta = self.manager.get_model_meta(model_id) or {}
+            load_ret = self.manager.load_model(model_id)  # <-- 关键补丁
+            meta = load_ret["meta"]
         except Exception as exc:
-            QMessageBox.warning(self, "提示", f"读取模型元数据失败：{exc}")
+          # 如果文件丢了，再刷新一次列表并提示
+            self._refresh_model_list()
+            QMessageBox.warning(self, "提示", f"加载模型失败：{exc}")
             return
 
         # 载入数据集
@@ -233,6 +237,7 @@ class TimeSeriesPage(QWidget):
                 df = self.manager.load_dataset(dataset_id)
                 self._base_df = df.copy()
                 self._df = self._base_df.copy()
+                self._orig_rows = len(self._df)
                 self._dataset_id = dataset_id
                 self._input_rows = None
                 self._pend_row = None
@@ -241,6 +246,7 @@ class TimeSeriesPage(QWidget):
                 self.dataset_label.setText(f"数据集：{dataset_id}（来自模型）")
                 self.btn_predict.setEnabled(False)
                 self._orig_rows = 0
+                self.btn_predict.setEnabled(True)
             except Exception as exc:
                 QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
 
@@ -260,12 +266,22 @@ class TimeSeriesPage(QWidget):
         self.status_label.setText(f"已加载模型 {model_id}")
         self._model_id = model_id
 
+        self._look_back = int(meta.get("params", {}).get("look_back", self._look_back))
+
         # 清空未保存的训练缓存
         self._trained_model = None
         self._trained_metrics = None
         self._trained_params = None
         self._trained_model_type = None
 
+        self._ensure_blank_row()
+
+        # 2) 初始化绿色输入窗口（look_back 行、pending 行状态）
+        self._init_input_window()
+
+        # 3) 启用预测按钮，滚动到最底
+        self.btn_predict.setEnabled(True)
+        self.table.scrollToBottom()
     # ============================================================
     # 训练
     # ============================================================
@@ -404,20 +420,22 @@ class TimeSeriesPage(QWidget):
 
     def _register_new_prediction(self):
         self._pred_row = len(self._df) - 1
-        self._ensure_blank_row()
+        self._ensure_blank_row(force=True)
         self._pend_row = len(self._df) - 1
         self._apply_row_colors()
         self._orig_rows = len(self._df) - 1
 
-    def _ensure_blank_row(self):
+    def _ensure_blank_row(self, force: bool = False):
         if self._df is None:
             return
-        if self._df.empty or self._df.iloc[-1].notna().all():
-            new_row = [pd.NA] * len(self._df.columns)
-            if self._time_col and self._time_col in self._df.columns:
-                idx = self._df.columns.get_loc(self._time_col)
-                new_row[idx] = ""
-            self._df.loc[len(self._df)] = new_row
+        need_new = force or self._df.empty or self._df.iloc[-1].notna().all()
+        if need_new:
+            # 重置成 RangeIndex，保证索引 0,1,2…
+            self._df = self._df.reset_index(drop=True)
+            new_len = len(self._df) + 1
+            self._df = self._df.reindex(range(new_len))
+            if self._time_col in self._df.columns:
+                self._df.iat[new_len - 1, self._df.columns.get_loc(self._time_col)] = " "
             mdl = self.table.model()
             if hasattr(mdl, "setDataFrame"):
                 mdl.setDataFrame(self._df)
@@ -436,7 +454,7 @@ class TimeSeriesPage(QWidget):
             new_part = new_part.dropna(subset=subset, how="any")
         else:
             new_part = new_part.dropna(how="any")
-        new_part = new_part.apply(pd.to_numeric, errors="ignore")
+        new_part = new_part.apply(pd.to_numeric)
         if not new_part.empty:
             try:
                 self.manager.append_observations(new_part)

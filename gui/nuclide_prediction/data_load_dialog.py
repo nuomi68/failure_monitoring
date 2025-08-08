@@ -66,6 +66,7 @@ class DataFrameModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._df.columns)
 
+    FLOAT_FMT = "%.6g"
     # 单元格数据与显示角色
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
