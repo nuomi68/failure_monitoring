@@ -578,6 +578,7 @@ class ModelManager:
 
         # 更新模型注册表，附带训练所用特征列
         rt = _RuntimeSingleton.get()
+        dataset_meta = self.datasets_registry.get(dataset_id, {})
         meta = {
             "model_id": model_id,
             "name": name,
@@ -592,6 +593,8 @@ class ModelManager:
             "params": params,
             "metrics": metrics,
             "feature_names": rt.feature_names or [],
+            "time_col": dataset_meta.get("time_col"),
+            "time_format": dataset_meta.get("time_format"),
         }
         self.models_registry[model_id] = meta
         self._write_json(self.models_registry, self.models_registry_file)
@@ -611,6 +614,10 @@ class ModelManager:
             raise KeyError(f"未找到模型 {model_id}")
 
         meta = self.models_registry[model_id]
+        if "time_col" not in meta or meta.get("time_col") is None:
+            ds_meta = self.datasets_registry.get(meta.get("dataset_id", ""), {})
+            meta["time_col"] = ds_meta.get("time_col")
+            meta["time_format"] = ds_meta.get("time_format")
         model_path = self.artifacts_dir / meta["artifacts"]["model_path"]
         # 使用 joblib 反序列化模型；若旧模型仍为 JSON，保留回退处理
         if model_path.suffix == ".json":
