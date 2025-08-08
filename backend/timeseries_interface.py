@@ -228,6 +228,15 @@ class ModelManager:
         """获取某一模型的元数据，如果不存在则返回 ``None``。"""
         return self.models_registry.get(model_id)
 
+
+
+    def current_feature_names(self):
+        """返回运行时中模型训练用的特征列（若尚未训练则为 None）"""
+        try:
+            return _RuntimeSingleton.get().feature_names
+        except Exception:
+            return None
+
     def refresh_models(self) -> List[Dict[str, Any]]:
         """刷新模型与数据集注册表，清理已失效的记录。
 
@@ -348,7 +357,7 @@ class ModelManager:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
         """
-        # 1) 校验并载入数据
+        # 校验并载入数据
         if dataset_id in self.datasets_cache:
             df = self.datasets_cache[dataset_id]["df"]
             time_col = self.datasets_cache[dataset_id]["time_col"]
@@ -358,7 +367,7 @@ class ModelManager:
         else:
             raise KeyError(f"未找到数据集 {dataset_id}")
 
-        # 2) 只用数值特征（去掉时间列），并按需筛选特征列
+        # 只用数值特征（去掉时间列），并按需筛选特征列
         feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
         feature_cols = params.pop("feature_cols", None)
         if feature_cols:
@@ -371,11 +380,11 @@ class ModelManager:
 
         feature_names = feat_df.columns.tolist()
 
-        # 3) 标准化
+        # 标准化
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(feat_df.values.astype(float))
 
-        # 4) 构造窗口
+        # 构造窗口
         default_lb = DATA_CFG.get(model_type, 14)  # controller 里给的默认窗口长度
         train_params = params.copy()
         look_back = int(train_params.pop("look_back", default_lb))
@@ -385,7 +394,7 @@ class ModelManager:
         X, y = build_windows(data_scaled[:-holdout], look_back)  # 与 controller 的写法对齐
         X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-        # 5) 训练
+        # 训练
         if model_type not in MODEL_REGISTRY:
             raise KeyError(f"未知的模型类型: {model_type}")
         train_fn = MODEL_REGISTRY[model_type]["train"]
@@ -461,7 +470,7 @@ class ModelManager:
             results.append({"step": i, "table": df})
         return results
 
-    # ===== 🔄 追加新观测到运行时 ===== #
+    # ===== 追加新观测到运行时 ===== #
     def append_observations(self, df_new: pd.DataFrame) -> None:
         """
         把 **原始量纲** 的观测行追加到运行时 cache，供后续预测滚动窗口使用。

@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 import pandas as pd
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
@@ -80,6 +80,8 @@ class TimeSeriesPage(QWidget):
         self._orig_rows: int = 0
         # 当前选择用于训练/预测的特征列（默认全选，不含时间列）
         self._feature_cols: list[str] = []
+        self._trained_feature_cols_last: list[str] = []
+        self._features_dirty: bool = False
 
         # ================= 左侧：数据表格 =================
         self.table = QTableView()
@@ -139,13 +141,21 @@ class TimeSeriesPage(QWidget):
 
         right.addWidget(form_box)
 
-        # —— 特征选择（来自 data_handle 的“字段选择”思路，做成可复用组件） ——
-        self.fs_box = QGroupBox("特征选择（默认全选）")
+        # —— 特征选择 ——
+        self.fs_box = QGroupBox("特征选择（")
         fs_v = QVBoxLayout(self.fs_box)
         self.feature_selector = FeatureSelectorWidget(self.fs_box)
         self.feature_selector.selectionChanged.connect(self._on_feature_selection_changed)
         fs_v.addWidget(self.feature_selector)
         right.addWidget(self.fs_box)
+
+
+        # —— 特征选择刷新防抖 ——
+        self._fs_pending_cols: list[str] | None = None
+        self._fs_debounce = QTimer(self)
+        self._fs_debounce.setSingleShot(True)
+        self._fs_debounce.setInterval(200)  # 200ms 合并多次操作
+        self._fs_debounce.timeout.connect(self._apply_feature_selection)
 
         # —— 操作区域：两列按钮网格 ——
         ops_box = QGroupBox("操作")
@@ -304,6 +314,10 @@ class TimeSeriesPage(QWidget):
         self._model_id = model_id
 
         self._look_back = int(meta.get("params", {}).get("look_back", self._look_back))
+        # 记录该模型的训练列（优先用 meta["feature_names"]，退化用 params["feature_cols"]）
+        trained_cols = meta.get("feature_names") or meta.get("params", {}).get("feature_cols") or []
+        self._trained_feature_cols_last = list(trained_cols)
+        self._features_dirty = False
 
         self._trained_model = None
         self._trained_metrics = None
@@ -360,6 +374,8 @@ class TimeSeriesPage(QWidget):
         self._init_input_window()
         self.table.scrollToBottom()
         self.btn_predict.setEnabled(True)
+        self._trained_feature_cols_last = list(self._feature_cols)
+        self._features_dirty = False
 
     # ============================================================
     # 保存
@@ -429,16 +445,44 @@ class TimeSeriesPage(QWidget):
 
     # --------- 特征选择回调 --------- #
     def _on_feature_selection_changed(self, cols: list[str]):
-        """当用户调整特征列时刷新工作数据表"""
-        self._feature_cols = cols
+        """当用户在特征选择器中调整时：防抖 + 去重"""
+        cols = list(cols) if cols is not None else []
+          # 去重：与当前一致就不处理
+        if cols == self._feature_cols:
+            return
+          # 记录待应用的列集并启动防抖定时器
+        self._fs_pending_cols = cols
+        self._fs_debounce.start()
+
+    def _apply_feature_selection(self):
+        """由防抖计时器触发，真正应用列选择并刷新表格"""
+        if self._fs_pending_cols is None:
+            return
+        self._feature_cols = self._fs_pending_cols
+        self._fs_pending_cols = None
         self._rebuild_work_df()
 
+        # 变更后与“训练列”对比；不同则禁止预测、提示需要重新训练
+        if sorted(self._feature_cols) != sorted(self._trained_feature_cols_last):
+            self._features_dirty = True
+            self.btn_predict.setEnabled(False)
+            self.status_label.setText("特征已改变，请重新训练后再预测。")
+        else:
+            self._features_dirty = False
+            # 只有在已有模型/训练过的前提下才恢复按钮
+            self.btn_predict.setEnabled(bool(self._trained_model_type or self._model_id))
     def _rebuild_work_df(self):
         """根据当前选择的特征列重建 _df 并刷新表格模型"""
         if self._base_df is None:
             self._df = None
-            self._set_table_model(pd.DataFrame())
+             # 轻量刷新：优先复用现有模型
+            mdl = self.table.model()
+            if hasattr(mdl, "setDataFrame"):
+                mdl.setDataFrame(pd.DataFrame())
+            else:
+                self._set_table_model(pd.DataFrame())
             return
+
         cols = []
         if self._time_col and self._time_col in self._base_df.columns:
             cols.append(self._time_col)
@@ -446,8 +490,20 @@ class TimeSeriesPage(QWidget):
             cols.extend([c for c in self._feature_cols if c in self._base_df.columns and c != self._time_col])
         else:
             cols.extend([c for c in self._base_df.columns if c != self._time_col])
-        self._df = self._base_df[cols].copy()
-        self._set_table_model(self._df)
+        new_df = self._base_df[cols].copy()
+        # 若与当前 df 列完全一致，则不必替换模型；仅当列集变化时才刷新
+
+        if self._df is None or list(new_df.columns) != list(getattr(self._df, "columns", [])):
+            self._df = new_df
+            mdl = self.table.model()
+            if hasattr(mdl, "setDataFrame"):
+                mdl.setDataFrame(self._df)
+            else:
+                self._set_table_model(self._df)
+                self._apply_row_colors()
+        else:
+         # 列集一致，仅数据引用更新（几乎不会触发，但保持一致性）
+           self._df = new_df
 
     # --------- 训练完成后初始化窗口 --------- #
     def _init_input_window(self):
@@ -502,6 +558,10 @@ class TimeSeriesPage(QWidget):
     def _on_predict(self):
         if not self._dataset_id:
             QMessageBox.warning(self, "提示", "请先训练/加载模型后再预测。")
+            return
+
+        if self._features_dirty or (sorted(self._feature_cols) != sorted(self._trained_feature_cols_last)):
+            QMessageBox.warning(self, "提示", "特征与训练时不一致，请先重新训练。")
             return
 
         # ① 先把之前的蓝色行并入窗口
