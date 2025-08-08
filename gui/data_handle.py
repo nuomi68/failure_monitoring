@@ -1,18 +1,16 @@
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QPushButton, QFileDialog, QSplitter, QStackedLayout,
+    QWidget, QPushButton, QFileDialog, QSplitter, QStackedLayout,
     QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
-    QListWidget, QAbstractItemView, QCheckBox, QComboBox,
+    QAbstractItemView, QCheckBox, QComboBox,
     QLabel, QSizePolicy, QSpacerItem
 )
 from PyQt6.QtCore import Qt
 
 from gui.calculator_widget import CalculatorWidget
 from gui.feature_preview import FeaturePreviewWidget,HeatmapCanvas
+from .feature_selector_widget import FeatureSelectorWidget
 from gui.tools import logger
 
 class DataHandlePage(QWidget):
@@ -134,57 +132,17 @@ class DataHandlePage(QWidget):
         bottom_split = QSplitter(Qt.Orientation.Horizontal)
         main.addWidget(bottom_split, stretch=1)   # stretch=1 让它吃剩余空间
 
-        # ===== 字段选择=====
+        # ===== 字段选择 =====
         left_panel = QWidget()
         left_v = QVBoxLayout(left_panel)
-
-        # -- 字段列表布局
-        lists_layout = QHBoxLayout()
-        # 左边：全部标签列表（带标题）
-        left_column = QVBoxLayout()
-        all_label_title = QLabel("全部特征")
-        all_label_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        left_column.addWidget(all_label_title, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.list_all = QListWidget()
-        self.list_all.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        left_column.addWidget(self.list_all)
-
-        # 中间：箭头按钮区（含提示）
-        arrows = QVBoxLayout()
-        arrow_info = [
-            ("→", "选择", self.move_one_right),
-            ("←", "移除", self.move_one_left),
-            ("≫", "全部添加", self.move_all_right),
-            ("≪", "全部移除", self.move_all_left),
-        ]
-        for text, tooltip, slot in arrow_info:
-            btn = QPushButton(text)
-            btn.setMaximumWidth(40)
-            btn.setToolTip(tooltip)  # 设置悬浮提示
-            btn.clicked.connect(slot)
-            arrows.addWidget(btn)
-
-        # 右边：已选标签列表（带标题）
-        right_column = QVBoxLayout()
-        select_label_title = QLabel("选择特征")
-        select_label_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        right_column.addWidget(select_label_title, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.list_selected = QListWidget()
-        self.list_selected.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        right_column.addWidget(self.list_selected)
-
-        # 加入主布局
-        lists_layout.addLayout(left_column)
-        lists_layout.addLayout(arrows)
-        lists_layout.addLayout(right_column)
-
-        # 加入父布局
-        left_v.addLayout(lists_layout)
+        self.feature_selector = FeatureSelectorWidget()
+        left_v.addWidget(self.feature_selector)
         bottom_split.addWidget(left_panel)
 
         # === 中：图形预览================
         self.preview = FeaturePreviewWidget()
         bottom_split.addWidget(self.preview)
+        self.feature_selector.selectionChanged.connect(self.preview.set_selected_columns)
 
         # ===== 计算器 ======
         right_panel = QWidget()
@@ -271,8 +229,7 @@ class DataHandlePage(QWidget):
 
     def reset_ui(self):
         self.table.clear()
-        self.list_all.clear()
-        self.list_selected.clear()
+        self.feature_selector.set_columns([])
         self.cmb.clear()
         self.calc.setDataFrame(pd.DataFrame())
         self.df = pd.DataFrame()
@@ -290,36 +247,11 @@ class DataHandlePage(QWidget):
         self.table.resizeColumnsToContents()
 
     def populate_lists(self, cols):
-        self.list_all.clear()
-        self.list_selected.clear()
+        self.feature_selector.set_columns(cols)
+        self.feature_selector.set_selected([])
         self.cmb.clear()
         for c in cols:
-            self.list_all.addItem(c)
             self.cmb.addItem(c)
-
-    def move_one_right(self):
-        for it in self.list_all.selectedItems():
-            self.list_selected.addItem(it.text())
-            self.list_all.takeItem(self.list_all.row(it))
-        self.preview.set_selected_columns(self.selected_columns())
-
-    def move_one_left(self):
-        for it in self.list_selected.selectedItems():
-            self.list_all.addItem(it.text())
-            self.list_selected.takeItem(self.list_selected.row(it))
-        self.preview.set_selected_columns(self.selected_columns())
-
-    def move_all_right(self):
-        while self.list_all.count():
-            it = self.list_all.takeItem(0)
-            self.list_selected.addItem(it.text())
-        self.preview.set_selected_columns(self.selected_columns())
-
-    def move_all_left(self):
-        while self.list_selected.count():
-            it = self.list_selected.takeItem(0)
-            self.list_all.addItem(it.text())
-        self.preview.set_selected_columns(self.selected_columns())
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked.value)
@@ -333,15 +265,18 @@ class DataHandlePage(QWidget):
         for i in range(min(100, len(col))):
             self.table.setItem(i, col_idx, QTableWidgetItem(str(col.iat[i])))
 
-        # 2) 左侧 / 右侧列表 & 下拉框
-        self.list_all.addItem(name)
+        # 2) 字段选择器 & 下拉框
+        prev_selected = self.feature_selector.selected()
+        cols = self.feature_selector.columns() + [name]
+        self.feature_selector.set_columns(cols)
+        self.feature_selector.set_selected(prev_selected)
         self.cmb.addItem(name)
 
         self._update_heatmap()
 
     def selected_columns(self) -> list[str]:
         """返回已选择的特征名称列表"""
-        return [self.list_selected.item(i).text() for i in range(self.list_selected.count())]
+        return self.feature_selector.selected()
 
     def has_target(self) -> bool:
         """是否启用监督学习"""

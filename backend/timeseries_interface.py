@@ -358,8 +358,14 @@ class ModelManager:
         else:
             raise KeyError(f"未找到数据集 {dataset_id}")
 
-        # 2) 只用数值特征（去掉时间列）
+        # 2) 只用数值特征（去掉时间列），并按需筛选特征列
         feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
+        feature_cols = params.pop("feature_cols", None)
+        if feature_cols:
+            try:
+                feat_df = feat_df[feature_cols]
+            except KeyError as exc:
+                raise ValueError(f"训练特征列缺失: {exc}") from exc
         if feat_df.empty:
             raise ValueError("数据集中不包含数值列，无法训练模型。")
 
