@@ -39,7 +39,12 @@ class FaultLevelPage(QWidget):
         upper = QWidget()
         up_lay = QVBoxLayout(upper)
         up_lay.addWidget(QLabel("故障等级样本表"))
-        self.tbl_labelled = SmartTable(SmartTableConfig(show_label_selector=True))
+        self.tbl_labelled = SmartTable(
+            SmartTableConfig(
+                show_label_selector=True,
+                default_headers=["feat1", "feat2", "fault_level"],
+            )
+        )
         up_lay.addWidget(self.tbl_labelled)
 
         lower = QWidget()

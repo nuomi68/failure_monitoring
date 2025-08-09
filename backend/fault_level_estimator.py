@@ -1,43 +1,4 @@
-"""
-fault_level_estimator.py
 
-This module implements a simple nearest‐neighbor based estimator for
-assigning fault severity levels when only a few labelled examples are
-available.  The typical use case is semi‑supervised or weakly supervised
-fault diagnosis: an existing unsupervised model can detect whether a
-sample is abnormal, but it cannot differentiate between multiple
-severity levels because there are too few labelled examples to train a
-full classifier.  Instead, we compare a new sample to the few labelled
-examples in feature space and assign the level of the closest labelled
-sample.
-
-Key features:
-
-* Accepts an optional ``scaler``.  If you trained an unsupervised model
-  with a scaler (e.g. via ``ml_interface.ML``), you can pass the same
-  scaler here to ensure that both labelled and unlabelled data are
-  compared in the same scaled space.  If no scaler is provided, raw
-  features will be used.
-* Provides ``save`` and ``load`` methods for persistence.  Models are
-  saved using ``joblib`` so that they can be restored later without
-  retraining.
-* Uses pairwise Euclidean distances by default.  You can override the
-  metric by passing a custom function to ``predict`` if needed.
-
-Example usage (outside of GUI):
-
->>> import numpy as np
->>> from backend.models.fault_level_estimator import FaultLevelEstimator
->>> # Suppose we have two labelled samples with different fault levels
->>> labelled_X = np.array([[1.0, 0.0], [0.0, 1.0]])
->>> labels     = np.array([1, 2])
->>> estimator = FaultLevelEstimator(labelled_X, labels)
->>> unlabelled_X = np.array([[0.9, 0.1], [0.1, 0.8]])
->>> print(estimator.predict(unlabelled_X))  # array([1, 2])
-
-This class does not depend on any GUI framework.  You can import and
-integrate it in either the existing unsupervised page or a new page.
-"""
 
 from __future__ import annotations
 
