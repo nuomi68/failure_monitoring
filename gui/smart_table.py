@@ -48,10 +48,13 @@ class _CellEditorDelegate(QStyledItemDelegate):
         editor = super().createEditor(parent, option, index)
         if isinstance(editor, QLineEdit):
             editor.setFrame(False)
-            editor.setStyleSheet("border: none; padding: 0; background: transparent;")
+            editor.setStyleSheet(
+                "border: none; padding: 0; background: transparent; color: black;"
+            )
             pal = editor.palette()
             pal.setColor(QPalette.ColorRole.Highlight, QColor("#555555"))
             pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
+            pal.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
             editor.setPalette(pal)
         return editor
 
@@ -302,6 +305,15 @@ class SmartTable(QWidget):
         self.dataframeChanged.emit(self.dataframe())
         self._update_undo_redo_buttons()
 
+    def _clear_selected_cells(self):
+        idxs = self.table.selectedIndexes()
+        if not idxs:
+            return
+        self._push_state()
+        for i in idxs:
+            self.table.setItem(i.row(), i.column(), QTableWidgetItem(""))
+        self.dataframeChanged.emit(self.dataframe())
+
     def _init_shortcuts_and_menu(self):
         ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
         sc = QShortcut(QKeySequence("Ctrl+V"), self.table)
@@ -316,6 +328,12 @@ class SmartTable(QWidget):
         sc = QShortcut(QKeySequence("Ctrl+Y"), self.table)
         sc.setContext(ctx)
         sc.activated.connect(self._redo)
+        sc = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
+        sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        sc.activated.connect(self._clear_selected_cells)
+        sc = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self.table)
+        sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        sc.activated.connect(self._clear_selected_cells)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._open_menu)
 

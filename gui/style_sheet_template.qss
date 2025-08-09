@@ -204,6 +204,7 @@ QTableView QLineEdit {
     border: none;
     border-radius: 0;
     background: transparent;
+    color: #000000;
     selection-background-color: #555555;
     selection-color: #ffffff;
 }
