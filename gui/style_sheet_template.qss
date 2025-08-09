@@ -94,6 +94,12 @@ QPushButton:disabled {
     color: $disabled-text;
 }
 
+/* SmartTable toolbar buttons */
+#SmartTableTools QPushButton {
+    background-color: $bg;
+    color: $text;
+}
+
 /* ---------- 卡片 / Panel ---------- */
 .Card {
     background-color: $surface;

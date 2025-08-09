@@ -34,12 +34,6 @@ class ValidationPage(QWidget):
         layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
-        self.undo_btn = QPushButton("撤销")
-        self.undo_btn.clicked.connect(self.table.undo)
-        btn_row.addWidget(self.undo_btn)
-        self.redo_btn = QPushButton("重做")
-        self.redo_btn.clicked.connect(self.table.redo)
-        btn_row.addWidget(self.redo_btn)
         self.predict_btn = QPushButton("计算")
         self.predict_btn.clicked.connect(self.on_predict)
         btn_row.addWidget(self.predict_btn)
@@ -54,9 +48,6 @@ class ValidationPage(QWidget):
         btn_row.addWidget(self.save_btn)
         layout.addLayout(btn_row)
 
-        self.table.dataframeChanged.connect(lambda _df: self._update_undo_redo_state())
-        self._update_undo_redo_state()
-
     # ------------------------------------------------------------------
     # 对外接口
     # ------------------------------------------------------------------
@@ -68,19 +59,11 @@ class ValidationPage(QWidget):
         self.table.clear_history()
         self.save_btn.setEnabled(bool(ML.get_meta()))
         self.result_lbl.setText("结果: ")
-        self._update_undo_redo_state()
 
     def enable_external(self, features: List[str], predict_cb) -> None:
         self._external_mode = True
         self._external_cb = predict_cb
         self.configure(features)
-
-    # ------------------------------------------------------------------
-    # 撤销/重做按钮状态
-    # ------------------------------------------------------------------
-    def _update_undo_redo_state(self) -> None:
-        self.undo_btn.setEnabled(self.table.can_undo())
-        self.redo_btn.setEnabled(self.table.can_redo())
 
     # ------------------------------------------------------------------
     # 按钮逻辑
@@ -89,7 +72,6 @@ class ValidationPage(QWidget):
         self.table.set_dataframe(pd.DataFrame(columns=self.features))
         self.table.clear_history()
         self.result_lbl.setText("结果: ")
-        self._update_undo_redo_state()
 
     def on_predict(self):
         df = self.table.dataframe()

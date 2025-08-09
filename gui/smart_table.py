@@ -43,7 +43,9 @@ class SmartTable(QWidget):
         root = QVBoxLayout(self)
 
         if self.cfg.show_toolbar:
-            tools = QHBoxLayout()
+            tools_bar = QWidget()
+            tools_bar.setObjectName("SmartTableTools")
+            tools = QHBoxLayout(tools_bar)
             self.btn_import = QPushButton("导入")
             self.btn_import.clicked.connect(self._import)
             self.btn_export = QPushButton("导出CSV")
@@ -54,13 +56,19 @@ class SmartTable(QWidget):
             self.btn_del.clicked.connect(self._del_selected_rows)
             self.btn_clear = QPushButton("清空")
             self.btn_clear.clicked.connect(self._clear_all)
+            self.btn_undo = QPushButton("撤销")
+            self.btn_undo.clicked.connect(self._undo)
+            self.btn_redo = QPushButton("重做")
+            self.btn_redo.clicked.connect(self._redo)
             tools.addWidget(self.btn_import)
             tools.addWidget(self.btn_export)
             tools.addStretch(1)
             tools.addWidget(self.btn_add)
             tools.addWidget(self.btn_del)
             tools.addWidget(self.btn_clear)
-            root.addLayout(tools)
+            tools.addWidget(self.btn_undo)
+            tools.addWidget(self.btn_redo)
+            root.addWidget(tools_bar)
 
         if self.cfg.show_label_selector:
             lab = QHBoxLayout()
@@ -83,6 +91,7 @@ class SmartTable(QWidget):
         self.set_headers(headers)
         self._ensure_min_rows()
         self._push_state()
+        self._update_undo_redo_buttons()
 
     def set_headers(self, headers: Iterable[str]) -> None:
         headers = [str(h) for h in headers]
@@ -131,6 +140,7 @@ class SmartTable(QWidget):
             self._push_state()
         self.table.resizeColumnsToContents()
         self.dataframeChanged.emit(self.dataframe())
+        self._update_undo_redo_buttons()
         if self._features_sink is not None:
             self._sync_features_sink_headers()
 
@@ -195,6 +205,10 @@ class SmartTable(QWidget):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
             return
+        headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
+        if any(h.strip() for h in headers):
+            df.columns = [str(c) for c in df.columns]
+            df = df.reindex(columns=headers)
         self.set_dataframe(df)
 
     def _export_csv(self):
@@ -218,10 +232,16 @@ class SmartTable(QWidget):
 
     def _clear_all(self):
         self._push_state()
-        self.set_headers([self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())])
-        self._ensure_min_rows()
+        # 只清内容，不影响表头
+        self.table.blockSignals(True)
+        try:
+            self.table.clearContents()
+            self.table.setRowCount(self.cfg.min_rows)  # 强制恢复到最小行数
+        finally:
+            self.table.blockSignals(False)
         self._redo_stack.clear()
         self.dataframeChanged.emit(self.dataframe())
+        self._update_undo_redo_buttons()
 
     def _init_shortcuts_and_menu(self):
         QShortcut(QKeySequence("Ctrl+V"), self, activated=self._handle_paste)
@@ -250,6 +270,7 @@ class SmartTable(QWidget):
         self._push_state()
         fn(*args)
         self.dataframeChanged.emit(self.dataframe())
+        self._update_undo_redo_buttons()
 
     def _clear_row(self, r: int):
         for c in range(self.table.columnCount()):
@@ -282,6 +303,7 @@ class SmartTable(QWidget):
             return
         self._redo_stack.append(self._undo_stack.pop())
         self._restore_state(self._undo_stack[-1])
+        self._update_undo_redo_buttons()
 
     def _redo(self):
         if not self._redo_stack:
@@ -289,6 +311,7 @@ class SmartTable(QWidget):
         state = self._redo_stack.pop()
         self._undo_stack.append(state)
         self._restore_state(state)
+        self._update_undo_redo_buttons()
 
     # ---- public undo/redo helpers ----
     def undo(self) -> None:
@@ -307,10 +330,17 @@ class SmartTable(QWidget):
         """Return True if there is a redo history."""
         return bool(self._redo_stack)
 
+    def _update_undo_redo_buttons(self):
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.setEnabled(self.can_undo())
+        if hasattr(self, "btn_redo"):
+            self.btn_redo.setEnabled(self.can_redo())
+
     def clear_history(self) -> None:
         """Clear undo/redo stacks and record current snapshot as base."""
         self._undo_stack = [self._snapshot()]
         self._redo_stack.clear()
+        self._update_undo_redo_buttons()
 
     @contextmanager
     def no_record(self):
@@ -329,6 +359,7 @@ class SmartTable(QWidget):
         if len(self._undo_stack) > self.cfg.max_undo:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
+        self._update_undo_redo_buttons()
 
     def _snapshot(self) -> list[list[str]]:
         return [[self._cell_text(r, c) for c in range(self.table.columnCount())]
@@ -350,6 +381,7 @@ class SmartTable(QWidget):
             self._restoring = False
         self.table.resizeColumnsToContents()
         self.dataframeChanged.emit(self.dataframe())
+        self._update_undo_redo_buttons()
 
     def _on_item_changed(self, item: QTableWidgetItem):
         if self._restoring or not self.cfg.editable:
