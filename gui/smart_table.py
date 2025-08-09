@@ -205,6 +205,10 @@ class SmartTable(QWidget):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
             return
+        headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
+        if any(h.strip() for h in headers):
+            df.columns = [str(c) for c in df.columns]
+            df = df.reindex(columns=headers)
         self.set_dataframe(df)
 
     def _export_csv(self):
