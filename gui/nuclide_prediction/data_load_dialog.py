@@ -430,7 +430,7 @@ class DataLoadDialog(QDialog):
 
         # 初始化坏值掩码和已处理行集合
         # DataFrame.applymap 在 pandas 2.1 后已弃用，改用 DataFrame.map
-        self._bad_mask = self._work_df.map(is_bad_str)
+        self._bad_mask = self._work_df.map(is_bad_str).fillna(False)
         self._sticky_rows = set()
 
         # 模型设置
@@ -465,7 +465,9 @@ class DataLoadDialog(QDialog):
             if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
                 self._work_df[self._current_time_col] = self._time_col_raw
                 if self._bad_mask is not None:
-                    self._bad_mask[self._current_time_col] = self._work_df[self._current_time_col].map(is_bad_str)
+                    self._bad_mask[self._current_time_col] = (
+                        self._work_df[self._current_time_col].map(is_bad_str).fillna(False)
+                    )
             self._current_time_col = None
             self._time_col_raw = None
             self.time_col_combo.setCurrentIndex(-1)
@@ -553,22 +555,27 @@ class DataLoadDialog(QDialog):
             self._current_time_col = col or None
             self._time_col_raw = self._work_df[col].copy() if col else None
             if self._bad_mask is not None and col:
-                self._bad_mask[col] = self._work_df[col].map(is_bad_str)
+                self._bad_mask[col] = (
+                    self._work_df[col].map(is_bad_str).fillna(False)
+                )
         else:
             if col and self._time_col_raw is not None:
                 self._work_df[col] = self._time_col_raw.copy()
                 if self._bad_mask is not None:
-                    self._bad_mask[col] = self._work_df[col].map(is_bad_str)
+                    self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
 
-        # 解析：指定格式优先；否则尝试通用解析
+        # 解析：先通用解析，再对未成功部分尝试用户指定格式
         if col:
-            kwargs = {"errors": "coerce"}
-            if fmt:
-                kwargs["format"] = fmt
-            ser = pd.to_datetime(self._work_df[col], **kwargs)
+            ser = pd.to_datetime(self._work_df[col], errors="coerce")
+            mask = ser.isna() & self._work_df[col].notna()
+            if mask.any() and fmt:
+                ser_fmt = pd.to_datetime(
+                    self._work_df.loc[mask, col], format=fmt, errors="coerce"
+                )
+                ser.loc[mask] = ser_fmt
             self._work_df[col] = ser
             if self._bad_mask is not None:
-                self._bad_mask[col] = self._work_df[col].map(is_bad_str)
+                self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
             ok, bad = ser.notna().sum(), ser.isna().sum()
             if fmt:
                 self.parsed_label.setText(
@@ -599,9 +606,12 @@ class DataLoadDialog(QDialog):
 
     def _current_missing_indices(self) -> Set[int]:
         """返回当前工作表中“任一列缺失”的行索引集合。"""
-        if self._work_df is None or self._bad_mask is None:
+        if self._work_df is None:
             return set()
-        mask = self._work_df.isna() | self._bad_mask
+        mask_bad = (
+            self._bad_mask if self._bad_mask is not None else self._work_df.map(is_bad_str)
+        ).fillna(False)
+        mask = self._work_df.isna() | mask_bad
         rows = mask.any(axis=1)
         return set(self._work_df.index[rows].tolist())
 
@@ -639,9 +649,11 @@ class DataLoadDialog(QDialog):
 
         # 统计缺失 + 坏值
         mask_na = self._work_df.isna()
-        mask_bad = self._bad_mask if self._bad_mask is not None else self._work_df.map(is_bad_str)
+        mask_bad = (
+            self._bad_mask if self._bad_mask is not None else self._work_df.map(is_bad_str)
+        ).fillna(False)
         total_cells = self._work_df.shape[0] * self._work_df.shape[1]
-        total_na = int((mask_na | mask_bad).to_numpy().sum())
+        total_na = int((mask_na | mask_bad).sum().sum())
         self.stats_label.setText(
             f"行数: {len(self._work_df):,}，列数: {self._work_df.shape[1]}，缺失单元格: {total_na:,} "
             f"（{total_na / max(1, total_cells):.2%}）"
@@ -743,7 +755,9 @@ class DataLoadDialog(QDialog):
         # 更新坏值掩码并记录受影响行
         if self._bad_mask is not None:
             # DataFrame.applymap 在新版 pandas 中已弃用，使用 map 逐元素判断
-            self._bad_mask[cols] = self._work_df[cols].map(is_bad_str)
+            self._bad_mask[cols] = (
+                self._work_df[cols].map(is_bad_str).fillna(False)
+            )
         self._sticky_rows |= affected_rows
         self._sticky_rows &= set(self._work_df.index)
 
