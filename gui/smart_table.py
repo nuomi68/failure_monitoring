@@ -19,8 +19,17 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QAbstractItemView,
+    QStyledItemDelegate,
+    QLineEdit,
 )
-from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
+from PyQt6.QtGui import (
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+    QCursor,
+    QPalette,
+    QColor,
+)
 
 
 @dataclass
@@ -37,6 +46,67 @@ class SmartTableConfig:
     require_time_column: bool = False
     # DataLoadDialog 默认时间格式
     data_load_default_time_fmt: str = "%Y年%m月%d日%H%M"
+
+
+class _CellEditorDelegate(QStyledItemDelegate):
+    """Delegate customizing editor appearance."""
+
+    def destroyEditor(self, editor, index):
+        # Restore the underlying item's foreground when editor is destroyed
+        tbl = None
+        w = editor.parent()
+        while w is not None and getattr(w, 'metaObject', None) is not None:
+            if w.metaObject().className() in ('QTableWidget', 'QTableView'):
+                tbl = w
+                break
+            w = w.parent()
+        try:
+            r, c = editor.property('st_row'), editor.property('st_col')
+            prev_brush = editor.property('st_prev_brush')
+            if (
+                tbl is not None
+                and r is not None
+                and c is not None
+                and prev_brush is not None
+            ):
+                try:
+                    if hasattr(tbl, 'item'):
+                        it = tbl.item(int(r), int(c))
+                        if it is not None:
+                            it.setForeground(prev_brush)
+                except Exception:
+                    pass
+        finally:
+            super().destroyEditor(editor, index)
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        if isinstance(editor, QLineEdit):
+            editor.setFrame(False)
+            editor.setStyleSheet(
+                "border: none; border-radius: 0; padding: 0; background: palette(base); color: black;"
+            )
+            pal = editor.palette()
+            pal.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+            pal.setColor(QPalette.ColorRole.Highlight, QColor("#c1c1c1"))
+            pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
+            editor.setPalette(pal)
+            editor.setAutoFillBackground(True)
+            editor.setProperty('st_row', index.row())
+            editor.setProperty('st_col', index.column())
+            try:
+                it = parent.item(index.row(), index.column())
+                if it is not None:
+                    editor.setProperty('st_prev_brush', it.foreground())
+            except Exception:
+                editor.setProperty('st_prev_brush', None)
+        return editor
+
+    def setEditorData(self, editor, index):
+        super().setEditorData(editor, index)
+        if isinstance(editor, QLineEdit):
+            editor.deselect()
+            editor.setCursorPosition(len(editor.text()))
 
 
 class SmartTable(QWidget):
@@ -95,6 +165,10 @@ class SmartTable(QWidget):
             root.addLayout(lab)
 
         self.table = QTableWidget()
+        # 允许拖拽框选 / Shift 扩选 / Ctrl 多选
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._delegate = _CellEditorDelegate(self.table)
+        self.table.setItemDelegate(self._delegate)
         root.addWidget(self.table)
         self._init_shortcuts_and_menu()
         self.table.itemDelegate().closeEditor.connect(self._on_edit_closed)
@@ -276,10 +350,23 @@ class SmartTable(QWidget):
         self._update_undo_redo_buttons()
 
     def _init_shortcuts_and_menu(self):
-        QShortcut(QKeySequence("Ctrl+V"), self, activated=self._handle_paste)
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._redo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, activated=self._redo)
+        ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        sc = QShortcut(QKeySequence("Ctrl+V"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._handle_paste)
+        # 复制快捷键
+        sc = QShortcut(QKeySequence("Ctrl+C"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._handle_copy)
+        sc = QShortcut(QKeySequence("Ctrl+Z"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._undo)
+        sc = QShortcut(QKeySequence("Ctrl+Shift+Z"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._redo)
+        sc = QShortcut(QKeySequence("Ctrl+Y"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._redo)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._open_menu)
 
@@ -291,6 +378,9 @@ class SmartTable(QWidget):
         m = QMenu(self.table)
         m.addAction("在上方插入行", lambda: self._record_then(self.table.insertRow, r))
         m.addAction("在下方插入行", lambda: self._record_then(self.table.insertRow, r + 1))
+        m.addSeparator()
+        m.addAction("复制", self._handle_copy)
+        m.addAction("粘贴", self._handle_paste)
         m.addSeparator()
         m.addAction("删除当前行",    lambda: self._record_then(self.table.removeRow, r))
         m.addAction("清空当前行",    lambda: self._record_then(self._clear_row, r))
@@ -312,22 +402,46 @@ class SmartTable(QWidget):
         for r in range(self.table.rowCount()):
             self.table.setItem(r, c, QTableWidgetItem(""))
 
+    def _handle_copy(self):
+        ranges = self.table.selectedRanges()
+        if not ranges:
+            return
+        blocks = []
+        for rg in ranges:
+            lines = []
+            for r in range(rg.topRow(), rg.bottomRow() + 1):
+                cells = []
+                for c in range(rg.leftColumn(), rg.rightColumn() + 1):
+                    it = self.table.item(r, c)
+                    cells.append("" if it is None else it.text())
+                lines.append("\t".join(cells))
+            blocks.append("\n".join(lines))
+        QGuiApplication.clipboard().setText("\n".join(blocks))
+
     def _handle_paste(self):
         text = QGuiApplication.clipboard().text()
         if not text.strip():
             return
         self._push_state()
         rows = [row for row in text.splitlines() if row.strip()]
-        start = max(self.table.currentRow(), 0)
-        need = start + len(rows)
+        # 从当前单元格开始粘贴
+        start_row = max(self.table.currentRow(), 0)
+        start_col = max(self.table.currentColumn(), 0)
+        need = start_row + len(rows)
         if need > self.table.rowCount():
             self.table.setRowCount(need)
         for r_idx, line in enumerate(rows):
             cells = line.split("\t")
             for c_idx, val in enumerate(cells):
-                if c_idx >= self.table.columnCount():
+                cc = start_col + c_idx
+                if cc >= self.table.columnCount():
                     break
-                self.table.setItem(start + r_idx, c_idx, QTableWidgetItem(val.strip()))
+                it = self.table.item(start_row + r_idx, cc)
+                if it is None:
+                    it = QTableWidgetItem("")
+                    self._apply_editable_flag(it, cc, None)
+                    self.table.setItem(start_row + r_idx, cc, it)
+                it.setText(val.strip())
         self.dataframeChanged.emit(self.dataframe())
 
     def _undo(self):
