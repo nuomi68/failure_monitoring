@@ -142,7 +142,7 @@ class TimeSeriesPage(QWidget):
         right.addWidget(form_box)
 
         # —— 特征选择 ——
-        self.fs_box = QGroupBox("特征选择（")
+        self.fs_box = QGroupBox("特征选择")
         fs_v = QVBoxLayout(self.fs_box)
         self.feature_selector = FeatureSelectorWidget(self.fs_box)
         self.feature_selector.selectionChanged.connect(self._on_feature_selection_changed)

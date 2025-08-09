@@ -34,7 +34,7 @@ from gui.set_style import get_sheet
 from gui.outlier_detection import OutlierDetectionPage
 from gui.ensemble_page import EnsemblePage
 from gui.nuclide_prediction.time_series_page import TimeSeriesPage
-
+from gui.fault_level_page import FaultLevelPage
 class MainController(QMainWindow):
     """主界面控制器
 
@@ -113,15 +113,13 @@ class MainController(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         self.stack = QStackedWidget()
         self.anomaly_page = OutlierDetectionPage()
-        self.damage_page = QWidget()
+        self.damage_page = FaultLevelPage()
         self.ensemble_page = EnsemblePage()
         self.nuclide_page = TimeSeriesPage()
         self.stack.addWidget(self.nuclide_page)
         self.stack.addWidget(self.anomaly_page)
         self.stack.addWidget(self.damage_page)
         self.stack.addWidget(self.ensemble_page)
-
-
 
         # 默认选中第一页
         self.btn_nuclide.setChecked(True)

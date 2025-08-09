@@ -32,9 +32,6 @@ class FeatureSelectorWidget(QWidget):
         self._suppress_signal = False
 
         root = QVBoxLayout(self)
-        title = QLabel("特征选择")
-        title.setStyleSheet("font-weight:600;")
-        root.addWidget(title)
 
         row = QHBoxLayout()
         root.addLayout(row)
@@ -49,6 +46,8 @@ class FeatureSelectorWidget(QWidget):
 
         # 中间：箭头按钮
         mid = QVBoxLayout()
+        mid.addWidget(QLabel(" "))
+        mid.addStretch(1)
         for text, slot in [
             ("→", self._move_one_right),
             ("←", self._move_one_left),
