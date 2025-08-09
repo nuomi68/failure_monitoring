@@ -125,8 +125,6 @@ QLineEdit, QTextEdit, QPlainTextEdit {
     border: 1px solid $border;
     border-radius: $radius;
     padding: 6px 8px;
-    selection-background-color: $primary;
-    selection-color: $text;
 }
 QLineEdit:hover,
 QTextEdit:hover,
@@ -192,12 +190,12 @@ QTableView {
     border: 1px solid $border;
     border-radius: $radius;
     gridline-color: $border;
-    selection-background-color: $primary;
+    selection-background-color: #555555;
 }
 QTableView::item:selected {
     border: none;
-    color: $text;
-    font-weight: 600;
+    color: #ffffff;
+    background-color: #555555;
 }
 QTableView::item:focus {
     outline: none;
@@ -206,6 +204,8 @@ QTableView QLineEdit {
     border: none;
     border-radius: 0;
     background: transparent;
+    selection-background-color: #555555;
+    selection-color: #ffffff;
 }
 QHeaderView::section {
     background-color: $table-header-bg;

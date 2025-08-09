@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QLineEdit,
 )
-from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor, QPalette
+from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor, QPalette, QColor
 
 
 @dataclass
@@ -48,12 +48,10 @@ class _CellEditorDelegate(QStyledItemDelegate):
         editor = super().createEditor(parent, option, index)
         if isinstance(editor, QLineEdit):
             editor.setFrame(False)
-            editor.setStyleSheet(
-                "border: none; padding: 0; background: transparent; font-weight: bold;"
-            )
+            editor.setStyleSheet("border: none; padding: 0; background: transparent;")
             pal = editor.palette()
-            pal.setColor(QPalette.ColorRole.Highlight, parent.palette().color(QPalette.ColorRole.Highlight))
-            pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+            pal.setColor(QPalette.ColorRole.Highlight, QColor("#555555"))
+            pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
             editor.setPalette(pal)
         return editor
 
