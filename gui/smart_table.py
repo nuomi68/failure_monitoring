@@ -43,7 +43,9 @@ class SmartTable(QWidget):
         root = QVBoxLayout(self)
 
         if self.cfg.show_toolbar:
-            tools = QHBoxLayout()
+            tools_bar = QWidget()
+            tools_bar.setObjectName("SmartTableTools")
+            tools = QHBoxLayout(tools_bar)
             self.btn_import = QPushButton("导入")
             self.btn_import.clicked.connect(self._import)
             self.btn_export = QPushButton("导出CSV")
@@ -66,7 +68,7 @@ class SmartTable(QWidget):
             tools.addWidget(self.btn_clear)
             tools.addWidget(self.btn_undo)
             tools.addWidget(self.btn_redo)
-            root.addLayout(tools)
+            root.addWidget(tools_bar)
 
         if self.cfg.show_label_selector:
             lab = QHBoxLayout()
