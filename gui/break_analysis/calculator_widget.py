@@ -137,6 +137,7 @@ class CalculatorWidget(QGroupBox):
                                    "log10": np.log10,
                                    "abs": np.abs,
                                })
+            res = res.replace([np.inf, -np.inf], np.nan).fillna(0)
         except Exception as e:
             QMessageBox.critical(self, "计算失败", str(e))
             return
