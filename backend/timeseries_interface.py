@@ -24,7 +24,7 @@ import pandas as pd
 import joblib
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 from sklearn.model_selection import train_test_split
 
@@ -90,8 +90,11 @@ DATA_CFG = {
 
 @dataclass
 class RuntimeStore:
-    trained_models: Dict[str, Any] = field(default_factory=dict)  # {model_name: model_obj}
-    look_back_map: Dict[str, int] = field(default_factory=dict)  # {model_name: look_back}
+    """Singleton store for a single trained model and its context."""
+
+    trained_model: Any = None  # currently loaded or trained model object
+    model_type: Optional[str] = None  # name of the current model
+    look_back: Optional[int] = None  # window size used for training
     scaler: Any = None
     feature_names: Optional[List[str]] = None
     data_scaled: Optional[np.ndarray] = None
@@ -422,10 +425,12 @@ class ModelManager:
             model_obj = result
             metrics = {}
 
-        # 6) 写入运行时单例
+        # 6) 写入运行时单例（保持单模型状态）
+        _RuntimeSingleton.reset()
         rt = _RuntimeSingleton.get()
-        rt.trained_models[model_type] = model_obj
-        rt.look_back_map[model_type] = look_back
+        rt.trained_model = model_obj
+        rt.model_type = model_type
+        rt.look_back = look_back
         rt.scaler = scaler
         rt.feature_names = feature_names
         rt.data_scaled = data_scaled
@@ -444,29 +449,20 @@ class ModelManager:
         返回一个列表，每个元素包含第 i 步的各模型预测与（可选）eval 集成。
         """
         rt = _RuntimeSingleton.get()
-        if not rt.trained_models:
+        if rt.trained_model is None:
             raise RuntimeError("没有已训练的模型，请先调用 train。")
         if rt.data_scaled is None or rt.scaler is None or rt.feature_names is None:
             raise RuntimeError("运行时状态不完整，缺少 scaler/feature_names/data_scaled。")
 
         results = []
+        model_name = rt.model_type or "model"
+        look_back = rt.look_back or 14
         for i in range(1, int(steps) + 1):
-            step_out = {}
-            # 针对每个已训练模型做一步预测
-            for name, model_obj in rt.trained_models.items():
-                look_back = rt.look_back_map.get(name, 14)
-                seq = rt.data_scaled[-look_back - i: -i]  # 与 controller 的窗口取法一致
-                pred = MODEL_REGISTRY[name]["predict"](model_obj, seq)
-                pred_inv = rt.scaler.inverse_transform(pred.reshape(1, -1)).squeeze()
-                step_out[name] = pd.Series(pred_inv, index=rt.feature_names)
-
-            # 可选：与 controller 同样的 eval 集成（tsmixer & timesnet 均存在时）
-            if use_ensemble and ("tsmixer" in step_out) and ("timesnet" in step_out):
-                step_out["eval"] = 0.5 * (step_out["tsmixer"].values + step_out["timesnet"].values)
-                step_out["eval"] = pd.Series(step_out["eval"], index=rt.feature_names)
-
-            # 组织结果为 DataFrame（列是模型名，行为各特征）
-            df = pd.DataFrame({k: v for k, v in step_out.items()}, index=rt.feature_names)
+            seq = rt.data_scaled[-look_back - i: -i]
+            pred = MODEL_REGISTRY[model_name]["predict"](rt.trained_model, seq)
+            pred_inv = rt.scaler.inverse_transform(pred.reshape(1, -1)).squeeze()
+            series = pd.Series(pred_inv, index=rt.feature_names)
+            df = pd.DataFrame({model_name: series}, index=rt.feature_names)
             results.append({"step": i, "table": df})
         return results
 
@@ -562,7 +558,8 @@ class ModelManager:
 
         if isinstance(model_obj, str) and model_obj.startswith("in-memory:"):
             in_mem_type = model_obj.split(":", 1)[1]
-            real = _RuntimeSingleton.get().trained_models.get(in_mem_type)
+            rt = _RuntimeSingleton.get()
+            real = rt.trained_model if rt.model_type == in_mem_type else None
             if real is None:
                 raise ValueError("内存中找不到对应已训练模型，请先训练后再保存。")
             model_obj = real
@@ -657,9 +654,10 @@ class ModelManager:
         rt = _RuntimeSingleton.get()
 
         model_type = meta.get("model_type")
-        rt.trained_models[model_type] = model_obj
+        rt.trained_model = model_obj
+        rt.model_type = model_type
         look_back = int(meta.get("params", {}).get("look_back", DATA_CFG.get(model_type, 14)))
-        rt.look_back_map[model_type] = look_back
+        rt.look_back = look_back
         rt.scaler = scaler
         rt.feature_names = feature_names
         rt.data_scaled = data_scaled

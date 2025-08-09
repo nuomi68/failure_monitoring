@@ -173,11 +173,16 @@ class TimeSeriesPage(QWidget):
         self.btn_predict.setEnabled(False)
         self.btn_predict.clicked.connect(self._on_predict)
 
+        # 终止训练按钮（仅在训练中显示）
+        self.btn_stop_train = _prep_btn(QPushButton("终止训练"))
+        self.btn_stop_train.setVisible(False)
+        self.btn_stop_train.clicked.connect(self._on_stop_train)
+
         # 2×2 栅格排布
         ops.addWidget(self.btn_train, 0, 0)
         ops.addWidget(self.btn_save, 0, 1)
         ops.addWidget(self.btn_predict, 1, 0)
-        #ops.addWidget(, 1, 1)
+        ops.addWidget(self.btn_stop_train, 1, 1)
 
         right.addWidget(ops_box)
 
@@ -353,6 +358,10 @@ class TimeSeriesPage(QWidget):
             return
         self.status_label.setText("训练中…")
         self.btn_train.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.btn_predict.setEnabled(False)
+        self.btn_stop_train.setVisible(True)
+        self.btn_stop_train.setEnabled(True)
 
         params = {**self.param_panel.params(), "feature_cols": list(self._feature_cols)}
         w = TrainWorker(
@@ -369,9 +378,12 @@ class TimeSeriesPage(QWidget):
 
     def _on_train_finished(self, payload: dict):
         self.btn_train.setEnabled(True)
+        self.btn_save.setEnabled(True)
+        self.btn_stop_train.setVisible(False)
         if not payload["ok"]:
             QMessageBox.critical(self, "错误", f"训练失败：{payload['err']}")
             self.status_label.setText("训练失败")
+            self.btn_predict.setEnabled(self._trained_model is not None)
             return
         result = payload["res"]
         self._trained_model = result["model"]
@@ -391,6 +403,25 @@ class TimeSeriesPage(QWidget):
         self.btn_predict.setEnabled(True)
         self._trained_feature_cols_last = list(self._feature_cols)
         self._features_dirty = False
+
+    def _on_stop_train(self):
+        """终止当前训练任务。"""
+        if getattr(self, "_worker", None):
+            try:
+                try:
+                    self._worker.done_sig.disconnect(self._on_train_finished)
+                except Exception:
+                    pass
+                self._worker.stop()
+                self._worker.wait()
+            except Exception:
+                pass
+            self._worker = None
+        self.status_label.setText("训练已终止")
+        self.btn_train.setEnabled(True)
+        self.btn_stop_train.setVisible(False)
+        self.btn_predict.setEnabled(self._trained_model is not None)
+        self.btn_save.setEnabled(self._trained_model is not None)
 
     # ============================================================
     # 保存

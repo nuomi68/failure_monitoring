@@ -38,3 +38,7 @@ class TrainWorker(QThread):
             self.done_sig.emit({"ok": True, "res": res})
         except Exception as e:
             self.done_sig.emit({"ok": False, "err": str(e)})
+
+    def stop(self):
+        """Forcefully terminate the worker thread."""
+        self.terminate()
