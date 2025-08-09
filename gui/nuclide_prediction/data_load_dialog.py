@@ -252,12 +252,20 @@ class DataLoadDialog(QDialog):
         self.ignore_first_col_chk.setEnabled(False)
         self.ignore_first_col_chk.stateChanged.connect(self._apply_ignore_first_column)
 
+        self.time_col_chk = QCheckBox("时间列")
+        self.time_col_chk.stateChanged.connect(self._time_col_chk_changed)
+        if self._require_time_column:
+            self.time_col_chk.setChecked(True)
+            self.time_col_chk.setEnabled(False)
+
         self.time_col_combo = QComboBox()
         self.time_col_combo.setEnabled(False)
 
         self.time_fmt_label = QLabel("时间格式")
         self.time_fmt_edit = QLineEdit(default_time_fmt)
         self.time_fmt_edit.setPlaceholderText('例如：%Y年%m月%d日%H%M 或 %Y-%m-%d %H:%M:%S')
+        self.time_fmt_label.setEnabled(False)
+        self.time_fmt_edit.setEnabled(False)
 
         # ---------- 表格预览（按内容自适应 + 横向滚动） ----------
         self.preview = QTableView()
@@ -314,7 +322,7 @@ class DataLoadDialog(QDialog):
         top.addWidget(btn_load, 0, 3)
         top.addWidget(self.ignore_first_col_chk, 0, 4)
 
-        top.addWidget(QLabel("时间列"), 1, 0)
+        top.addWidget(self.time_col_chk, 1, 0)
         top.addWidget(self.time_col_combo, 1, 1)
         top.addWidget(self.time_fmt_label, 1, 2)
         top.addWidget(self.time_fmt_edit, 1, 3, 1, 2)
@@ -405,10 +413,7 @@ class DataLoadDialog(QDialog):
 
         # 时间列/普通列选择器
         self.time_col_combo.clear()
-        if not self._require_time_column:
-            self.time_col_combo.addItem("无")
         self.time_col_combo.addItems(list(self._work_df.columns.astype(str)))
-        self.time_col_combo.setEnabled(True)
 
         self.col_combo.clear()
         self.col_combo.addItem("（全部列）")
@@ -421,20 +426,41 @@ class DataLoadDialog(QDialog):
         self._base_model.dataChanged.connect(self._on_data_changed)
         self._proxy.setSourceModel(self._base_model)
 
-        # 默认时间列设置与时间格式可见性
-        if not self._require_time_column:
-            self.time_col_combo.setCurrentIndex(0)
-            self._toggle_time_fmt_visibility(False)
-        else:
+        # 根据复选框状态启用时间相关控件
+        self._toggle_time_controls(self.time_col_chk.isChecked())
+        if self.time_col_chk.isChecked():
             self.time_col_combo.setCurrentIndex(0 if self.time_col_combo.count() > 0 else -1)
-            self._toggle_time_fmt_visibility(True)
+            if not self._auto_detect_time_column(initial=initial):
+                self._reparse_time_and_refresh(initial=initial)
+        else:
+            self.time_col_combo.setCurrentIndex(-1)
+            self.parsed_label.setText("未选择时间列。")
+            self._update_preview(initial=initial)
 
-        if not self._auto_detect_time_column(initial=initial):
-            self._reparse_time_and_refresh(initial=initial)
+    def _toggle_time_controls(self, enabled: bool):
+        self.time_col_combo.setEnabled(enabled)
+        self.time_fmt_label.setEnabled(enabled)
+        self.time_fmt_edit.setEnabled(enabled)
 
-    def _toggle_time_fmt_visibility(self, visible: bool):
-        self.time_fmt_label.setVisible(visible)
-        self.time_fmt_edit.setVisible(visible)
+    def _time_col_chk_changed(self, _state):
+        """启用/禁用时间列相关控件。"""
+        if self._work_df is None:
+            return
+        enabled = self.time_col_chk.isChecked()
+        self._toggle_time_controls(enabled)
+        if not enabled:
+            if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
+                self._work_df[self._current_time_col] = self._time_col_raw
+            self._current_time_col = None
+            self._time_col_raw = None
+            self.time_col_combo.setCurrentIndex(-1)
+            self.parsed_label.setText("未选择时间列。")
+            self._update_preview()
+        else:
+            if self.time_col_combo.count() > 0 and self.time_col_combo.currentIndex() < 0:
+                self.time_col_combo.setCurrentIndex(0)
+            if not self._auto_detect_time_column():
+                self._reparse_time_and_refresh(show_fail_msg=False)
 
     def _auto_detect_time_column(self, initial: bool = False) -> bool:
         if self._work_df is None:
@@ -449,8 +475,6 @@ class DataLoadDialog(QDialog):
         self.time_col_combo.blockSignals(True)
         self.time_col_combo.setCurrentIndex(idx)
         self.time_col_combo.blockSignals(False)
-        if not self._require_time_column:
-            self._toggle_time_fmt_visibility(True)
         self._current_time_col = cand
         self._time_col_raw = self._work_df[cand].copy()
         ser = pd.to_datetime(self._time_col_raw, errors="coerce")
@@ -461,17 +485,18 @@ class DataLoadDialog(QDialog):
         return True
 
     def _time_col_changed(self):
-        if not self._require_time_column:
-            col = self.time_col_combo.currentText().strip()
-            self._toggle_time_fmt_visibility(col != "无")
+        if not self.time_col_chk.isChecked():
+            return
         self._reparse_time_and_refresh(show_fail_msg=True)
 
     def _time_fmt_edit_finished(self):
+        if not self.time_col_chk.isChecked():
+            return
         self._reparse_time_and_refresh(show_fail_msg=True)
 
     def _on_data_changed(self, topLeft: QModelIndex, bottomRight: QModelIndex, roles: list[int]):
         """同步用户编辑到原始时间列副本。"""
-        if not self._current_time_col or self._time_col_raw is None:
+        if not self.time_col_chk.isChecked() or not self._current_time_col or self._time_col_raw is None:
             return
         col_idx = self._work_df.columns.get_loc(self._current_time_col)
         if topLeft.column() <= col_idx <= bottomRight.column():
@@ -484,9 +509,12 @@ class DataLoadDialog(QDialog):
         if self._work_df is None:
             return
 
+        if not self.time_col_chk.isChecked():
+            self.parsed_label.setText("未选择时间列。")
+            self._update_preview(initial=initial)
+            return
+
         col = self.time_col_combo.currentText().strip()
-        if not self._require_time_column and col == "无":
-            col = ""
         fmt = self.time_fmt_edit.text().strip()
 
         # 切换时间列时恢复旧列的原始值，并缓存新列的原始值
@@ -577,10 +605,7 @@ class DataLoadDialog(QDialog):
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
-        tc = self.time_col_combo.currentText().strip()
-        if not self._require_time_column and tc == "无":
-            tc = ""
-        time_selected = bool(tc)
+        time_selected = self.time_col_chk.isChecked() and bool(self.time_col_combo.currentText().strip())
         ok_enabled = (remain == 0) and (not self._require_time_column or time_selected)
 
         if remain == 0:
@@ -681,11 +706,9 @@ class DataLoadDialog(QDialog):
         return self._path
 
     def time_column(self) -> Optional[str]:
-        if not self.time_col_combo.isEnabled():
+        if not self.time_col_chk.isChecked():
             return None
         col = self.time_col_combo.currentText().strip()
-        if not self._require_time_column and col == "无":
-            return None
         return col or None
 
     def time_format(self) -> str:
