@@ -297,7 +297,7 @@ class DataLoadDialog(QDialog):
         # 只看“缺失行±1”的开关
         self.only_missing_chk = QCheckBox("仅显示缺失行±1（动态）")
         self.only_missing_chk.setChecked(True)
-        self.only_missing_chk.stateChanged.connect(self._update_preview)
+        self.only_missing_chk.stateChanged.connect(self._refresh_missing_display)
 
         # 缺失处理工具条：列选择 + 方法 + 常数值 + 应用
         self.col_combo = QComboBox()
@@ -447,6 +447,7 @@ class DataLoadDialog(QDialog):
             self.time_col_combo.setCurrentIndex(-1)
             self.parsed_label.setText("未选择时间列。")
             self._update_preview(initial=initial)
+            self._refresh_missing_display()
 
     def _toggle_time_controls(self, enabled: bool):
         self.time_col_combo.setEnabled(enabled)
@@ -469,6 +470,7 @@ class DataLoadDialog(QDialog):
             self.time_col_combo.setCurrentIndex(-1)
             self.parsed_label.setText("未选择时间列。")
             self._update_preview()
+            self._refresh_missing_display()
         else:
             if self.time_col_combo.count() > 0 and self.time_col_combo.currentIndex() < 0:
                 self.time_col_combo.setCurrentIndex(0)
@@ -495,6 +497,7 @@ class DataLoadDialog(QDialog):
         ok, bad = ser.notna().sum(), ser.isna().sum()
         self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
         self._update_preview(initial=initial)
+        self._refresh_missing_display()
         return True
 
     def _time_col_changed(self):
@@ -511,26 +514,32 @@ class DataLoadDialog(QDialog):
         """同步用户编辑到原始时间列，并刷新坏值掩码。"""
         if self._work_df is None or self._bad_mask is None:
             return
+        changed_rows: Set[int] = set()
         for c in range(topLeft.column(), bottomRight.column() + 1):
             col_name = self._work_df.columns[c]
             for r in range(topLeft.row(), bottomRight.row() + 1):
                 val = self._work_df.iloc[r, c]
                 self._bad_mask.iat[r, c] = is_bad_str(val)
+                changed_rows.add(self._work_df.index[r])
         if self.time_col_chk.isChecked() and self._current_time_col and self._time_col_raw is not None:
             col_idx = self._work_df.columns.get_loc(self._current_time_col)
             if topLeft.column() <= col_idx <= bottomRight.column():
                 for row in range(topLeft.row(), bottomRight.row() + 1):
                     if row < len(self._time_col_raw):
                         self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
+        self._sticky_rows |= changed_rows
+        self._update_preview()
 
-    def _reparse_time_and_refresh(self, *, initial: bool = False, show_fail_msg: bool = False):
-        """根据“时间列 + 格式”解析时间列；刷新统计与视图。"""
+    def _reparse_time_and_refresh(self, *, initial: bool = False, show_fail_msg: bool = False, refresh_missing: bool = True):
+        """根据“时间列 + 格式”解析时间列；刷新统计，并按需更新缺失行显示。"""
         if self._work_df is None:
             return
 
         if not self.time_col_chk.isChecked():
             self.parsed_label.setText("未选择时间列。")
             self._update_preview(initial=initial)
+            if refresh_missing:
+                self._refresh_missing_display()
             return
 
         col = self.time_col_combo.currentText()
@@ -573,6 +582,8 @@ class DataLoadDialog(QDialog):
             self.parsed_label.setText("未选择时间列。")
 
         self._update_preview(initial=initial)
+        if refresh_missing:
+            self._refresh_missing_display()
 
     def _current_missing_indices(self) -> Set[int]:
         """返回当前工作表中“任一列缺失”的行索引集合。"""
@@ -599,15 +610,24 @@ class DataLoadDialog(QDialog):
                 out.add(all_idx[q])
         return out
 
+    def _refresh_missing_display(self):
+        """根据当前缺失行刷新代理模型的可见行集合。"""
+        if self._work_df is None:
+            return
+        missing_rows = self._current_missing_indices()
+        allowed = self._indices_with_context(missing_rows, k=1)
+        allowed |= self._sticky_rows
+        self._proxy.set_only_missing_context(self.only_missing_chk.isChecked())
+        self._proxy.set_allowed_rows(allowed)
+
     def _update_preview(self, initial: bool = False):
-        """刷新统计、计算“缺失行±1”、更新代理过滤，并控制 OK 按钮状态。"""
+        """刷新统计并控制 OK 按钮状态。"""
         if self._work_df is None:
             return
 
         # 统计缺失 + 坏值
         mask_na = self._work_df.isna()
         mask_bad = self._bad_mask if self._bad_mask is not None else self._work_df.applymap(is_bad_str)
-        na_counts = (mask_na | mask_bad).sum()
         total_cells = self._work_df.shape[0] * self._work_df.shape[1]
         total_na = int((mask_na | mask_bad).to_numpy().sum())
         self.stats_label.setText(
@@ -615,21 +635,15 @@ class DataLoadDialog(QDialog):
             f"（{total_na / max(1, total_cells):.2%}）"
         )
 
-        # 计算“缺失行±1”
         missing_rows = self._current_missing_indices()
-        allowed = self._indices_with_context(missing_rows, k=1)
-        allowed |= self._sticky_rows
 
         # 保证底层模型数据最新
         if self._base_model is None:
             self._base_model = DataFrameModel(self._work_df)
+            self._base_model.dataChanged.connect(self._on_data_changed)
             self._proxy.setSourceModel(self._base_model)
         else:
             self._base_model.setDataFrame(self._work_df)
-
-        # 应用过滤
-        self._proxy.set_only_missing_context(self.only_missing_chk.isChecked())
-        self._proxy.set_allowed_rows(allowed)
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
@@ -678,6 +692,7 @@ class DataLoadDialog(QDialog):
         affected_rows = set(self._work_df.index[mask_before.any(axis=1)].tolist())
 
         method = self.method_combo.currentText()
+        refresh_missing = False
         try:
             if "前向填充" in method:
                 self._work_df[cols] = self._work_df[cols].ffill()
@@ -705,6 +720,7 @@ class DataLoadDialog(QDialog):
                 self._work_df.dropna(axis=0, how='any', inplace=True)
                 if self._bad_mask is not None:
                     self._bad_mask = self._bad_mask.loc[self._work_df.index]
+                refresh_missing = True
             else:
                 QMessageBox.warning(self, "提示", "未知方法。")
                 return
@@ -723,7 +739,7 @@ class DataLoadDialog(QDialog):
             self._time_col_raw = self._work_df[self._current_time_col].copy()
 
         # 处理后需要重新解析时间列（防止该列也有缺失）并刷新
-        self._reparse_time_and_refresh()
+        self._reparse_time_and_refresh(refresh_missing=refresh_missing)
 
     def _accept_if_clean(self):
         """只有在工作表不存在任何缺失时才允许关闭对话框。"""
