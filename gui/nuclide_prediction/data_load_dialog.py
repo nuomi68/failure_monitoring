@@ -64,7 +64,7 @@ def is_bad_str(val: Any) -> bool:
 
 
 class DataFrameModel(QAbstractTableModel):
-    """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值做背景高亮。"""
+    """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值(蓝色)及无法解析的字符串(红色)做背景高亮。"""
 
     row_filled_sig = pyqtSignal(int)
 
@@ -93,8 +93,10 @@ class DataFrameModel(QAbstractTableModel):
             color = self._row_colors.get(r)
             if color is not None:
                 return color
-            if is_nan_like(val) or is_bad_str(val):
+            if is_bad_str(val):
                 return QBrush(Qt.GlobalColor.red).color().lighter(170)
+            if is_nan_like(val):
+                return QBrush(Qt.GlobalColor.blue).color().lighter(170)
 
         if role == Qt.ItemDataRole.DisplayRole:
             val = self._df.iat[index.row(), index.column()]
