@@ -237,6 +237,10 @@ class DataLoadDialog(QDialog):
         self._work_df: Optional[pd.DataFrame] = None
         self._path: Optional[str] = None
 
+        # 当前被解析为时间的列及其原始值副本
+        self._current_time_col: Optional[str] = None
+        self._time_col_raw: Optional[pd.Series] = None
+
         # ---------- 顶部：选择文件 / 时间列与格式 ----------
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择 CSV 或 Excel 文件...")
@@ -395,6 +399,10 @@ class DataLoadDialog(QDialog):
         if self._work_df is None:
             return
 
+        # 切换数据源后重置时间列状态
+        self._current_time_col = None
+        self._time_col_raw = None
+
         # 时间列/普通列选择器
         self.time_col_combo.clear()
         if not self._require_time_column:
@@ -410,6 +418,7 @@ class DataLoadDialog(QDialog):
 
         # 模型设置
         self._base_model = DataFrameModel(self._work_df)
+        self._base_model.dataChanged.connect(self._on_data_changed)
         self._proxy.setSourceModel(self._base_model)
 
         # 默认时间列设置与时间格式可见性
@@ -432,6 +441,16 @@ class DataLoadDialog(QDialog):
             self._toggle_time_fmt_visibility(col != "无")
         self._reparse_time_and_refresh()
 
+    def _on_data_changed(self, topLeft: QModelIndex, bottomRight: QModelIndex, roles: list[int]):
+        """同步用户编辑到原始时间列副本。"""
+        if not self._current_time_col or self._time_col_raw is None:
+            return
+        col_idx = self._work_df.columns.get_loc(self._current_time_col)
+        if topLeft.column() <= col_idx <= bottomRight.column():
+            for row in range(topLeft.row(), bottomRight.row() + 1):
+                if row < len(self._time_col_raw):
+                    self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
+
     def _reparse_time_and_refresh(self, initial: bool = False):
         """根据“时间列 + 格式”解析时间列；刷新统计与视图。"""
         if self._work_df is None:
@@ -441,6 +460,16 @@ class DataLoadDialog(QDialog):
         if not self._require_time_column and col == "无":
             col = ""
         fmt = self.time_fmt_edit.text().strip()
+
+        # 切换时间列时恢复旧列的原始值，并缓存新列的原始值
+        if col != self._current_time_col:
+            if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
+                self._work_df[self._current_time_col] = self._time_col_raw
+            self._current_time_col = col or None
+            self._time_col_raw = self._work_df[col].copy() if col else None
+        else:
+            if col and self._time_col_raw is not None:
+                self._work_df[col] = self._time_col_raw.copy()
 
         # 解析：指定格式优先；否则尝试通用解析
         if col and fmt:
@@ -589,6 +618,10 @@ class DataLoadDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "失败", f"处理失败：{e}")
             return
+
+        # 若当前时间列被修改，需同步原始副本
+        if self._current_time_col and self._current_time_col in self._work_df.columns:
+            self._time_col_raw = self._work_df[self._current_time_col].copy()
 
         # 处理后需要重新解析时间列（防止该列也有缺失）并刷新
         self._reparse_time_and_refresh()
