@@ -120,7 +120,10 @@ class SmartTable(QWidget):
             root.addLayout(lab)
 
         self.table = QTableWidget()
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # 允许拖拽框选 / Shift 扩选 / Ctrl 多选
+        self.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self._delegate = _CellEditorDelegate(self.table)
         self.table.setItemDelegate(self._delegate)
         root.addWidget(self.table)
@@ -306,16 +309,39 @@ class SmartTable(QWidget):
         self._update_undo_redo_buttons()
 
     def _clear_selected_cells(self):
+        # 如果正在编辑，让编辑器自己处理 Delete/Backspace
+        if self.table.state() == QAbstractItemView.State.EditingState:
+            return
+
         idxs = self.table.selectedIndexes()
         if not idxs:
             return
+
         self._push_state()
+
+        # 恢复为系统默认前景色，避免出现白字
+        default_text_brush = self.table.palette().brush(QPalette.ColorRole.Text)
+
         for i in idxs:
-            self.table.setItem(i.row(), i.column(), QTableWidgetItem(""))
+            item = self.table.item(i.row(), i.column())
+            if item is None:
+                item = QTableWidgetItem("")
+                self._apply_editable_flag(item, i.column(), None)
+                self.table.setItem(i.row(), i.column(), item)
+            else:
+                item.setText("")  # 只清内容，不新建 item
+            item.setForeground(default_text_brush)  # 确保颜色回到正常
+
+        # 强制刷新一下视图，杜绝残影
+        self.table.viewport().update()
+
         self.dataframeChanged.emit(self.dataframe())
 
     def _init_shortcuts_and_menu(self):
         ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        sc = QShortcut(QKeySequence("Ctrl+C"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._handle_copy)
         sc = QShortcut(QKeySequence("Ctrl+V"), self.table)
         sc.setContext(ctx)
         sc.activated.connect(self._handle_paste)
@@ -350,6 +376,9 @@ class SmartTable(QWidget):
         m.addAction("清空当前行",    lambda: self._record_then(self._clear_row, r))
         if 0 <= c < self.table.columnCount():
             m.addAction("清空当前列", lambda: self._record_then(self._clear_col, c))
+        m.addSeparator()
+        m.addAction("复制", self._handle_copy)
+        m.addAction("粘贴", self._handle_paste)
         m.exec(QCursor.pos())
 
     def _record_then(self, fn, *args):
@@ -359,12 +388,44 @@ class SmartTable(QWidget):
         self._update_undo_redo_buttons()
 
     def _clear_row(self, r: int):
+        default_text_brush = self.table.palette().brush(QPalette.ColorRole.Text)
         for c in range(self.table.columnCount()):
-            self.table.setItem(r, c, QTableWidgetItem(""))
+            it = self.table.item(r, c)
+            if it is None:
+                it = QTableWidgetItem("")
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(r, c, it)
+            else:
+                it.setText("")
+            it.setForeground(default_text_brush)
 
     def _clear_col(self, c: int):
+        default_text_brush = self.table.palette().brush(QPalette.ColorRole.Text)
         for r in range(self.table.rowCount()):
-            self.table.setItem(r, c, QTableWidgetItem(""))
+            it = self.table.item(r, c)
+            if it is None:
+                it = QTableWidgetItem("")
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(r, c, it)
+            else:
+                it.setText("")
+            it.setForeground(default_text_brush)
+
+    def _handle_copy(self):
+        ranges = self.table.selectedRanges()
+        if not ranges:
+            return
+        blocks = []
+        for rg in ranges:
+            lines = []
+            for r in range(rg.topRow(), rg.bottomRow() + 1):
+                cells = []
+                for c in range(rg.leftColumn(), rg.rightColumn() + 1):
+                    it = self.table.item(r, c)
+                    cells.append("" if it is None else it.text())
+                lines.append("\t".join(cells))
+            blocks.append("\n".join(lines))
+        QGuiApplication.clipboard().setText("\n".join(blocks))
 
     def _handle_paste(self):
         text = QGuiApplication.clipboard().text()
