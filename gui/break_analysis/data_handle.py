@@ -8,9 +8,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from gui.calculator_widget import CalculatorWidget
-from gui.feature_preview import FeaturePreviewWidget,HeatmapCanvas
-from .feature_selector_widget import FeatureSelectorWidget
+from .calculator_widget import CalculatorWidget
+from .feature_preview import FeaturePreviewWidget,HeatmapCanvas
+from gui.feature_selector_widget import FeatureSelectorWidget
 from gui.tools import logger
 
 class DataHandlePage(QWidget):

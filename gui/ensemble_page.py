@@ -13,7 +13,7 @@ import pandas as pd
 from backend.ml_interface import ML
 from backend.model_registry import list_all as list_models
 
-from gui.validation_page import ValidationPage
+from gui.break_analysis.validation_page import ValidationPage
 
 
 class EnsemblePage(QWidget):

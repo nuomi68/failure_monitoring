@@ -432,7 +432,7 @@ class UnsupervisedPage(QWidget):
         else:
             params = self.if_params.copy()
             # 解析 max_samples
-            max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(self.X))
+            max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(X))
             params["max_samples"] = max_samples
 
         rep = ML.train(

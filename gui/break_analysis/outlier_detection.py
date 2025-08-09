@@ -2,10 +2,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedLayout
 )
 from PyQt6.QtCore import Qt
-from gui.data_handle import DataHandlePage
-from gui.unsupervised_page import UnsupervisedPage
-from gui.supervised_page import SupervisedPage
-from gui.validation_page import ValidationPage
+from .data_handle import DataHandlePage
+from .unsupervised_page import UnsupervisedPage
+from .supervised_page import SupervisedPage
+from .validation_page import ValidationPage
 
 class OutlierDetectionPage(QWidget):
     """Top-level page managing the data handle and ML views."""

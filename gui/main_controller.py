@@ -31,7 +31,7 @@ class QtLogHandler(logging.Handler):
         self.widget.appendPlainText(msg)
 
 from gui.set_style import get_sheet
-from gui.outlier_detection import OutlierDetectionPage
+from gui.break_analysis.outlier_detection import OutlierDetectionPage
 from gui.ensemble_page import EnsemblePage
 from gui.nuclide_prediction.time_series_page import TimeSeriesPage
 from gui.fault_level_page import FaultLevelPage
