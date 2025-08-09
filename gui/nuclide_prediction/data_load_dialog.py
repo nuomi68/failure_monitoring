@@ -303,9 +303,9 @@ class DataLoadDialog(QDialog):
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self._apply_fix)
 
-        # 绑定时间解析的即时刷新
+        # 绑定时间解析：选择列或结束时间格式编辑时再解析
         self.time_col_combo.currentIndexChanged.connect(self._time_col_changed)
-        self.time_fmt_edit.textChanged.connect(self._reparse_time_and_refresh)
+        self.time_fmt_edit.editingFinished.connect(self._time_fmt_edit_finished)
 
         # 顶部布局
         top = QGridLayout()
@@ -429,17 +429,45 @@ class DataLoadDialog(QDialog):
             self.time_col_combo.setCurrentIndex(0 if self.time_col_combo.count() > 0 else -1)
             self._toggle_time_fmt_visibility(True)
 
-        self._reparse_time_and_refresh(initial=initial)
+        if not self._auto_detect_time_column(initial=initial):
+            self._reparse_time_and_refresh(initial=initial)
 
     def _toggle_time_fmt_visibility(self, visible: bool):
         self.time_fmt_label.setVisible(visible)
         self.time_fmt_edit.setVisible(visible)
 
+    def _auto_detect_time_column(self, initial: bool = False) -> bool:
+        if self._work_df is None:
+            return False
+        text_cols = [c for c in self._work_df.columns if pd.api.types.is_string_dtype(self._work_df[c])]
+        if not text_cols:
+            return False
+        cand = str(text_cols[0])
+        idx = self.time_col_combo.findText(cand)
+        if idx < 0:
+            return False
+        self.time_col_combo.blockSignals(True)
+        self.time_col_combo.setCurrentIndex(idx)
+        self.time_col_combo.blockSignals(False)
+        if not self._require_time_column:
+            self._toggle_time_fmt_visibility(True)
+        self._current_time_col = cand
+        self._time_col_raw = self._work_df[cand].copy()
+        ser = pd.to_datetime(self._time_col_raw, errors="coerce")
+        self._work_df[cand] = ser
+        ok, bad = ser.notna().sum(), ser.isna().sum()
+        self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
+        self._update_preview(initial=initial)
+        return True
+
     def _time_col_changed(self):
         if not self._require_time_column:
             col = self.time_col_combo.currentText().strip()
             self._toggle_time_fmt_visibility(col != "无")
-        self._reparse_time_and_refresh()
+        self._reparse_time_and_refresh(show_fail_msg=True)
+
+    def _time_fmt_edit_finished(self):
+        self._reparse_time_and_refresh(show_fail_msg=True)
 
     def _on_data_changed(self, topLeft: QModelIndex, bottomRight: QModelIndex, roles: list[int]):
         """同步用户编辑到原始时间列副本。"""
@@ -451,7 +479,7 @@ class DataLoadDialog(QDialog):
                 if row < len(self._time_col_raw):
                     self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
 
-    def _reparse_time_and_refresh(self, initial: bool = False):
+    def _reparse_time_and_refresh(self, *, initial: bool = False, show_fail_msg: bool = False):
         """根据“时间列 + 格式”解析时间列；刷新统计与视图。"""
         if self._work_df is None:
             return
@@ -477,11 +505,15 @@ class DataLoadDialog(QDialog):
             self._work_df[col] = ser
             ok, bad = ser.notna().sum(), ser.isna().sum()
             self.parsed_label.setText(f"时间解析：成功 {ok:,} 条，失败 {bad:,} 条。失败将以缺失值高亮显示。")
+            if bad and show_fail_msg:
+                QMessageBox.warning(self, "时间解析失败", f"格式 {fmt} 未能解析 {bad} 条记录。")
         elif col:
             ser = pd.to_datetime(self._work_df[col], errors="coerce")
             self._work_df[col] = ser
             ok, bad = ser.notna().sum(), ser.isna().sum()
             self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
+            if bad and show_fail_msg:
+                QMessageBox.warning(self, "时间解析失败", f"未能解析 {bad} 条记录，请检查时间格式。")
         else:
             self.parsed_label.setText("未选择时间列。")
 
