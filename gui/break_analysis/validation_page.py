@@ -102,12 +102,13 @@ class ValidationPage(QWidget):
                 self.result_lbl.setText("结果: 空")
                 return
             df_all = pd.concat([df_feat, pd.DataFrame(res)], axis=1)
-            self.table.set_dataframe(df_all)
-            for c in range(len(self.features), df_all.shape[1]):
-                for r in range(self.table.table.rowCount()):
-                    item = self.table.table.item(r, c)
-                    if item:
-                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            with self.table.no_record():
+                self.table.set_dataframe(df_all, record=False)
+                for c in range(len(self.features), df_all.shape[1]):
+                    for r in range(self.table.table.rowCount()):
+                        item = self.table.table.item(r, c)
+                        if item:
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.result_lbl.setText(
                 f"结果: 共 {self.table.table.rowCount()} 行, 目标列 {df_all.shape[1] - len(self.features)} 个"
             )
@@ -118,7 +119,8 @@ class ValidationPage(QWidget):
         mask = ~df_feat.isna().any(axis=1)
         valid_idx = mask.to_numpy().nonzero()[0]
         if valid_idx.size == 0:
-            self.table.set_dataframe(df_feat)
+            with self.table.no_record():
+                self.table.set_dataframe(df_feat, record=False)
             self.result_lbl.setText("结果: 本次没有完整行，已跳过")
             return
         df_valid = df_feat.iloc[valid_idx].reset_index(drop=True)
@@ -149,12 +151,13 @@ class ValidationPage(QWidget):
         df_all = df_feat.copy()
         for t, full in res.items():
             df_all[t] = full
-        self.table.set_dataframe(df_all)
-        for i in range(len(self.features), len(df_all.columns)):
-            for r in range(self.table.table.rowCount()):
-                item = self.table.table.item(r, i)
-                if item:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        with self.table.no_record():
+            self.table.set_dataframe(df_all, record=False)
+            for i in range(len(self.features), len(df_all.columns)):
+                for r in range(self.table.table.rowCount()):
+                    item = self.table.table.item(r, i)
+                    if item:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         dropped = (len(df_feat) - len(valid_idx))
         hint = f"，跳过 {dropped} 行" if dropped > 0 else ""
         self.result_lbl.setText(

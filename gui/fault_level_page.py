@@ -134,11 +134,12 @@ class FaultLevelPage(QWidget):
 
         df_un["预测等级"] = ""
         df_un.loc[keep_un.to_numpy().nonzero()[0], "预测等级"] = preds
-        self.tbl_unlabelled.set_dataframe(df_un)
-        pred_col = df_un.columns.get_loc("预测等级")
-        for r in range(self.tbl_unlabelled.table.rowCount()):
-            item = self.tbl_unlabelled.table.item(r, pred_col)
-            if item:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        with self.tbl_unlabelled.no_record():
+            self.tbl_unlabelled.set_dataframe(df_un, record=False)
+            pred_col = df_un.columns.get_loc("预测等级")
+            for r in range(self.tbl_unlabelled.table.rowCount()):
+                item = self.tbl_unlabelled.table.item(r, pred_col)
+                if item:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
         QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。")

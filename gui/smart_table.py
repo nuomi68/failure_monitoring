@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
 import pandas as pd
-import numpy as np
 
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QTimer
+from contextlib import contextmanager
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QEvent
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLabel,
-    QPushButton, QFileDialog, QComboBox, QMenu
+    QPushButton, QFileDialog, QComboBox, QMenu, QAbstractItemView
 )
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
 
@@ -33,9 +33,10 @@ class SmartTable(QWidget):
         super().__init__()
         self.cfg = cfg
         self._restoring = False
+        self._record_enabled = True
+        self._edit_dirty = False
         self._undo_stack: list[list[list[str]]] = []
         self._redo_stack: list[list[list[str]]] = []
-        self._last_edit_cell: Tuple[int, int] | None = None
         self._label_col: Optional[str] = None
         self._features_sink: Optional["SmartTable"] = None
 
@@ -73,6 +74,10 @@ class SmartTable(QWidget):
         self.table = QTableWidget()
         root.addWidget(self.table)
         self._init_shortcuts_and_menu()
+        self.table.itemDelegate().closeEditor.connect(self._on_edit_closed)
+        self.table.itemDelegate().commitData.connect(self._on_commit_data)
+        self.table.itemChanged.connect(self._on_item_changed)
+        self.table.installEventFilter(self)
 
         headers = self.cfg.default_headers or []
         self.set_headers(headers)
@@ -90,7 +95,7 @@ class SmartTable(QWidget):
             self.cb_label.blockSignals(False)
         self.schemaChanged.emit(headers)
 
-    def set_dataframe(self, df: pd.DataFrame, editable: Optional[bool] = None) -> None:
+    def set_dataframe(self, df: pd.DataFrame, editable: Optional[bool] = None, *, record: bool = True) -> None:
         self._restoring = True
         try:
             headers = [str(c) for c in df.columns]
@@ -104,7 +109,8 @@ class SmartTable(QWidget):
                     self.table.setItem(r, c, it)
         finally:
             self._restoring = False
-        self._push_state()
+        if record:
+            self._push_state()
         self.table.resizeColumnsToContents()
         self.dataframeChanged.emit(self.dataframe())
         if self._features_sink is not None:
@@ -206,7 +212,6 @@ class SmartTable(QWidget):
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self._redo)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._open_menu)
-        self.table.itemChanged.connect(self._on_item_changed)
 
     def _open_menu(self, pos: QPoint):
         r = self.table.rowAt(pos.y())
@@ -288,16 +293,24 @@ class SmartTable(QWidget):
         """Clear undo/redo stacks and record current snapshot as base."""
         self._undo_stack = [self._snapshot()]
         self._redo_stack.clear()
-        self._last_edit_cell = None
+
+    @contextmanager
+    def no_record(self):
+        """Context manager to temporarily disable undo stack recording."""
+        prev = self._record_enabled
+        self._record_enabled = False
+        try:
+            yield
+        finally:
+            self._record_enabled = prev
 
     def _push_state(self):
-        if self._restoring:
+        if self._restoring or not self._record_enabled:
             return
         self._undo_stack.append(self._snapshot())
         if len(self._undo_stack) > self.cfg.max_undo:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
-        self._last_edit_cell = None
 
     def _snapshot(self) -> list[list[str]]:
         return [[self._cell_text(r, c) for c in range(self.table.columnCount())]
@@ -323,11 +336,24 @@ class SmartTable(QWidget):
     def _on_item_changed(self, item: QTableWidgetItem):
         if self._restoring or not self.cfg.editable:
             return
-        cell = (item.row(), item.column())
-        if self._last_edit_cell != cell:
-            QTimer.singleShot(0, self._push_state)
-            self._last_edit_cell = cell
+        if self.table.state() == QAbstractItemView.State.EditingState:
+            self._edit_dirty = True
         self.dataframeChanged.emit(self.dataframe())
+
+    def _on_commit_data(self, _editor):
+        self._edit_dirty = True
+
+    def _on_edit_closed(self, _editor, _hint):
+        if self._edit_dirty:
+            self._push_state()
+            self._edit_dirty = False
+
+    def eventFilter(self, obj, event):
+        if obj is self.table and event.type() == QEvent.Type.FocusOut:
+            if self._edit_dirty:
+                self._push_state()
+                self._edit_dirty = False
+        return super().eventFilter(obj, event)
 
     def _cell_text(self, r: int, c: int) -> str:
         it = self.table.item(r, c)
