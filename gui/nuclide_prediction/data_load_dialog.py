@@ -243,6 +243,11 @@ class DataLoadDialog(QDialog):
         self._current_time_col: Optional[str] = None
         self._time_col_raw: Optional[pd.Series] = None
 
+        # 记录含有非数字字符的字符串单元格，以避免每次刷新都全表扫描
+        self._bad_mask: Optional[pd.DataFrame] = None
+        # 用户已处理过的行，保持可见避免“消失”
+        self._sticky_rows: Set[int] = set()
+
         # ---------- 顶部：选择文件 / 时间列与格式 ----------
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择 CSV 或 Excel 文件...")
@@ -423,6 +428,10 @@ class DataLoadDialog(QDialog):
         self.col_combo.setEnabled(True)
         self.apply_btn.setEnabled(True)
 
+        # 初始化坏值掩码和已处理行集合
+        self._bad_mask = self._work_df.applymap(is_bad_str)
+        self._sticky_rows = set()
+
         # 模型设置
         self._base_model = DataFrameModel(self._work_df)
         self._base_model.dataChanged.connect(self._on_data_changed)
@@ -453,6 +462,8 @@ class DataLoadDialog(QDialog):
         if not enabled:
             if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
                 self._work_df[self._current_time_col] = self._time_col_raw
+                if self._bad_mask is not None:
+                    self._bad_mask[self._current_time_col] = self._work_df[self._current_time_col].apply(is_bad_str)
             self._current_time_col = None
             self._time_col_raw = None
             self.time_col_combo.setCurrentIndex(-1)
@@ -497,14 +508,20 @@ class DataLoadDialog(QDialog):
         self._reparse_time_and_refresh(show_fail_msg=True)
 
     def _on_data_changed(self, topLeft: QModelIndex, bottomRight: QModelIndex, roles: list[int]):
-        """同步用户编辑到原始时间列副本。"""
-        if not self.time_col_chk.isChecked() or not self._current_time_col or self._time_col_raw is None:
+        """同步用户编辑到原始时间列，并刷新坏值掩码。"""
+        if self._work_df is None or self._bad_mask is None:
             return
-        col_idx = self._work_df.columns.get_loc(self._current_time_col)
-        if topLeft.column() <= col_idx <= bottomRight.column():
-            for row in range(topLeft.row(), bottomRight.row() + 1):
-                if row < len(self._time_col_raw):
-                    self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
+        for c in range(topLeft.column(), bottomRight.column() + 1):
+            col_name = self._work_df.columns[c]
+            for r in range(topLeft.row(), bottomRight.row() + 1):
+                val = self._work_df.iloc[r, c]
+                self._bad_mask.iat[r, c] = is_bad_str(val)
+        if self.time_col_chk.isChecked() and self._current_time_col and self._time_col_raw is not None:
+            col_idx = self._work_df.columns.get_loc(self._current_time_col)
+            if topLeft.column() <= col_idx <= bottomRight.column():
+                for row in range(topLeft.row(), bottomRight.row() + 1):
+                    if row < len(self._time_col_raw):
+                        self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
 
     def _reparse_time_and_refresh(self, *, initial: bool = False, show_fail_msg: bool = False):
         """根据“时间列 + 格式”解析时间列；刷新统计与视图。"""
@@ -516,7 +533,7 @@ class DataLoadDialog(QDialog):
             self._update_preview(initial=initial)
             return
 
-        col = self.time_col_combo.currentText().strip()
+        col = self.time_col_combo.currentText()
         fmt = self.time_fmt_edit.text().strip()
 
         # 切换时间列时恢复旧列的原始值，并缓存新列的原始值
@@ -525,14 +542,20 @@ class DataLoadDialog(QDialog):
                 self._work_df[self._current_time_col] = self._time_col_raw
             self._current_time_col = col or None
             self._time_col_raw = self._work_df[col].copy() if col else None
+            if self._bad_mask is not None and col:
+                self._bad_mask[col] = self._work_df[col].apply(is_bad_str)
         else:
             if col and self._time_col_raw is not None:
                 self._work_df[col] = self._time_col_raw.copy()
+                if self._bad_mask is not None:
+                    self._bad_mask[col] = self._work_df[col].apply(is_bad_str)
 
         # 解析：指定格式优先；否则尝试通用解析
         if col and fmt:
             ser = pd.to_datetime(self._work_df[col], format=fmt, errors="coerce")
             self._work_df[col] = ser
+            if self._bad_mask is not None:
+                self._bad_mask[col] = self._work_df[col].apply(is_bad_str)
             ok, bad = ser.notna().sum(), ser.isna().sum()
             self.parsed_label.setText(f"时间解析：成功 {ok:,} 条，失败 {bad:,} 条。失败将以缺失值高亮显示。")
             if bad and show_fail_msg:
@@ -540,6 +563,8 @@ class DataLoadDialog(QDialog):
         elif col:
             ser = pd.to_datetime(self._work_df[col], errors="coerce")
             self._work_df[col] = ser
+            if self._bad_mask is not None:
+                self._bad_mask[col] = self._work_df[col].apply(is_bad_str)
             ok, bad = ser.notna().sum(), ser.isna().sum()
             self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
             if bad and show_fail_msg:
@@ -551,9 +576,9 @@ class DataLoadDialog(QDialog):
 
     def _current_missing_indices(self) -> Set[int]:
         """返回当前工作表中“任一列缺失”的行索引集合。"""
-        if self._work_df is None:
+        if self._work_df is None or self._bad_mask is None:
             return set()
-        mask = self._work_df.isna() | self._work_df.applymap(is_bad_str)
+        mask = self._work_df.isna() | self._bad_mask
         rows = mask.any(axis=1)
         return set(self._work_df.index[rows].tolist())
 
@@ -581,10 +606,10 @@ class DataLoadDialog(QDialog):
 
         # 统计缺失 + 坏值
         mask_na = self._work_df.isna()
-        mask_bad = self._work_df.applymap(is_bad_str)
+        mask_bad = self._bad_mask if self._bad_mask is not None else self._work_df.applymap(is_bad_str)
         na_counts = (mask_na | mask_bad).sum()
         total_cells = self._work_df.shape[0] * self._work_df.shape[1]
-        total_na = int((mask_na | mask_bad).sum().sum())
+        total_na = int((mask_na | mask_bad).to_numpy().sum())
         self.stats_label.setText(
             f"行数: {len(self._work_df):,}，列数: {self._work_df.shape[1]}，缺失单元格: {total_na:,} "
             f"（{total_na / max(1, total_cells):.2%}）"
@@ -593,6 +618,7 @@ class DataLoadDialog(QDialog):
         # 计算“缺失行±1”
         missing_rows = self._current_missing_indices()
         allowed = self._indices_with_context(missing_rows, k=1)
+        allowed |= self._sticky_rows
 
         # 保证底层模型数据最新
         if self._base_model is None:
@@ -607,7 +633,8 @@ class DataLoadDialog(QDialog):
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
-        time_selected = self.time_col_chk.isChecked() and bool(self.time_col_combo.currentText().strip())
+        time_text = self.time_col_combo.currentText()
+        time_selected = self.time_col_chk.isChecked() and bool(time_text.strip())
         ok_enabled = (remain == 0) and (not self._require_time_column or time_selected)
 
         if remain == 0:
@@ -644,6 +671,12 @@ class DataLoadDialog(QDialog):
             QMessageBox.warning(self, "提示", "未选择有效列。")
             return
 
+        # 记录本次受影响的行，填充后保持可见
+        mask_before = self._work_df[cols].isna()
+        if self._bad_mask is not None:
+            mask_before |= self._bad_mask[cols]
+        affected_rows = set(self._work_df.index[mask_before.any(axis=1)].tolist())
+
         method = self.method_combo.currentText()
         try:
             if "前向填充" in method:
@@ -663,7 +696,6 @@ class DataLoadDialog(QDialog):
                 if val_text == "":
                     QMessageBox.warning(self, "提示", "请输入常数值。")
                     return
-                # 尝试转为数值，失败则按字符串处理
                 try:
                     val = float(val_text)
                 except ValueError:
@@ -671,12 +703,20 @@ class DataLoadDialog(QDialog):
                 self._work_df[cols] = self._work_df[cols].fillna(val)
             elif "删除含缺失行" in method:
                 self._work_df.dropna(axis=0, how='any', inplace=True)
+                if self._bad_mask is not None:
+                    self._bad_mask = self._bad_mask.loc[self._work_df.index]
             else:
                 QMessageBox.warning(self, "提示", "未知方法。")
                 return
         except Exception as e:
             QMessageBox.critical(self, "失败", f"处理失败：{e}")
             return
+
+        # 更新坏值掩码并记录受影响行
+        if self._bad_mask is not None:
+            self._bad_mask[cols] = self._work_df[cols].applymap(is_bad_str)
+        self._sticky_rows |= affected_rows
+        self._sticky_rows &= set(self._work_df.index)
 
         # 若当前时间列被修改，需同步原始副本
         if self._current_time_col and self._current_time_col in self._work_df.columns:
@@ -690,7 +730,8 @@ class DataLoadDialog(QDialog):
         if self._work_df is None:
             QMessageBox.warning(self, "提示", "请先读取数据。")
             return
-        if self._work_df.isna().any().any() or self._work_df.applymap(is_bad_str).any().any():
+        bad = self._bad_mask.any().any() if self._bad_mask is not None else self._work_df.applymap(is_bad_str).any().any()
+        if self._work_df.isna().any().any() or bad:
             QMessageBox.warning(self, "提示", "仍存在缺失或非法值，请先处理干净再继续。")
             return
         if self._require_time_column and not self.time_column():
@@ -710,7 +751,7 @@ class DataLoadDialog(QDialog):
     def time_column(self) -> Optional[str]:
         if not self.time_col_chk.isChecked():
             return None
-        col = self.time_col_combo.currentText().strip()
+        col = self.time_col_combo.currentText()
         return col or None
 
     def time_format(self) -> str:
