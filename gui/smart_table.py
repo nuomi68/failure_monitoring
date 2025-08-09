@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QLineEdit,
 )
-from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
+from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor, QPalette
 
 
 @dataclass
@@ -48,7 +48,13 @@ class _CellEditorDelegate(QStyledItemDelegate):
         editor = super().createEditor(parent, option, index)
         if isinstance(editor, QLineEdit):
             editor.setFrame(False)
-            editor.setStyleSheet("border: none; padding: 0; background: transparent;")
+            editor.setStyleSheet(
+                "border: none; padding: 0; background: transparent; font-weight: bold;"
+            )
+            pal = editor.palette()
+            pal.setColor(QPalette.ColorRole.Highlight, parent.palette().color(QPalette.ColorRole.Highlight))
+            pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+            editor.setPalette(pal)
         return editor
 
     def setEditorData(self, editor, index):
@@ -113,6 +119,7 @@ class SmartTable(QWidget):
             root.addLayout(lab)
 
         self.table = QTableWidget()
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._delegate = _CellEditorDelegate(self.table)
         self.table.setItemDelegate(self._delegate)
         root.addWidget(self.table)

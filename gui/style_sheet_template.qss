@@ -126,6 +126,7 @@ QLineEdit, QTextEdit, QPlainTextEdit {
     border-radius: $radius;
     padding: 6px 8px;
     selection-background-color: $primary;
+    selection-color: $text;
 }
 QLineEdit:hover,
 QTextEdit:hover,
@@ -195,6 +196,8 @@ QTableView {
 }
 QTableView::item:selected {
     border: none;
+    color: $text;
+    font-weight: 600;
 }
 QTableView::item:focus {
     outline: none;
