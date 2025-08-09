@@ -200,12 +200,25 @@ class DataLoadDialog(QDialog):
     - 仅显示“缺失行±1”的动态子集；
     - 在弹窗内完成缺失值处理；
     - 缺失清零后才能点击 OK 返回主界面。
+
+    Parameters
+    ----------
+    require_time_column : bool, default False
+        是否强制要求用户选择时间列。若为 True，则在未选择时间列时即便
+        数据已无缺失，OK 按钮也不会启用。
     """
 
-    def __init__(self, parent: QWidget | None = None, default_time_fmt: str = "%Y年%m月%d日%H%M"):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        default_time_fmt: str = "%Y年%m月%d日%H%M",
+        require_time_column: bool = False,
+    ):
         super().__init__(parent)
         self.setWindowTitle("加载数据")
         self.resize(1100, 700)
+
+        self._require_time_column = require_time_column
 
         # 原始数据（来自文件）；工作数据（在弹窗内进行解析/填充/删除等）
         self._raw_df: Optional[pd.DataFrame] = None
@@ -447,12 +460,22 @@ class DataLoadDialog(QDialog):
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
+        time_selected = bool(self.time_col_combo.currentText().strip())
+        ok_enabled = (remain == 0) and (not self._require_time_column or time_selected)
+
         if remain == 0:
-            self.remaining_label.setText("✅ 所有缺失值已处理完成。可以点击 OK。")
-            self.btns.button(QDialogButtonBox.StandardButton.Ok).setEnabled(True)
+            if self._require_time_column and not time_selected:
+                self.remaining_label.setText(
+                    "⚠️ 缺失值已处理完成，但未选择时间列。请先选择时间列再继续。"
+                )
+            else:
+                self.remaining_label.setText("✅ 所有缺失值已处理完成。可以点击 OK。")
         else:
-            self.remaining_label.setText(f"⚠️ 仍有 {remain} 行包含缺失值。请处理后再继续。仅显示缺失行及其前后各 1 行。")
-            self.btns.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+            self.remaining_label.setText(
+                f"⚠️ 仍有 {remain} 行包含缺失值。请处理后再继续。仅显示缺失行及其前后各 1 行。"
+            )
+
+        self.btns.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok_enabled)
 
         # 首次读取时给一点提示
         if initial:
@@ -518,6 +541,9 @@ class DataLoadDialog(QDialog):
             return
         if self._work_df.isna().any().any():
             QMessageBox.warning(self, "提示", "仍存在缺失值，请先处理干净再继续。")
+            return
+        if self._require_time_column and not self.time_column():
+            QMessageBox.warning(self, "提示", "请先选择时间列。")
             return
         self.accept()
 

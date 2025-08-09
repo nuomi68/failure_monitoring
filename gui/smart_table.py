@@ -8,8 +8,18 @@ import pandas as pd
 from contextlib import contextmanager
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QEvent
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLabel,
-    QPushButton, QFileDialog, QComboBox, QMenu, QAbstractItemView
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QLabel,
+    QPushButton,
+    QFileDialog,
+    QComboBox,
+    QMenu,
+    QAbstractItemView,
+    QDialog,
 )
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
 
@@ -22,6 +32,12 @@ class SmartTableConfig:
     max_undo: int = 50
     editable: bool = True
     default_headers: Optional[List[str]] = None
+    # 是否使用 DataLoadDialog 作为导入界面
+    use_data_load_dialog: bool = False
+    # 若使用 DataLoadDialog，是否强制选择时间列
+    require_time_column: bool = False
+    # DataLoadDialog 默认时间格式
+    data_load_default_time_fmt: str = "%Y年%m月%d日%H%M"
 
 
 class SmartTable(QWidget):
@@ -185,26 +201,43 @@ class SmartTable(QWidget):
         self._sync_features_sink_headers()
 
     def _import(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择表格文件", "",
-            "表格文件 (*.csv *.xlsx *.xls);;CSV 文件 (*.csv);;Excel 文件 (*.xlsx *.xls);;所有文件 (*)"
-        )
-        if not path:
-            return
-        try:
-            if path.endswith(".csv"):
-                df = pd.read_csv(path)
-            elif path.endswith(".xlsx") or path.endswith(".xls"):
-                df = pd.read_excel(path)
-            else:
-                try:
+        if self.cfg.use_data_load_dialog:
+            from .nuclide_prediction.data_load_dialog import DataLoadDialog
+
+            dlg = DataLoadDialog(
+                self,
+                default_time_fmt=self.cfg.data_load_default_time_fmt,
+                require_time_column=self.cfg.require_time_column,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            df = dlg.loaded_dataframe()
+            if df is None:
+                return
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择表格文件",
+                "",
+                "表格文件 (*.csv *.xlsx *.xls);;CSV 文件 (*.csv);;Excel 文件 (*.xlsx *.xls);;所有文件 (*)",
+            )
+            if not path:
+                return
+            try:
+                if path.endswith(".csv"):
                     df = pd.read_csv(path)
-                except Exception:
+                elif path.endswith(".xlsx") or path.endswith(".xls"):
                     df = pd.read_excel(path)
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
-            return
+                else:
+                    try:
+                        df = pd.read_csv(path)
+                    except Exception:
+                        df = pd.read_excel(path)
+            except Exception as e:
+                from PyQt6.QtWidgets import QMessageBox
+
+                QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
+                return
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
         if any(h.strip() for h in headers):
             df.columns = [str(c) for c in df.columns]

@@ -199,7 +199,11 @@ class TimeSeriesPage(QWidget):
     # ============================================================
     def _open_load_dialog(self):
         """弹出清洗弹窗；确认后注册数据集并在左侧显示。"""
-        dlg = DataLoadDialog(self, default_time_fmt=self._time_fmt)
+        dlg = DataLoadDialog(
+            self,
+            default_time_fmt=self._time_fmt,
+            require_time_column=True,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
