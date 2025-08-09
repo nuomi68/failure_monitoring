@@ -135,7 +135,7 @@ class FaultLevelPage(QWidget):
         df_un["预测等级"] = ""
         df_un.loc[keep_un.to_numpy().nonzero()[0], "预测等级"] = preds
         with self.tbl_unlabelled.no_record():
-            self.tbl_unlabelled.set_dataframe(df_un, record=False)
+            self.tbl_unlabelled.set_dataframe(df_un, record_state=False)
             pred_col = df_un.columns.get_loc("预测等级")
             for r in range(self.tbl_unlabelled.table.rowCount()):
                 item = self.tbl_unlabelled.table.item(r, pred_col)

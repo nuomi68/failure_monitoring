@@ -103,7 +103,7 @@ class ValidationPage(QWidget):
                 return
             df_all = pd.concat([df_feat, pd.DataFrame(res)], axis=1)
             with self.table.no_record():
-                self.table.set_dataframe(df_all, record=False)
+                self.table.set_dataframe(df_all, record_state=False)
                 for c in range(len(self.features), df_all.shape[1]):
                     for r in range(self.table.table.rowCount()):
                         item = self.table.table.item(r, c)
@@ -120,7 +120,7 @@ class ValidationPage(QWidget):
         valid_idx = mask.to_numpy().nonzero()[0]
         if valid_idx.size == 0:
             with self.table.no_record():
-                self.table.set_dataframe(df_feat, record=False)
+                self.table.set_dataframe(df_feat, record_state=False)
             self.result_lbl.setText("结果: 本次没有完整行，已跳过")
             return
         df_valid = df_feat.iloc[valid_idx].reset_index(drop=True)
@@ -152,7 +152,7 @@ class ValidationPage(QWidget):
         for t, full in res.items():
             df_all[t] = full
         with self.table.no_record():
-            self.table.set_dataframe(df_all, record=False)
+            self.table.set_dataframe(df_all, record_state=False)
             for i in range(len(self.features), len(df_all.columns)):
                 for r in range(self.table.table.rowCount()):
                     item = self.table.table.item(r, i)

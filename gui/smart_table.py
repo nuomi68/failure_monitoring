@@ -95,7 +95,25 @@ class SmartTable(QWidget):
             self.cb_label.blockSignals(False)
         self.schemaChanged.emit(headers)
 
-    def set_dataframe(self, df: pd.DataFrame, editable: Optional[bool] = None, *, record: bool = True) -> None:
+    def set_dataframe(
+        self,
+        df: pd.DataFrame,
+        editable: Optional[bool] = None,
+        *,
+        record_state: bool = True,
+    ) -> None:
+        """Fill table with DataFrame contents.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Data to populate the table.
+        editable : Optional[bool], default None
+            Override the table's editable flag for this operation.
+        record_state : bool, default True
+            Whether to push an undo snapshot after filling.
+        """
+
         self._restoring = True
         try:
             headers = [str(c) for c in df.columns]
@@ -109,7 +127,7 @@ class SmartTable(QWidget):
                     self.table.setItem(r, c, it)
         finally:
             self._restoring = False
-        if record:
+        if record_state:
             self._push_state()
         self.table.resizeColumnsToContents()
         self.dataframeChanged.emit(self.dataframe())
