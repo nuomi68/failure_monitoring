@@ -596,7 +596,9 @@ class TimeSeriesPage(QWidget):
             new_len = len(self._df) + 1
             self._df = self._df.reindex(range(new_len))
             if self._time_col in self._df.columns:
-                self._df.iat[new_len - 1, self._df.columns.get_loc(self._time_col)] = " "
+                col_idx = self._df.columns.get_loc(self._time_col)
+                # 用 NaT 代替
+                self._df.iat[new_len - 1, col_idx] = pd.NaT
             mdl = self.table.model()
             if hasattr(mdl, "setDataFrame"):
                 mdl.setDataFrame(self._df)

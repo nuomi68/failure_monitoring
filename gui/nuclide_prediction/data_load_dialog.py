@@ -566,37 +566,42 @@ class DataLoadDialog(QDialog):
 
         # 解析：先通用解析，再对未成功部分尝试用户指定格式
         if col:
-            ser = pd.to_datetime(self._work_df[col], errors="coerce")
-            mask = ser.isna() & self._work_df[col].notna()
-            if mask.any() and fmt:
-                ser_fmt = pd.to_datetime(
-                    self._work_df.loc[mask, col], format=fmt, errors="coerce"
-                )
-                ser.loc[mask] = ser_fmt
-            self._work_df[col] = ser
-            if self._bad_mask is not None:
-                self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
-            ok, bad = ser.notna().sum(), ser.isna().sum()
-            if fmt:
-                self.parsed_label.setText(
-                    f"时间解析：成功 {ok:,} 条，失败 {bad:,} 条。失败将以缺失值高亮显示。"
-                )
-                if bad and show_fail_msg:
-                    QMessageBox.warning(
-                        self,
-                        "时间解析失败",
-                        f"格式 {fmt} 未能解析 {bad} 条记录。",
+            try:
+                ser = pd.to_datetime(self._work_df[col])
+                mask = ser.isna() & self._work_df[col].notna()
+                if mask.any() and fmt:
+                    ser_fmt = pd.to_datetime(self._work_df.loc[mask, col], format=fmt)
+                    ser.loc[mask] = ser_fmt
+                self._work_df[col] = ser
+                if self._bad_mask is not None:
+                    self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
+                ok, bad = ser.notna().sum(), ser.isna().sum()
+                if fmt:
+                    self.parsed_label.setText(
+                        f"时间解析：成功 {ok:,} 条，失败 {bad:,} 条。失败将以缺失值高亮显示。"
                     )
-            else:
-                self.parsed_label.setText(
-                    f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。"
-                )
-                if bad and show_fail_msg:
-                    QMessageBox.warning(
-                        self,
-                        "时间解析失败",
-                        f"未能解析 {bad} 条记录，请检查时间格式。",
+                    if bad and show_fail_msg:
+                        QMessageBox.warning(
+                            self,
+                            "时间解析失败",
+                            f"格式 {fmt} 未能解析 {bad} 条记录。",
+                        )
+                else:
+                    self.parsed_label.setText(
+                        f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。"
                     )
+                    if bad and show_fail_msg:
+                        QMessageBox.warning(
+                            self,
+                            "时间解析失败",
+                            f"未能解析 {bad} 条记录，请检查时间格式。",
+                        )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "时间解析失败",
+                    f"{e}",
+                )
         else:
             self.parsed_label.setText("未选择时间列。")
 
