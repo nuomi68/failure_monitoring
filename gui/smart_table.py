@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QAbstractItemView,
-    QDialog,
 )
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
 
@@ -204,12 +203,12 @@ class SmartTable(QWidget):
         if self.cfg.use_data_load_dialog:
             from .nuclide_prediction.data_load_dialog import DataLoadDialog
 
-            dlg = DataLoadDialog(
+            dlg = DataLoadDialog.from_file_dialog(
                 self,
                 default_time_fmt=self.cfg.data_load_default_time_fmt,
                 require_time_column=self.cfg.require_time_column,
             )
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            if dlg is None:
                 return
             df = dlg.loaded_dataframe()
             if df is None:

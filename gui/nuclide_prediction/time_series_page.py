@@ -25,7 +25,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QDialog, QMessageBox, QInputDialog, QStyledItemDelegate
+    QHeaderView, QComboBox, QMessageBox, QInputDialog, QStyledItemDelegate
 )
 
 # —— 后端 ——
@@ -199,12 +199,12 @@ class TimeSeriesPage(QWidget):
     # ============================================================
     def _open_load_dialog(self):
         """弹出清洗弹窗；确认后注册数据集并在左侧显示。"""
-        dlg = DataLoadDialog(
+        dlg = DataLoadDialog.from_file_dialog(
             self,
             default_time_fmt=self._time_fmt,
             require_time_column=True,
         )
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        if dlg is None:
             return
 
         df = dlg.loaded_dataframe()

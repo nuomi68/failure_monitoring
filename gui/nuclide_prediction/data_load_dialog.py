@@ -49,6 +49,20 @@ def is_nan_like(val: Any) -> bool:
     return False
 
 
+def is_bad_str(val: Any) -> bool:
+    """判断是否为包含非数字字符的“坏值”字符串。"""
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return False
+        try:
+            float(s)
+            return False
+        except ValueError:
+            return True
+    return False
+
+
 class DataFrameModel(QAbstractTableModel):
     """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值做背景高亮。"""
 
@@ -79,7 +93,7 @@ class DataFrameModel(QAbstractTableModel):
             color = self._row_colors.get(r)
             if color is not None:
                 return color
-            if is_nan_like(val):
+            if is_nan_like(val) or is_bad_str(val):
                 return QBrush(Qt.GlobalColor.red).color().lighter(170)
 
         if role == Qt.ItemDataRole.DisplayRole:
@@ -121,9 +135,7 @@ class DataFrameModel(QAbstractTableModel):
     # 允许编辑最后一行
     def flags(self, index: QModelIndex):
         base = super().flags(index)
-        if index.row() == self.rowCount() - 1:
-            return base | Qt.ItemFlag.ItemIsEditable
-        return base
+        return base | Qt.ItemFlag.ItemIsEditable
 
     def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
@@ -232,9 +244,14 @@ class DataLoadDialog(QDialog):
         btn_load = QPushButton("选择并加载")
         btn_load.clicked.connect(self._choose_and_load)
 
+        self.ignore_first_col_chk = QCheckBox("忽略首列")
+        self.ignore_first_col_chk.setEnabled(False)
+        self.ignore_first_col_chk.stateChanged.connect(self._apply_ignore_first_column)
+
         self.time_col_combo = QComboBox()
         self.time_col_combo.setEnabled(False)
 
+        self.time_fmt_label = QLabel("时间格式")
         self.time_fmt_edit = QLineEdit(default_time_fmt)
         self.time_fmt_edit.setPlaceholderText('例如：%Y年%m月%d日%H%M 或 %Y-%m-%d %H:%M:%S')
 
@@ -283,7 +300,7 @@ class DataLoadDialog(QDialog):
         self.apply_btn.clicked.connect(self._apply_fix)
 
         # 绑定时间解析的即时刷新
-        self.time_col_combo.currentIndexChanged.connect(self._reparse_time_and_refresh)
+        self.time_col_combo.currentIndexChanged.connect(self._time_col_changed)
         self.time_fmt_edit.textChanged.connect(self._reparse_time_and_refresh)
 
         # 顶部布局
@@ -291,10 +308,11 @@ class DataLoadDialog(QDialog):
         top.addWidget(QLabel("文件"), 0, 0)
         top.addWidget(self.path_edit, 0, 1, 1, 2)
         top.addWidget(btn_load, 0, 3)
+        top.addWidget(self.ignore_first_col_chk, 0, 4)
 
         top.addWidget(QLabel("时间列"), 1, 0)
         top.addWidget(self.time_col_combo, 1, 1)
-        top.addWidget(QLabel("时间格式"), 1, 2)
+        top.addWidget(self.time_fmt_label, 1, 2)
         top.addWidget(self.time_fmt_edit, 1, 3, 1, 2)
 
         # 工具条布局
@@ -360,11 +378,27 @@ class DataLoadDialog(QDialog):
             return
 
         self._raw_df = df.copy()
-        self._work_df = self._raw_df.copy()
         self._path = path
+        self.ignore_first_col_chk.setEnabled(True)
+        self._apply_ignore_first_column(initial=True)
+
+    def _apply_ignore_first_column(self, _state=None, *, initial: bool = False):
+        """根据复选框状态决定是否忽略首列，并刷新控件。"""
+        if self._raw_df is None:
+            return
+        self._work_df = self._raw_df.copy()
+        if self.ignore_first_col_chk.isChecked() and self._work_df.shape[1] > 0:
+            self._work_df = self._work_df.iloc[:, 1:].copy()
+        self._reset_controls_after_df_change(initial=initial)
+
+    def _reset_controls_after_df_change(self, initial: bool = False):
+        if self._work_df is None:
+            return
 
         # 时间列/普通列选择器
         self.time_col_combo.clear()
+        if not self._require_time_column:
+            self.time_col_combo.addItem("无")
         self.time_col_combo.addItems(list(self._work_df.columns.astype(str)))
         self.time_col_combo.setEnabled(True)
 
@@ -378,8 +412,25 @@ class DataLoadDialog(QDialog):
         self._base_model = DataFrameModel(self._work_df)
         self._proxy.setSourceModel(self._base_model)
 
-        # 解析时间 + 刷新视图
-        self._reparse_time_and_refresh(initial=True)
+        # 默认时间列设置与时间格式可见性
+        if not self._require_time_column:
+            self.time_col_combo.setCurrentIndex(0)
+            self._toggle_time_fmt_visibility(False)
+        else:
+            self.time_col_combo.setCurrentIndex(0 if self.time_col_combo.count() > 0 else -1)
+            self._toggle_time_fmt_visibility(True)
+
+        self._reparse_time_and_refresh(initial=initial)
+
+    def _toggle_time_fmt_visibility(self, visible: bool):
+        self.time_fmt_label.setVisible(visible)
+        self.time_fmt_edit.setVisible(visible)
+
+    def _time_col_changed(self):
+        if not self._require_time_column:
+            col = self.time_col_combo.currentText().strip()
+            self._toggle_time_fmt_visibility(col != "无")
+        self._reparse_time_and_refresh()
 
     def _reparse_time_and_refresh(self, initial: bool = False):
         """根据“时间列 + 格式”解析时间列；刷新统计与视图。"""
@@ -387,6 +438,8 @@ class DataLoadDialog(QDialog):
             return
 
         col = self.time_col_combo.currentText().strip()
+        if not self._require_time_column and col == "无":
+            col = ""
         fmt = self.time_fmt_edit.text().strip()
 
         # 解析：指定格式优先；否则尝试通用解析
@@ -401,7 +454,7 @@ class DataLoadDialog(QDialog):
             ok, bad = ser.notna().sum(), ser.isna().sum()
             self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
         else:
-            self.parsed_label.setText("请选择时间列并输入格式。")
+            self.parsed_label.setText("未选择时间列。")
 
         self._update_preview(initial=initial)
 
@@ -409,8 +462,9 @@ class DataLoadDialog(QDialog):
         """返回当前工作表中“任一列缺失”的行索引集合。"""
         if self._work_df is None:
             return set()
-        mask = self._work_df.isna().any(axis=1)
-        return set(self._work_df.index[mask].tolist())
+        mask = self._work_df.isna() | self._work_df.applymap(is_bad_str)
+        rows = mask.any(axis=1)
+        return set(self._work_df.index[rows].tolist())
 
     def _indices_with_context(self, base: Set[int], k: int = 1) -> Set[int]:
         """在缺失行的基础上，加入前后各 k 行的“上下文行索引”。"""
@@ -434,10 +488,12 @@ class DataLoadDialog(QDialog):
         if self._work_df is None:
             return
 
-        # 统计缺失
-        na_counts = self._work_df.isna().sum()
+        # 统计缺失 + 坏值
+        mask_na = self._work_df.isna()
+        mask_bad = self._work_df.applymap(is_bad_str)
+        na_counts = (mask_na | mask_bad).sum()
         total_cells = self._work_df.shape[0] * self._work_df.shape[1]
-        total_na = int(na_counts.sum())
+        total_na = int((mask_na | mask_bad).sum().sum())
         self.stats_label.setText(
             f"行数: {len(self._work_df):,}，列数: {self._work_df.shape[1]}，缺失单元格: {total_na:,} "
             f"（{total_na / max(1, total_cells):.2%}）"
@@ -460,7 +516,10 @@ class DataLoadDialog(QDialog):
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
-        time_selected = bool(self.time_col_combo.currentText().strip())
+        tc = self.time_col_combo.currentText().strip()
+        if not self._require_time_column and tc == "无":
+            tc = ""
+        time_selected = bool(tc)
         ok_enabled = (remain == 0) and (not self._require_time_column or time_selected)
 
         if remain == 0:
@@ -539,8 +598,8 @@ class DataLoadDialog(QDialog):
         if self._work_df is None:
             QMessageBox.warning(self, "提示", "请先读取数据。")
             return
-        if self._work_df.isna().any().any():
-            QMessageBox.warning(self, "提示", "仍存在缺失值，请先处理干净再继续。")
+        if self._work_df.isna().any().any() or self._work_df.applymap(is_bad_str).any().any():
+            QMessageBox.warning(self, "提示", "仍存在缺失或非法值，请先处理干净再继续。")
             return
         if self._require_time_column and not self.time_column():
             QMessageBox.warning(self, "提示", "请先选择时间列。")
@@ -557,7 +616,37 @@ class DataLoadDialog(QDialog):
         return self._path
 
     def time_column(self) -> Optional[str]:
-        return self.time_col_combo.currentText().strip() if self.time_col_combo.isEnabled() else None
+        if not self.time_col_combo.isEnabled():
+            return None
+        col = self.time_col_combo.currentText().strip()
+        if not self._require_time_column and col == "无":
+            return None
+        return col or None
 
     def time_format(self) -> str:
         return self.time_fmt_edit.text().strip()
+
+    # ---------- 工厂方法：先选文件再弹窗 ----------
+
+    @classmethod
+    def from_file_dialog(
+        cls,
+        parent: QWidget | None = None,
+        default_time_fmt: str = "%Y年%m月%d日%H%M",
+        require_time_column: bool = False,
+    ) -> Optional["DataLoadDialog"]:
+        """先弹出文件选择框，随后打开本对话框。如果用户取消则返回 None。"""
+        path, _ = QFileDialog.getOpenFileName(
+            parent,
+            "选择数据文件",
+            "",
+            "All Supported (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx)",
+        )
+        if not path:
+            return None
+        dlg = cls(parent, default_time_fmt=default_time_fmt, require_time_column=require_time_column)
+        dlg.path_edit.setText(path)
+        dlg._read_preview(path)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            return dlg
+        return None
