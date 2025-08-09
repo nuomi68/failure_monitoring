@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QAbstractItemView,
+    QStyledItemDelegate,
+    QLineEdit,
 )
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut, QCursor
 
@@ -37,6 +39,22 @@ class SmartTableConfig:
     require_time_column: bool = False
     # DataLoadDialog 默认时间格式
     data_load_default_time_fmt: str = "%Y年%m月%d日%H%M"
+
+
+class _CellEditorDelegate(QStyledItemDelegate):
+    """Delegate removing editor frame and selecting all text when editing."""
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        if isinstance(editor, QLineEdit):
+            editor.setFrame(False)
+            editor.setStyleSheet("border: none; padding: 0; background: transparent;")
+        return editor
+
+    def setEditorData(self, editor, index):
+        super().setEditorData(editor, index)
+        if isinstance(editor, QLineEdit):
+            editor.selectAll()
 
 
 class SmartTable(QWidget):
@@ -95,6 +113,8 @@ class SmartTable(QWidget):
             root.addLayout(lab)
 
         self.table = QTableWidget()
+        self._delegate = _CellEditorDelegate(self.table)
+        self.table.setItemDelegate(self._delegate)
         root.addWidget(self.table)
         self._init_shortcuts_and_menu()
         self.table.itemDelegate().closeEditor.connect(self._on_edit_closed)
@@ -238,9 +258,11 @@ class SmartTable(QWidget):
                 QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
                 return
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
+        default_headers = self.cfg.default_headers or []
         if any(h.strip() for h in headers):
             df.columns = [str(c) for c in df.columns]
-            df = df.reindex(columns=headers)
+            if headers != default_headers:
+                df = df.reindex(columns=headers)
         self.set_dataframe(df)
 
     def _export_csv(self):
@@ -276,10 +298,19 @@ class SmartTable(QWidget):
         self._update_undo_redo_buttons()
 
     def _init_shortcuts_and_menu(self):
-        QShortcut(QKeySequence("Ctrl+V"), self, activated=self._handle_paste)
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._redo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, activated=self._redo)
+        ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        sc = QShortcut(QKeySequence("Ctrl+V"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._handle_paste)
+        sc = QShortcut(QKeySequence("Ctrl+Z"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._undo)
+        sc = QShortcut(QKeySequence("Ctrl+Shift+Z"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._redo)
+        sc = QShortcut(QKeySequence("Ctrl+Y"), self.table)
+        sc.setContext(ctx)
+        sc.activated.connect(self._redo)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._open_menu)
 

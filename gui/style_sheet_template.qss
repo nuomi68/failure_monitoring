@@ -193,6 +193,17 @@ QTableView {
     gridline-color: $border;
     selection-background-color: $primary;
 }
+QTableView::item:selected {
+    border: none;
+}
+QTableView::item:focus {
+    outline: none;
+}
+QTableView QLineEdit {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
 QHeaderView::section {
     background-color: $table-header-bg;
     border: 1px solid $border;
