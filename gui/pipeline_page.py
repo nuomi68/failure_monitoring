@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QPushButton,
     QMessageBox,
+    QComboBox,
 )
 
 from backend.ml_interface import ML, infer_input_features
@@ -198,6 +199,13 @@ class PipelinePage(QWidget):
         self.btn_ml_clear = QPushButton("清空")
         row = QHBoxLayout(); row.addWidget(self.chk_ml); row.addStretch(1)
         lay.addLayout(row)
+        method_row = QHBoxLayout()
+        method_row.addWidget(QLabel("集成方式"))
+        self.cmb_ml_method = QComboBox()
+        self.cmb_ml_method.addItems(["平均", "投票"])
+        method_row.addWidget(self.cmb_ml_method)
+        method_row.addStretch(1)
+        lay.addLayout(method_row)
         row2 = QHBoxLayout(); row2.addWidget(self.btn_ml_load); row2.addWidget(self.btn_ml_clear)
         lay.addLayout(row2)
         self.ml_model_wrap = QWidget()
@@ -217,6 +225,13 @@ class PipelinePage(QWidget):
         self.btn_fault_clear = QPushButton("清空")
         row = QHBoxLayout(); row.addWidget(self.chk_fault); row.addStretch(1)
         lay.addLayout(row)
+        method_row = QHBoxLayout()
+        method_row.addWidget(QLabel("集成方式"))
+        self.cmb_fault_method = QComboBox()
+        self.cmb_fault_method.addItems(["平均", "投票"])
+        method_row.addWidget(self.cmb_fault_method)
+        method_row.addStretch(1)
+        lay.addLayout(method_row)
         row2 = QHBoxLayout(); row2.addWidget(self.btn_fault_load); row2.addWidget(self.btn_fault_clear)
         lay.addLayout(row2)
         self.fault_model_wrap = QWidget()
@@ -387,7 +402,8 @@ class PipelinePage(QWidget):
             QMessageBox.information(self, "提示", "时间序列表无有效数值行。")
             return
 
-        pred_total = pd.DataFrame()
+        pred_sum: Dict[str, np.ndarray] = {}
+        pred_count: Dict[str, int] = {}
         for mid in self.ts_model_ids:
             feats = self.ts_features.get(mid, [])
             miss = [f for f in feats if f not in df_ts.columns]
@@ -401,34 +417,46 @@ class PipelinePage(QWidget):
                 self.ts_manager.append_observations(df_use)
                 pred = self.ts_manager.predict(steps=1)[0]["table"].T
                 for c in pred.columns:
-                    pred_total[c] = np.asarray(pred[c]).ravel()
+                    arr = np.asarray(pred[c]).ravel()
+                    if c in pred_sum:
+                        pred_sum[c] += arr
+                        pred_count[c] += 1
+                    else:
+                        pred_sum[c] = arr
+                        pred_count[c] = 1
             except Exception as e:
                 QMessageBox.warning(self, "预测失败", str(e))
 
-        if pred_total.empty:
+        if not pred_sum:
             QMessageBox.information(self, "提示", "没有生成任何预测。")
             return
 
-        required = set(self._required_common_features())
-        miss_req = [f for f in required if f not in pred_total.columns]
-        if miss_req:
-            QMessageBox.warning(self, "特征缺失", f"未生成特征：{miss_req}")
+        pred_avg = {c: pred_sum[c] / pred_count[c] for c in pred_sum}
+        pred_df = pd.DataFrame(pred_avg)
 
-        headers = list(self.tbl_common.table.horizontalHeaderLabels()) if hasattr(self.tbl_common, "table") else []
-        for c in pred_total.columns:
-            if c not in headers:
-                headers.append(c)
-        self._set_table_headers(self.tbl_common, headers)
+        # 追加到时间序列表
+        df_ts_orig = self.tbl_ts.dataframe()
+        new_row_ts = {
+            c: pred_df[c].iloc[0] if c in pred_df.columns else np.nan
+            for c in df_ts_orig.columns
+        }
+        df_ts_new = pd.concat([df_ts_orig, pd.DataFrame([new_row_ts])], ignore_index=True)
+        with self.tbl_ts.no_record():
+            self.tbl_ts.set_dataframe(df_ts_new, record_state=False)
 
+        # 根据共用表头追加行
+        headers = list(self.tbl_common.dataframe().columns)
         df_common = self.tbl_common.dataframe()
         if df_common.empty:
-            df_common = pd.DataFrame(index=range(len(pred_total)))
-        df_out = df_common.copy()
-        for c in pred_total.columns:
-            df_out[c] = np.asarray(pred_total[c]).ravel()[: len(df_out)]
+            df_common = pd.DataFrame(columns=headers)
+        new_row_common = {
+            c: pred_df[c].iloc[0] if c in pred_df.columns else np.nan
+            for c in headers
+        }
+        df_common_new = pd.concat([df_common, pd.DataFrame([new_row_common])], ignore_index=True)
         with self.tbl_common.no_record():
-            self.tbl_common.set_dataframe(df_out, record_state=False)
-        QMessageBox.information(self, "完成", f"已写入列：{list(pred_total.columns)}")
+            self.tbl_common.set_dataframe(df_common_new, record_state=False)
+        QMessageBox.information(self, "完成", "已追加预测结果")
 
     # ------------------------------------------------------------------
     # 最终推理
@@ -448,6 +476,7 @@ class PipelinePage(QWidget):
         result_cols: Dict[str, np.ndarray] = {}
 
         if self.chk_ml.isChecked() and self.ml_model_ids:
+            preds_list: List[np.ndarray] = []
             for mid in self.ml_model_ids:
                 feats = self.ml_features.get(mid, [])
                 try:
@@ -458,12 +487,19 @@ class PipelinePage(QWidget):
                     }
                     ret = ML.predict(X_table)
                     y = np.asarray(ret.get("labels") if isinstance(ret, dict) else ret).ravel()
-                    col = f"ml_pred_{self.ml_names.get(mid, mid)}".replace(" ", "_")
-                    result_cols[col] = y
+                    preds_list.append(y)
                 except Exception as e:
                     QMessageBox.warning(self, f"ML 模型 {self.ml_names.get(mid, mid)} 预测失败", str(e))
+            if preds_list:
+                arr = np.vstack(preds_list)
+                if self.cmb_ml_method.currentText() == "投票":
+                    y = pd.DataFrame(arr.T).mode(axis=1)[0].to_numpy()
+                else:
+                    y = np.mean(arr, axis=0)
+                result_cols["ml_pred"] = y
 
         if self.chk_fault.isChecked() and self.fault_models:
+            preds_list: List[np.ndarray] = []
             for mid, est in self.fault_models.items():
                 feats = self.fault_features.get(mid, [])
                 miss = [f for f in feats if f not in X_valid.columns]
@@ -474,11 +510,17 @@ class PipelinePage(QWidget):
                         X_valid.get(c, pd.Series([np.nan] * len(X_valid))).to_numpy()
                         for c in feats
                     ], axis=1)
-                    preds = est.predict(arr)
-                    col = f"fault_pred_{self.fault_names.get(mid, mid)}".replace(" ", "_")
-                    result_cols[col] = np.asarray(preds).ravel()
+                    preds = np.asarray(est.predict(arr)).ravel()
+                    preds_list.append(preds)
                 except Exception as e:
                     QMessageBox.warning(self, f"故障模型{self.fault_names.get(mid, mid)}预测失败", str(e))
+            if preds_list:
+                arr = np.vstack(preds_list)
+                if self.cmb_fault_method.currentText() == "投票":
+                    y = pd.DataFrame(arr.T).mode(axis=1)[0].to_numpy()
+                else:
+                    y = np.mean(arr, axis=0)
+                result_cols["fault_pred"] = y
 
         if not result_cols:
             QMessageBox.information(self, "提示", "没有生成任何结果。")
@@ -494,7 +536,7 @@ class PipelinePage(QWidget):
 
     def _on_clear_results(self) -> None:
         df = self.tbl_common.dataframe()
-        drop = [c for c in df.columns if c.startswith("ml_pred_") or c.startswith("fault_pred_")]
+        drop = [c for c in df.columns if c.startswith("ml_pred") or c.startswith("fault_pred")]
         if not drop:
             return
         df2 = df.drop(columns=drop)
