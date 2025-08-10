@@ -6,6 +6,7 @@ from .data_handle import DataHandlePage
 from .unsupervised_page import UnsupervisedPage
 from .supervised_page import SupervisedPage
 from .validation_page import ValidationPage
+from backend.ml_interface import ML, infer_input_features
 
 class OutlierDetectionPage(QWidget):
     """Top-level page managing the data handle and ML views."""
@@ -68,9 +69,10 @@ class OutlierDetectionPage(QWidget):
             )
         elif self._step == 3:
             src = self.sup_page if self.data_page.has_target() else self.unsup_page
-            self.valid_page.configure(
-                src.selected_columns(),
-            )
+            feats = src.selected_columns()
+            recipes = ML.get_calc_recipes()
+            raw_feats = infer_input_features(feats, recipes)
+            self.valid_page.configure(raw_feats)
 
     def next_step(self) -> None:
         if self._step == 0:
