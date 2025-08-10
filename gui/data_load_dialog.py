@@ -62,6 +62,28 @@ def is_bad_str(val: Any) -> bool:
             return True
     return False
 
+# 这些阈值可按需微调
+CATEGORICAL_MAX_UNIQUE = 20      # 枚举值不超过 20
+CATEGORICAL_MAX_LEN = 12         # 单个字符串长度不超过 12
+CATEGORICAL_MIN_COVERAGE = 0.85  # 文本占比至少 85%
+
+
+def _is_short_categorical_series(ser: pd.Series) -> bool:
+    """是否为'短枚举文本列'：有限个短字符串为主，视作合理类别值而不是坏数据。"""
+    if not pd.api.types.is_string_dtype(ser):
+        return False
+    s = ser.dropna().astype(str)
+    if s.empty:
+        return False
+    unique_cnt = s.nunique(dropna=True)
+    text_ratio = len(s) / max(1, len(ser))
+    max_len = s.map(len).max()
+    return (
+        unique_cnt <= CATEGORICAL_MAX_UNIQUE
+        and max_len <= CATEGORICAL_MAX_LEN
+        and text_ratio >= CATEGORICAL_MIN_COVERAGE
+    )
+
 
 class DataFrameModel(QAbstractTableModel):
     """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值(蓝色)及无法解析的字符串(红色)做背景高亮。"""
@@ -247,6 +269,7 @@ class DataLoadDialog(QDialog):
         self._bad_mask: Optional[pd.DataFrame] = None
         # 用户已处理过的行，保持可见避免“消失”
         self._sticky_rows: Set[int] = set()
+        self._cat_text_cols: Set[str] = set()
 
         # ---------- 顶部：选择文件 / 时间列与格式 ----------
         self.path_edit = QLineEdit()
@@ -429,8 +452,14 @@ class DataLoadDialog(QDialog):
         self.apply_btn.setEnabled(True)
 
         # 初始化坏值掩码和已处理行集合
-        # DataFrame.applymap 在 pandas 2.1 后已弃用，改用 DataFrame.map
-        self._bad_mask = self._work_df.map(is_bad_str).fillna(False)
+        # 标记类别文本列
+        self._cat_text_cols = {c for c in self._work_df.columns if _is_short_categorical_series(self._work_df[c])}
+        bm = pd.DataFrame(False, index=self._work_df.index, columns=self._work_df.columns)
+        for c in self._work_df.columns:
+            if c in self._cat_text_cols:
+                continue
+            bm[c] = self._work_df[c].map(is_bad_str).fillna(False)
+        self._bad_mask = bm
         self._sticky_rows = set()
 
         # 模型设置
@@ -477,6 +506,8 @@ class DataLoadDialog(QDialog):
         else:
             if self.time_col_combo.count() > 0 and self.time_col_combo.currentIndex() < 0:
                 self.time_col_combo.setCurrentIndex(0)
+            if enabled and self._bad_mask is not None and self.time_col_combo.currentText():
+                self._bad_mask[self.time_col_combo.currentText()] = False
             if not self._auto_detect_time_column():
                 self._reparse_time_and_refresh(show_fail_msg=False)
 
@@ -531,6 +562,20 @@ class DataLoadDialog(QDialog):
                     if row < len(self._time_col_raw):
                         self._time_col_raw.iloc[row] = self._work_df.iloc[row, col_idx]
         self._sticky_rows |= changed_rows
+        # 逐列重判是否为类别文本列，并刷新坏值掩码
+        for c in range(topLeft.column(), bottomRight.column() + 1):
+            col_name = self._work_df.columns[c]
+            if _is_short_categorical_series(self._work_df[col_name]):
+                self._cat_text_cols.add(col_name)
+                if self._bad_mask is not None:
+                    self._bad_mask[col_name] = False
+            else:
+                self._cat_text_cols.discard(col_name)
+                if self._bad_mask is not None:
+                    if self._current_time_col and col_name == self._current_time_col:
+                        self._bad_mask[col_name] = False
+                    else:
+                        self._bad_mask[col_name] = self._work_df[col_name].map(is_bad_str).fillna(False)
         self._update_preview()
 
     def _reparse_time_and_refresh(self, *, initial: bool = False, show_fail_msg: bool = False, refresh_missing: bool = True):
@@ -555,14 +600,12 @@ class DataLoadDialog(QDialog):
             self._current_time_col = col or None
             self._time_col_raw = self._work_df[col].copy() if col else None
             if self._bad_mask is not None and col:
-                self._bad_mask[col] = (
-                    self._work_df[col].map(is_bad_str).fillna(False)
-                )
+                self._bad_mask[col] = False
         else:
             if col and self._time_col_raw is not None:
                 self._work_df[col] = self._time_col_raw.copy()
                 if self._bad_mask is not None:
-                    self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
+                    self._bad_mask[col] = False
 
         # 解析：先通用解析，再对未成功部分尝试用户指定格式
         if col:
@@ -573,8 +616,8 @@ class DataLoadDialog(QDialog):
                     ser_fmt = pd.to_datetime(self._work_df.loc[mask, col], format=fmt)
                     ser.loc[mask] = ser_fmt
                 self._work_df[col] = ser
-                if self._bad_mask is not None:
-                    self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
+                if self._bad_mask is not None and col:
+                    self._bad_mask[col] = False
                 ok, bad = ser.notna().sum(), ser.isna().sum()
                 if fmt:
                     self.parsed_label.setText(
@@ -759,10 +802,12 @@ class DataLoadDialog(QDialog):
 
         # 更新坏值掩码并记录受影响行
         if self._bad_mask is not None:
-            # DataFrame.applymap 在新版 pandas 中已弃用，使用 map 逐元素判断
-            self._bad_mask[cols] = (
-                self._work_df[cols].map(is_bad_str).fillna(False)
-            )
+            for c in cols:
+                if c in self._work_df.columns:
+                    if c in self._cat_text_cols or (self._current_time_col and c == self._current_time_col):
+                        self._bad_mask[c] = False
+                    else:
+                        self._bad_mask[c] = self._work_df[c].map(is_bad_str).fillna(False)
         self._sticky_rows |= affected_rows
         self._sticky_rows &= set(self._work_df.index)
 
