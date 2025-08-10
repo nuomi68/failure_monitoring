@@ -341,6 +341,13 @@ class SupervisedPage(QWidget):
         test_size = float(params_base.get("test_size", 0.2))
         rs = int(params_base.get("random_state", 0))
         stratify = y if (self.is_clf and len(np.unique(y)) > 1) else None
+        if stratify is not None:
+            try:
+                _, cnts = np.unique(stratify, return_counts=True)
+                if cnts.min() < 2:
+                    stratify = None
+            except Exception:
+                stratify = None
 
         n_main = self.k_spin.value()
         params = params_base.copy()

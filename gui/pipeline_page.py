@@ -463,19 +463,22 @@ class PipelinePage(QWidget):
         if not feats_required:
             QMessageBox.information(self, "提示", "暂无可用特征。")
             return
-        df_num = df.reindex(columns=feats_required).apply(pd.to_numeric, errors="coerce")
-        valid = ~df_num.isna().any(axis=1)
+        df_raw = df.reindex(columns=feats_required).replace("", np.nan)
+        valid = ~df_raw.isna().any(axis=1)
         idx = np.where(valid.to_numpy())[0]
         if idx.size == 0:
-            QMessageBox.information(self, "提示", "无完整数值行。")
+            QMessageBox.information(self, "提示", "无完整输入行。")
             return
-        X_valid = df_num.iloc[idx].reset_index(drop=True)
+        X_valid_raw = df_raw.iloc[idx].reset_index(drop=True)
         result_cols: Dict[str, np.ndarray] = {}
 
         if self.chk_ml.isChecked() and self.ml_model_ids:
             try:
                 self.ml_manager.load_models(self.ml_model_ids)
-                X_table = {f: X_valid.get(f, pd.Series([np.nan] * len(X_valid))).to_numpy() for f in X_valid.columns}
+                X_table = {
+                    f: X_valid_raw.get(f, pd.Series([np.nan] * len(X_valid_raw))).to_numpy()
+                    for f in X_valid_raw.columns
+                }
                 ret = ML.predict(X_table)
                 if isinstance(ret, dict) and "labels" in ret:
                     target = ret.get("target", "ml_pred")
@@ -489,7 +492,8 @@ class PipelinePage(QWidget):
 
         if self.chk_fault.isChecked() and self.fault_models:
             try:
-                y = self.fault_manager.predict_many(list(self.fault_models.values()), X_valid)
+                X_fault = X_valid_raw.apply(pd.to_numeric, errors="coerce")
+                y = self.fault_manager.predict_many(list(self.fault_models.values()), X_fault)
                 if y.size:
                     result_cols["fault_pred"] = y
             except Exception as e:
