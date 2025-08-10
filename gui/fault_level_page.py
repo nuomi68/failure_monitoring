@@ -217,6 +217,7 @@ class FaultLevelPage(QWidget):
         keep_lab = ~X_lab.isna().any(axis=1)
         X_lab = X_lab[keep_lab].to_numpy(dtype=float)
         y_lab = y_lab[keep_lab].to_numpy()
+        df_clean = df_lab.loc[keep_lab].reset_index(drop=True)
         if X_lab.size == 0:
             QMessageBox.critical(self, "无有效样本", "清洗后样本为空，无法保存。")
             return
@@ -236,7 +237,12 @@ class FaultLevelPage(QWidget):
             return
 
         try:
-            mid = self.manager.save_model(self._estimator, name.strip(), label_col=label_col)
+            mid = self.manager.save_model(
+                self._estimator,
+                name.strip(),
+                label_col=label_col,
+                df=df_clean,
+            )
             QMessageBox.information(self, "已保存", f"模型已保存：{mid}")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存模型失败：{e}")
@@ -249,7 +255,7 @@ class FaultLevelPage(QWidget):
 
     def _load_model_by_id(self, model_id: str):
         try:
-            est = self.manager.load_model(model_id)
+            est, df, meta = self.manager.load_model(model_id)
         except Exception as e:
             QMessageBox.critical(self, "加载失败", f"加载模型失败：{e}")
             return
@@ -268,6 +274,19 @@ class FaultLevelPage(QWidget):
         self.cb_scaler.setCurrentIndex(idx)
         self._scaler_code = s_specs[idx]
         self.btn_save.setEnabled(True)
+
+        # 载入训练样本表并同步特征列
+        if df is not None:
+            with self.tbl_labelled.no_record():
+                self.tbl_labelled.set_dataframe(df, record_state=False)
+                lbl = meta.get("label_col")
+                if lbl and lbl in df.columns:
+                    self.tbl_labelled.set_label_column(lbl)
+            # 清空待预测表但保留特征列
+            cols = est.feature_names or list(df.columns)
+            self.tbl_unlabelled.set_dataframe(pd.DataFrame(columns=cols), record_state=False)
+        else:
+            self.tbl_unlabelled.set_headers(est.feature_names or [])
 
         fnames = est.feature_names or []
         QMessageBox.information(
