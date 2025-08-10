@@ -79,15 +79,15 @@ def detect_text_categorical_cols(df: pd.DataFrame, max_unique: int = TEXT_CATEGO
 
 
 class DataFrameModel(QAbstractTableModel):
-    """将 pandas.DataFrame 映射到 QTableView 使用的模型，并对缺失值(蓝色)及无法解析的字符串(红色)做背景高亮。"""
+    """将 pandas.DataFrame 映射到 QTableView 使用的模型，并根据预先计算的坏值掩码高亮显示。"""
 
     row_filled_sig = pyqtSignal(int)
 
-    def __init__(self, df: pd.DataFrame, categorical_cols: Optional[Set[str]] = None):
+    def __init__(self, df: pd.DataFrame, bad_mask: Optional[pd.DataFrame] = None):
         super().__init__()
         self._df = df
         self._row_colors: Dict[int, QColor] = {}
-        self._categorical_cols: Set[str] = categorical_cols or detect_text_categorical_cols(df)
+        self._bad_mask = bad_mask
 
     # 行数/列数
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
@@ -109,8 +109,7 @@ class DataFrameModel(QAbstractTableModel):
             color = self._row_colors.get(r)
             if color is not None:
                 return color
-            col_name = self._df.columns[c]
-            if col_name not in self._categorical_cols and is_bad_str(val):
+            if self._bad_mask is not None and bool(self._bad_mask.iat[r, c]):
                 return QBrush(Qt.GlobalColor.red).color().lighter(170)
             if is_nan_like(val):
                 return QBrush(Qt.GlobalColor.blue).color().lighter(170)
@@ -143,10 +142,10 @@ class DataFrameModel(QAbstractTableModel):
             return str(section)
 
     # 替换整个 DataFrame
-    def setDataFrame(self, df: pd.DataFrame, categorical_cols: Optional[Set[str]] = None):
+    def setDataFrame(self, df: pd.DataFrame, bad_mask: Optional[pd.DataFrame] = None):
         self.beginResetModel()
         self._df = df
-        self._categorical_cols = categorical_cols or detect_text_categorical_cols(df)
+        self._bad_mask = bad_mask
         self.endResetModel()
 
     def dataframe(self) -> pd.DataFrame:
@@ -195,12 +194,20 @@ class DataFrameModel(QAbstractTableModel):
             br = self.index(max(rows), self.columnCount() - 1)
             self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
 
-    def set_categorical_cols(self, cols: Set[str]):
-        self._categorical_cols = set(cols)
-        if self.rowCount() > 0 and self.columnCount() > 0:
+    def set_bad_mask(self, mask: pd.DataFrame, cols: Optional[Iterable[str]] = None):
+        self._bad_mask = mask
+        if self.rowCount() == 0 or self.columnCount() == 0:
+            return
+        if cols is None:
             tl = self.index(0, 0)
             br = self.index(self.rowCount() - 1, self.columnCount() - 1)
-            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
+        else:
+            col_indices = [self._df.columns.get_loc(c) for c in cols if c in self._df.columns]
+            if not col_indices:
+                return
+            tl = self.index(0, min(col_indices))
+            br = self.index(self.rowCount() - 1, max(col_indices))
+        self.dataChanged.emit(tl, br, [Qt.ItemDataRole.BackgroundRole])
 
 
 class MissingRowsProxyModel(QSortFilterProxyModel):
@@ -436,22 +443,28 @@ class DataLoadDialog(QDialog):
             self._work_df = self._work_df.iloc[:, 1:].copy()
         self._reset_controls_after_df_change(initial=initial)
 
-    def _update_categorical_and_mask(self, cols: Optional[Iterable[str]] = None):
-        """更新纯文本类别列集合及对应的坏值掩码。"""
+    def _init_bad_mask(self):
+        """初次计算纯文本类别列集合及坏值掩码。"""
         if self._work_df is None:
             return
         self._categorical_cols = detect_text_categorical_cols(self._work_df)
-        if self._bad_mask is None or list(self._bad_mask.columns) != list(self._work_df.columns):
-            self._bad_mask = pd.DataFrame(False, index=self._work_df.index, columns=self._work_df.columns)
-        target_cols = list(self._work_df.columns) if cols is None else list(cols)
-        for col in target_cols:
-            if col in self._work_df.columns:
-                if col in self._categorical_cols:
-                    self._bad_mask[col] = False
-                else:
-                    self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
+        self._bad_mask = pd.DataFrame(False, index=self._work_df.index, columns=self._work_df.columns)
+        for col in self._work_df.columns:
+            if col not in self._categorical_cols:
+                self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
+
+    def _update_bad_mask(self, cols: Iterable[str]):
+        """仅更新给定列的坏值掩码。"""
+        if self._work_df is None or self._bad_mask is None:
+            return
+        cols = [c for c in cols if c in self._work_df.columns]
+        for col in cols:
+            if col in self._categorical_cols:
+                self._bad_mask[col] = False
+            else:
+                self._bad_mask[col] = self._work_df[col].map(is_bad_str).fillna(False)
         if self._base_model is not None:
-            self._base_model.set_categorical_cols(self._categorical_cols)
+            self._base_model.set_bad_mask(self._bad_mask, cols)
 
     def _reset_controls_after_df_change(self, initial: bool = False):
         if self._work_df is None:
@@ -472,12 +485,11 @@ class DataLoadDialog(QDialog):
         self.apply_btn.setEnabled(True)
 
         # 初始化坏值掩码、纯文本类别列集合及已处理行集合
-        self._bad_mask = pd.DataFrame(False, index=self._work_df.index, columns=self._work_df.columns)
-        self._update_categorical_and_mask()
+        self._init_bad_mask()
         self._sticky_rows = set()
 
         # 模型设置
-        self._base_model = DataFrameModel(self._work_df, categorical_cols=self._categorical_cols)
+        self._base_model = DataFrameModel(self._work_df, bad_mask=self._bad_mask)
         self._base_model.dataChanged.connect(self._on_data_changed)
         self._proxy.setSourceModel(self._base_model)
 
@@ -507,7 +519,7 @@ class DataLoadDialog(QDialog):
         if not enabled:
             if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
                 self._work_df[self._current_time_col] = self._time_col_raw
-                self._update_categorical_and_mask([self._current_time_col])
+                self._update_bad_mask([self._current_time_col])
             self._current_time_col = None
             self._time_col_raw = None
             self.time_col_combo.setCurrentIndex(-1)
@@ -537,7 +549,7 @@ class DataLoadDialog(QDialog):
         self._time_col_raw = self._work_df[cand].copy()
         ser = pd.to_datetime(self._time_col_raw, errors="coerce")
         self._work_df[cand] = ser
-        self._update_categorical_and_mask([cand])
+        self._update_bad_mask([cand])
         ok, bad = ser.notna().sum(), ser.isna().sum()
         self.parsed_label.setText(f"时间解析（通用）：成功 {ok:,} 条，失败 {bad:,} 条。")
         self._update_preview(initial=initial)
@@ -565,7 +577,7 @@ class DataLoadDialog(QDialog):
             changed_cols.add(col_name)
             for r in range(topLeft.row(), bottomRight.row() + 1):
                 changed_rows.add(self._work_df.index[r])
-        self._update_categorical_and_mask(changed_cols)
+        self._update_bad_mask(changed_cols)
         if self.time_col_chk.isChecked() and self._current_time_col and self._time_col_raw is not None:
             col_idx = self._work_df.columns.get_loc(self._current_time_col)
             if topLeft.column() <= col_idx <= bottomRight.column():
@@ -594,15 +606,15 @@ class DataLoadDialog(QDialog):
         if col != self._current_time_col:
             if self._current_time_col and self._time_col_raw is not None and self._current_time_col in self._work_df.columns:
                 self._work_df[self._current_time_col] = self._time_col_raw
-                self._update_categorical_and_mask([self._current_time_col])
+                self._update_bad_mask([self._current_time_col])
             self._current_time_col = col or None
             self._time_col_raw = self._work_df[col].copy() if col else None
             if col:
-                self._update_categorical_and_mask([col])
+                self._update_bad_mask([col])
         else:
             if col and self._time_col_raw is not None:
                 self._work_df[col] = self._time_col_raw.copy()
-                self._update_categorical_and_mask([col])
+                self._update_bad_mask([col])
 
         # 解析：先通用解析，再对未成功部分尝试用户指定格式
         if col:
@@ -613,7 +625,8 @@ class DataLoadDialog(QDialog):
                     ser_fmt = pd.to_datetime(self._work_df.loc[mask, col], format=fmt)
                     ser.loc[mask] = ser_fmt
                 self._work_df[col] = ser
-                self._update_categorical_and_mask([col])
+                self._categorical_cols.discard(col)
+                self._update_bad_mask([col])
                 ok, bad = ser.notna().sum(), ser.isna().sum()
                 if fmt:
                     self.parsed_label.setText(
@@ -707,11 +720,11 @@ class DataLoadDialog(QDialog):
 
         # 保证底层模型数据最新
         if self._base_model is None:
-            self._base_model = DataFrameModel(self._work_df, categorical_cols=self._categorical_cols)
+            self._base_model = DataFrameModel(self._work_df, bad_mask=self._bad_mask)
             self._base_model.dataChanged.connect(self._on_data_changed)
             self._proxy.setSourceModel(self._base_model)
         else:
-            self._base_model.setDataFrame(self._work_df, categorical_cols=self._categorical_cols)
+            self._base_model.setDataFrame(self._work_df, bad_mask=self._bad_mask)
 
         # 控制 OK 状态 / 显示剩余缺失行数
         remain = len(missing_rows)
@@ -797,7 +810,7 @@ class DataLoadDialog(QDialog):
             return
 
         # 更新坏值掩码并记录受影响行
-        self._update_categorical_and_mask(cols)
+        self._update_bad_mask(cols)
         self._sticky_rows |= affected_rows
         self._sticky_rows &= set(self._work_df.index)
 
