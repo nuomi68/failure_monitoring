@@ -6,15 +6,7 @@ from typing import Optional, Callable, Any, Dict, List
 import numpy as np
 import joblib
 from sklearn.metrics import pairwise_distances
-from sklearn.preprocessing import (
-    StandardScaler,
-    MinMaxScaler,
-    RobustScaler,
-    MaxAbsScaler,
-    PowerTransformer,
-    QuantileTransformer,
-    Normalizer,
-)
+from .tools import make_scaler,SCALERS_DISPLAY
 
 # 引入更稳健的多种分类方法（已在 fault_level_model.py 中实现）
 from backend.models.fault_level_model import (
@@ -35,55 +27,7 @@ METHODS_DISPLAY: Dict[str, str] = {
     "nca_knn": "NCA + kNN（度量学习）",
 }
 
-# 供前端显示的缩放器选项（与 ml_interface 保持一致）
-SCALERS_DISPLAY: Dict[str, str] = {
-    "standard": "StandardScaler",  # 默认
-    "minmax": "MinMaxScaler",
-    "robust": "RobustScaler",
-    "maxabs": "MaxAbsScaler",
-    "power": "PowerTransformer",
-    "quantile": "QuantileTransformer",
-    "normalizer": "Normalizer",
-    "none": "不使用",
-}
 
-
-def _make_scaler(spec: Any):
-    """按照 ml_interface 的规则构造缩放器。"""
-    if spec is None or spec is False:
-        return None
-    if isinstance(spec, str):
-        name = spec.lower()
-        params: Dict[str, Any] = {}
-    elif isinstance(spec, dict):
-        name = str(spec.get("name", "standard")).lower()
-        params = dict(spec.get("params", {}))
-    else:
-        # 若传入已有对象（可能已拟合），直接返回
-        if hasattr(spec, "transform"):
-            return spec
-        raise ValueError(f"Unsupported scaler spec: {type(spec)}")
-
-    if name in ("standard", "std", "zscore"):
-        return StandardScaler(**params)
-    if name in ("minmax", "min_max"):
-        return MinMaxScaler(**params)
-    if name in ("robust",):
-        return RobustScaler(**params)
-    if name in ("maxabs", "max_abs"):
-        return MaxAbsScaler(**params)
-    if name in ("power", "yeojohnson", "boxcox"):
-        params = {"method": params.get("method", "yeo-johnson"), **params}
-        return PowerTransformer(**params)
-    if name in ("quantile", "rank"):
-        return QuantileTransformer(**params)
-    if name in ("normalizer", "l2", "l1", "max"):
-        if name in ("l1", "l2", "max"):
-            params = {"norm": name, **params}
-        return Normalizer(**params)
-    if name in ("none",):
-        return None
-    raise ValueError(f"Unknown scaler name: {name}")
 
 
 @dataclass
@@ -162,7 +106,7 @@ class FaultLevelEstimator:
     def _init_scaler(self, spec: Any):
         if spec is None or spec is False or (isinstance(spec, str) and spec.lower() == "none"):
             return None, self.labelled_X.astype(float)
-        scaler = _make_scaler(spec)
+        scaler = make_scaler(spec)
         if hasattr(scaler, "fit") and not hasattr(scaler, "n_features_in_"):
             scaler.fit(self.labelled_X)
         Xs = scaler.transform(self.labelled_X)
@@ -248,5 +192,5 @@ class FaultLevelEstimator:
         return METHODS_DISPLAY.copy()
 
     @staticmethod
-    def available_scalers() -> Dict[str, str]:
+    def available_scalers():
         return SCALERS_DISPLAY.copy()

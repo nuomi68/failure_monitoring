@@ -292,9 +292,7 @@ class UnsupervisedPage(QWidget):
         top.addWidget(self.alg_combo)
         top.addWidget(QLabel("规范化："))
         self.scaler_combo = QComboBox()
-        for name, spec in [("标准化 (Z‑score)", "standard"), ("MinMax [0,1]", "minmax"), ("Robust (IQR)", "robust"),
-                           ("MaxAbs", "maxabs"), ("PowerTransformer", "power"), ("QuantileTransformer", "quantile"),
-                           ("Normalizer (L2)", "normalizer"), ("不做缩放", "none")]:
+        for name, spec in ML.available_scalers():
             self.scaler_combo.addItem(name, spec)
         self.scaler_combo.setCurrentIndex(0)
         top.addWidget(self.scaler_combo)

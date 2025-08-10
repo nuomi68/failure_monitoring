@@ -13,23 +13,20 @@ from pathlib import Path
 import time
 
 import numpy as np
-from sklearn.preprocessing import (
-    StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
-    PowerTransformer, QuantileTransformer, Normalizer
-)
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
     mean_absolute_error, mean_squared_error, r2_score,
 )
 import joblib
-import io
-# model registry for auto-saving
+
+
 from .model_registry import register as registry_register, ROOT as REGISTRY_ROOT
 # 引入适配器
 from .models.supervised_core import ADAPTERS as SUPERVISED_ADAPTERS
 from .models.unsupervised_core import ADAPTERS as UNSUPERVISED_ADAPTERS
-
+from .tools import make_scaler,SCALERS_DISPLAY
 
 # ---------------------------- 数据结构 ----------------------------
 @dataclass
@@ -105,54 +102,11 @@ class _State:
 STATE = _State()
 
 
-# ---------------------------- 归一化器工厂 ----------------------------
-def _make_scaler(spec: Any):
-    """
-    支持：
-      - None / True / "standard"（默认 StandardScaler）
-      - "none" / False（不做缩放）
-      - 字符串： "minmax" | "robust" | "maxabs" | "power" | "quantile" | "normalizer"
-      - 字典： {"name": <同上>, "params": {...}}
-    """
-    if spec is None or spec is True:
-        return StandardScaler()
-    if spec is False or (isinstance(spec, str) and spec.lower() == "none"):
-        return None
-
-    params: Dict[str, Any] = {}
-    if isinstance(spec, str):
-        name = spec.lower()
-    elif isinstance(spec, dict):
-        name = str(spec.get("name", "standard")).lower()
-        params = dict(spec.get("params", {}))
-    else:
-        raise ValueError(f"Unsupported scaler spec: {type(spec)}")
-
-    if name in ("standard", "std", "zscore"):
-        return StandardScaler(**params)
-    if name in ("minmax", "min_max"):
-        return MinMaxScaler(**params)
-    if name in ("robust",):
-        return RobustScaler(**params)
-    if name in ("maxabs", "max_abs"):
-        return MaxAbsScaler(**params)
-    if name in ("power", "yeojohnson", "boxcox"):
-        params = {"method": params.get("method", "yeo-johnson"), **params}
-        return PowerTransformer(**params)
-    if name in ("quantile", "rank"):
-        return QuantileTransformer(**params)
-    if name in ("normalizer", "l2", "l1", "max"):
-        if name in ("l1", "l2", "max"):
-            params = {"norm": name, **params}
-        return Normalizer(**params)
-
-    raise ValueError(f"Unknown scaler name: {name}")
-
 
 def _fit_transform_supervised(X: np.ndarray, y: np.ndarray, scaler_spec: Any, *, test_size: float, random_state: int,
                               stratify: Optional[np.ndarray]):
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=stratify)
-    scaler = _make_scaler(scaler_spec)
+    scaler = make_scaler(scaler_spec)
     if scaler is not None:
         X_trs = scaler.fit_transform(X_tr)
         X_tes = scaler.transform(X_te)
@@ -162,7 +116,7 @@ def _fit_transform_supervised(X: np.ndarray, y: np.ndarray, scaler_spec: Any, *,
 
 
 def _fit_transform_unsupervised(X: np.ndarray, scaler_spec: Any):
-    scaler = _make_scaler(scaler_spec)
+    scaler = make_scaler(scaler_spec)
     if scaler is not None:
         Xs = scaler.fit_transform(X)
     else:
@@ -553,6 +507,9 @@ class ML:
             return cls.get_meta()
         raise ValueError(f"未知指令: {action}")
 
+    @staticmethod
+    def available_scalers():
+        return SCALERS_DISPLAY.copy()
 
 # ---------------------------- 持久化 ----------------------------
 def save_artifact(path: str, artifact: ModelArtifact) -> None:

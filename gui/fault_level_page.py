@@ -8,11 +8,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QMessageBox, QSplitter, QFileDialog
 )
 
-from backend.fault_level_estimator import (
-    FaultLevelEstimator,
-    METHODS_DISPLAY,
-    SCALERS_DISPLAY,
-)
+from backend.fault_level_estimator import FaultLevelEstimator
+
 from gui.smart_table import SmartTable, SmartTableConfig
 
 
@@ -36,11 +33,12 @@ class FaultLevelPage(QWidget):
 
         top.addWidget(QLabel("算法方法："))
         self.cb_method = QComboBox()
-        # 以 METHODS_DISPLAY 的顺序加入
-        for k, v in METHODS_DISPLAY.items():
+
+        self._methods = FaultLevelEstimator.available_methods()
+        for k, v in self._methods.items():
             self.cb_method.addItem(v, userData=k)
         # 默认选中 self._method_code
-        idx_default = list(METHODS_DISPLAY.keys()).index(self._method_code)
+        idx_default = list(self._methods.keys()).index(self._method_code)
         self.cb_method.setCurrentIndex(idx_default)
         self.cb_method.currentIndexChanged.connect(self._on_method_changed)
         top.addWidget(self.cb_method)
@@ -48,9 +46,9 @@ class FaultLevelPage(QWidget):
         top.addSpacing(16)
         top.addWidget(QLabel("特征缩放："))
         self.cb_scaler = QComboBox()
-        for code, name in SCALERS_DISPLAY.items():
-            self.cb_scaler.addItem(name, userData=code)
-        self.cb_scaler.setCurrentIndex(list(SCALERS_DISPLAY.keys()).index(self._scaler_code))
+        for name, spec in FaultLevelEstimator.available_scalers():
+            self.cb_scaler.addItem(name, spec)
+        self.cb_scaler.setCurrentIndex(0)
         self.cb_scaler.currentIndexChanged.connect(
             lambda _: setattr(self, "_scaler_code", self.cb_scaler.currentData())
         )
@@ -197,7 +195,7 @@ class FaultLevelPage(QWidget):
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。\n方法：{METHODS_DISPLAY[self._method_code]}")
+        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。\n方法：{self._methods[self._method_code]}")
 
     def _on_save_model(self):
         # 需要有样本才可保存
@@ -232,7 +230,7 @@ class FaultLevelPage(QWidget):
             return
         try:
             self._estimator.save(path)
-            QMessageBox.information(self, "已保存", f"模型已保存：{path}\n方法：{METHODS_DISPLAY[self._method_code]}")
+            QMessageBox.information(self, "已保存", f"模型已保存：{path}\n方法：{self._methods[self._method_code]}")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存模型失败：{e}")
 
@@ -244,12 +242,12 @@ class FaultLevelPage(QWidget):
             est = FaultLevelEstimator.load(path)
             self._estimator = est
             # 同步 UI：方法、标准化开关
-            keys = list(METHODS_DISPLAY.keys())
+            keys = list(self._methods.keys())
             if est.method in keys:
                 self.cb_method.setCurrentIndex(keys.index(est.method))
                 self._method_code = est.method
             # 缩放器状态
-            s_keys = list(SCALERS_DISPLAY.keys())
+            s_keys = list(FaultLevelEstimator.available_scalers().keys())
             code = est.scaler_spec if est.scaler_spec in s_keys else "none"
             self.cb_scaler.setCurrentIndex(s_keys.index(code))
             self._scaler_code = code
@@ -258,7 +256,7 @@ class FaultLevelPage(QWidget):
             fnames = est.feature_names or []
             QMessageBox.information(
                 self, "已加载",
-                f"已加载模型：{path}\n方法：{METHODS_DISPLAY.get(est.method, est.method)}\n特征列：{fnames if fnames else '（未记录）'}"
+                f"已加载模型：{path}\n方法：{est.method}\n特征列：{fnames if fnames else '（未记录）'}"
             )
         except Exception as e:
             QMessageBox.critical(self, "加载失败", f"加载模型失败：{e}")
