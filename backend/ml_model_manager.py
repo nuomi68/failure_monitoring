@@ -43,6 +43,19 @@ class MLModelManager:
     # ------------------------------------------------------------------
     def refresh_models(self) -> List[Dict[str, Any]]:
         """Return metadata of all existing models."""
+        # Reload registry from disk to pick up models saved by other manager
+        # instances. Without this, pages that keep a long-lived manager would
+        # never see freshly saved models.
+        if self.registry_file.exists():
+            try:
+                self.registry = json.loads(
+                    self.registry_file.read_text(encoding="utf-8")
+                )
+            except Exception:
+                self.registry = {}
+        else:
+            self.registry = {}
+
         changed = False
         items: List[Dict[str, Any]] = []
         for mid, meta in list(self.registry.items()):

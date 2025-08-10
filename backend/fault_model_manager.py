@@ -42,6 +42,18 @@ class FaultModelManager:
     # ------------------------------------------------------------------
     def refresh_models(self) -> List[Dict[str, Any]]:
         """Return metadata of all existing models."""
+        # Registry may be modified by other manager instances, so reload from
+        # disk each time to ensure the dialog shows the latest list.
+        if self.registry_file.exists():
+            try:
+                self.registry = json.loads(
+                    self.registry_file.read_text(encoding="utf-8")
+                )
+            except Exception:
+                self.registry = {}
+        else:
+            self.registry = {}
+
         changed = False
         items: List[Dict[str, Any]] = []
         for mid, meta in list(self.registry.items()):
