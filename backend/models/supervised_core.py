@@ -32,7 +32,16 @@ class _KNNClfAdapter:
         return KNeighborsClassifier(**params)
 
     def fit(self, model, X, y=None):
-        model.fit(X, y); return model
+        # Ensure the requested neighbor count does not exceed the number of
+        # available training samples. ``KNeighborsClassifier`` will raise a
+        # ``ValueError`` during prediction if ``n_neighbors`` is larger than
+        # the fitted sample size.  Adjust it here to avoid runtime errors when
+        # users specify an excessively large value.
+        n_samples = X.shape[0]
+        if getattr(model, "n_neighbors", None) is not None and model.n_neighbors > n_samples:
+            model.set_params(n_neighbors=n_samples)
+        model.fit(X, y)
+        return model
 
     def predict(self, model, X):
         return model.predict(X)
@@ -59,7 +68,15 @@ class _KNNRegAdapter:
         return KNeighborsRegressor(**params)
 
     def fit(self, model, X, y=None):
-        model.fit(X, y); return model
+        # ``KNeighborsRegressor`` requires ``n_neighbors`` to be no greater
+        # than the number of training samples.  When the user requests a
+        # larger value, shrink it to ``len(X)`` to prevent ``ValueError`` on
+        # prediction.
+        n_samples = X.shape[0]
+        if getattr(model, "n_neighbors", None) is not None and model.n_neighbors > n_samples:
+            model.set_params(n_neighbors=n_samples)
+        model.fit(X, y)
+        return model
 
     def predict(self, model, X):
         return model.predict(X)
