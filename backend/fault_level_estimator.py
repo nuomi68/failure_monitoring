@@ -6,7 +6,15 @@ from typing import Optional, Callable, Any, Dict, List
 import numpy as np
 import joblib
 from sklearn.metrics import pairwise_distances
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import (
+    StandardScaler,
+    MinMaxScaler,
+    RobustScaler,
+    MaxAbsScaler,
+    PowerTransformer,
+    QuantileTransformer,
+    Normalizer,
+)
 
 # 引入更稳健的多种分类方法（已在 fault_level_model.py 中实现）
 from backend.models.fault_level_model import (
@@ -26,6 +34,56 @@ METHODS_DISPLAY: Dict[str, str] = {
     "kde": "核密度估计（KDE）",
     "nca_knn": "NCA + kNN（度量学习）",
 }
+
+# 供前端显示的缩放器选项（与 ml_interface 保持一致）
+SCALERS_DISPLAY: Dict[str, str] = {
+    "standard": "StandardScaler",  # 默认
+    "minmax": "MinMaxScaler",
+    "robust": "RobustScaler",
+    "maxabs": "MaxAbsScaler",
+    "power": "PowerTransformer",
+    "quantile": "QuantileTransformer",
+    "normalizer": "Normalizer",
+    "none": "不使用",
+}
+
+
+def _make_scaler(spec: Any):
+    """按照 ml_interface 的规则构造缩放器。"""
+    if spec is None or spec is False:
+        return None
+    if isinstance(spec, str):
+        name = spec.lower()
+        params: Dict[str, Any] = {}
+    elif isinstance(spec, dict):
+        name = str(spec.get("name", "standard")).lower()
+        params = dict(spec.get("params", {}))
+    else:
+        # 若传入已有对象（可能已拟合），直接返回
+        if hasattr(spec, "transform"):
+            return spec
+        raise ValueError(f"Unsupported scaler spec: {type(spec)}")
+
+    if name in ("standard", "std", "zscore"):
+        return StandardScaler(**params)
+    if name in ("minmax", "min_max"):
+        return MinMaxScaler(**params)
+    if name in ("robust",):
+        return RobustScaler(**params)
+    if name in ("maxabs", "max_abs"):
+        return MaxAbsScaler(**params)
+    if name in ("power", "yeojohnson", "boxcox"):
+        params = {"method": params.get("method", "yeo-johnson"), **params}
+        return PowerTransformer(**params)
+    if name in ("quantile", "rank"):
+        return QuantileTransformer(**params)
+    if name in ("normalizer", "l2", "l1", "max"):
+        if name in ("l1", "l2", "max"):
+            params = {"norm": name, **params}
+        return Normalizer(**params)
+    if name in ("none",):
+        return None
+    raise ValueError(f"Unknown scaler name: {name}")
 
 
 @dataclass
@@ -48,9 +106,12 @@ class FaultLevelEstimator:
     metric : str or callable
         距离度量（用于 1-NN 与部分方法）。
     scaler : 可选
-        仅对 method='1nn' 起作用；若提供，则在距离计算前对数据做 transform。
-    scale : bool
-        对除 '1nn' 外的方法是否在内部启用 StandardScaler（多数情况下推荐 True）。
+        缩放器规格，与 ml_interface 一致，可为：
+        - None / "none" / False：不做缩放
+        - True / "standard"（默认）：StandardScaler
+        - 字符串："minmax"、"robust"、"maxabs"、"power"、"quantile"、"normalizer"
+        - 字典：{"name": <上述之一>, "params": {...}}
+        - 已拟合的缩放器对象（需实现 transform）
     feature_names : 可选 list[str]
         特征列名（用于保存/加载后进行列对齐）。
     """
@@ -59,13 +120,13 @@ class FaultLevelEstimator:
     labels: np.ndarray
     method: str = "1nn"
     metric: str | Callable[[np.ndarray, np.ndarray], float] = "euclidean"
-    scaler: Optional[Any] = None
-    scale: bool = True
+    scaler: Any = "standard"
     feature_names: Optional[List[str]] = None
 
     # 运行期属性
     _labelled_scaled: np.ndarray | None = field(init=False, default=None)
     model_: Any | None = field(init=False, default=None)
+    scaler_spec: Any | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.labelled_X.shape[0] != self.labels.shape[0]:
@@ -74,23 +135,12 @@ class FaultLevelEstimator:
         if self.method not in METHODS_DISPLAY:
             raise ValueError(f"未知方法: {self.method}. 可选: {list(METHODS_DISPLAY)}")
 
-        # 1) 兼容旧的 1-NN 基线（无需显式 fit）
-        if self.method == "1nn":
-            if self.scaler is not None:
-                try:
-                    self._labelled_scaled = self.scaler.transform(self.labelled_X)
-                except Exception as e:
-                    raise ValueError(f"应用 scaler 失败: {e}") from e
-            else:
-                # 若未显式提供 scaler，但希望标准化，则内部拟合一个
-                if self.scale:
-                    self.scaler = StandardScaler().fit(self.labelled_X)
-                    self._labelled_scaled = self.scaler.transform(self.labelled_X)
-                else:
-                    self._labelled_scaled = self.labelled_X.astype(float)
-        else:
-            # 2) 其它方法：延迟拟合（在第一次 predict 时拟合），以保持与旧用法一致
-            self._labelled_scaled = None
+        # 统一处理缩放
+        self.scaler_spec = self.scaler
+        self.scaler, self._labelled_scaled = self._init_scaler(self.scaler_spec)
+
+        if self.method != "1nn":
+            # 其它方法：延迟拟合（在第一次 predict 时拟合），以保持与旧用法一致
             self.model_ = self._build_model()
 
     # ------------------------------------------------------------------
@@ -98,16 +148,25 @@ class FaultLevelEstimator:
     # ------------------------------------------------------------------
     def _build_model(self):
         if self.method == "wknn":
-            return WeightedKNNClassifier(n_neighbors="auto", metric=self.metric, scale=self.scale)
+            return WeightedKNNClassifier(n_neighbors="auto", metric=self.metric, scale=False)
         if self.method == "radius":
-            return RadiusNeighborsClassifierPlus(radius="auto", metric=self.metric, scale=self.scale)
+            return RadiusNeighborsClassifierPlus(radius="auto", metric=self.metric, scale=False)
         if self.method == "centroid":
-            return NearestCentroidMahalanobis(use_mahalanobis=True, scale=self.scale)
+            return NearestCentroidMahalanobis(use_mahalanobis=True, scale=False)
         if self.method == "kde":
-            return ParzenKDEClassifier(bandwidth="auto", scale=self.scale)
+            return ParzenKDEClassifier(bandwidth="auto", scale=False)
         if self.method == "nca_knn":
-            return NCAKNNClassifier(n_neighbors="auto", scale=self.scale, random_state=42)
+            return NCAKNNClassifier(n_neighbors="auto", scale=False, random_state=42)
         raise RuntimeError("未实现的方法")
+
+    def _init_scaler(self, spec: Any):
+        if spec is None or spec is False or (isinstance(spec, str) and spec.lower() == "none"):
+            return None, self.labelled_X.astype(float)
+        scaler = _make_scaler(spec)
+        if hasattr(scaler, "fit") and not hasattr(scaler, "n_features_in_"):
+            scaler.fit(self.labelled_X)
+        Xs = scaler.transform(self.labelled_X)
+        return scaler, Xs
 
     def _ensure_model_fit(self):
         """惰性拟合：第一次使用时再对所选模型进行 fit。"""
@@ -117,7 +176,7 @@ class FaultLevelEstimator:
             self.model_ = self._build_model()
         # 通过是否存在 classes_ 等属性判断是否已经 fit
         if not hasattr(self.model_, "classes_"):
-            self.model_.fit(self.labelled_X.astype(float), self.labels)
+            self.model_.fit(self._labelled_scaled, self.labels)
 
     # ------------------------------------------------------------------
     # 预测接口
@@ -127,22 +186,20 @@ class FaultLevelEstimator:
         if metric is None:
             metric = self.metric
 
+        X_scaled = X.astype(float)
+        if self.scaler is not None:
+            try:
+                X_scaled = self.scaler.transform(X_scaled)
+            except Exception as e:
+                raise ValueError(f"对输入 X 应用 scaler 失败: {e}") from e
+
         if self.method == "1nn":
-            # 1-NN 路径：直接基于存储的样本计算最近邻
-            if self.scaler is not None:
-                try:
-                    X_scaled = self.scaler.transform(X)
-                except Exception as e:
-                    raise ValueError(f"对输入 X 应用 scaler 失败: {e}") from e
-            else:
-                X_scaled = X.astype(float)
             dists = pairwise_distances(X_scaled, self._labelled_scaled, metric=metric)
             nearest_idx = np.argmin(dists, axis=1)
             return self.labels[nearest_idx]
         else:
-            # 其它方法：交给内部模型
             self._ensure_model_fit()
-            return self.model_.predict(X.astype(float))
+            return self.model_.predict(X_scaled)
 
     # ------------------------------------------------------------------
     # 持久化
@@ -155,12 +212,11 @@ class FaultLevelEstimator:
             "labels": self.labels,
             "method": self.method,
             "metric": self.metric,
-            "scale": self.scale,
             "feature_names": self.feature_names,
+            "scaler_spec": self.scaler_spec,
+            "scaler": self.scaler,
         }
-        if self.method == "1nn":
-            data["scaler"] = self.scaler
-        else:
+        if self.method != "1nn":
             # 确保已拟合后保存
             self._ensure_model_fit()
             data["model"] = self.model_
@@ -177,9 +233,9 @@ class FaultLevelEstimator:
             method=method,
             metric=data.get("metric", "euclidean"),
             scaler=data.get("scaler", None),
-            scale=data.get("scale", True),
             feature_names=data.get("feature_names", None),
         )
+        obj.scaler_spec = data.get("scaler_spec", obj.scaler_spec)
         if method != "1nn":
             obj.model_ = data.get("model", None)
         return obj
@@ -190,3 +246,7 @@ class FaultLevelEstimator:
     @staticmethod
     def available_methods() -> Dict[str, str]:
         return METHODS_DISPLAY.copy()
+
+    @staticmethod
+    def available_scalers() -> Dict[str, str]:
+        return SCALERS_DISPLAY.copy()
