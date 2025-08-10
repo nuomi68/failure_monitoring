@@ -4,10 +4,9 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Dict
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QCheckBox,
-    QPushButton, QMessageBox, QSplitter
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, QCheckBox,
+    QPushButton, QMessageBox
 )
 
 from backend.ml_interface import ML
@@ -41,43 +40,46 @@ class PipelinePage(QWidget):
 
         self.ml_loaded = False
 
-        # ----- 左侧控制块 -----
+        # ----- 四宫格布局 -----
         self.grp_ts = self._build_ts_block()
         self.grp_ml = self._build_ml_block()
         self.grp_fault = self._build_fault_block()
 
-        left = QVBoxLayout()
-        left.addWidget(self.grp_ts)
-        left.addWidget(self.grp_ml)
-        left.addWidget(self.grp_fault)
-        left.addStretch(1)
-        left_wrap = QWidget()
-        left_wrap.setLayout(left)
-
-        # ----- 右侧表格 -----
-        right_top = QVBoxLayout()
+        # 时间序列输入表（初始隐藏）
+        self.ts_input_wrap = QWidget()
+        right_top = QVBoxLayout(self.ts_input_wrap)
         right_top.addWidget(QLabel("时间序列输入"))
         self.tbl_ts = SmartTable(SmartTableConfig(default_headers=["feat1", "feat2"]))
         right_top.addWidget(self.tbl_ts)
         right_top.addWidget(self._make_ts_actions())
-        top_wrap = QWidget(); top_wrap.setLayout(right_top)
+        self.ts_input_wrap.hide()
 
-        right_bottom = QVBoxLayout()
+        # 下游共用表（常驻）
+        self.common_wrap = QWidget()
+        right_bottom = QVBoxLayout(self.common_wrap)
         right_bottom.addWidget(QLabel("下游共用输入"))
         self.tbl_common = SmartTable(SmartTableConfig())
         right_bottom.addWidget(self.tbl_common)
         right_bottom.addWidget(self._make_final_actions())
-        bottom_wrap = QWidget(); bottom_wrap.setLayout(right_bottom)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(top_wrap)
-        splitter.addWidget(bottom_wrap)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        # 左下角：ML 与故障块
+        self.bottom_left = QWidget()
+        left_bottom = QVBoxLayout(self.bottom_left)
+        left_bottom.addWidget(self.grp_ml)
+        left_bottom.addWidget(self.grp_fault)
+        left_bottom.addStretch(1)
 
-        root = QHBoxLayout(self)
-        root.addWidget(left_wrap, 0)
-        root.addWidget(splitter, 1)
+        # 根布局 2x2
+        root = QGridLayout(self)
+        root.addWidget(self.grp_ts, 0, 0)
+        root.addWidget(self.ts_input_wrap, 0, 1)
+        root.addWidget(self.bottom_left, 1, 0)
+        root.addWidget(self.common_wrap, 1, 1)
+        root.setColumnStretch(1, 1)
+        root.setRowStretch(1, 1)
+
+        # 关联时间序列启用开关
+        self.chk_ts.toggled.connect(self._on_ts_toggle)
 
     # ------------------------------------------------------------------
     # 左侧块构建
@@ -86,14 +88,21 @@ class PipelinePage(QWidget):
         g = QGroupBox("时间序列模型")
         lay = QVBoxLayout(g)
         self.chk_ts = QCheckBox("启用")
+        lay.addWidget(self.chk_ts)
+
+        self.ts_controls = QWidget()
+        row = QHBoxLayout(self.ts_controls)
         self.btn_ts_load = QPushButton("选择模型…")
         self.btn_ts_clear = QPushButton("清空")
+        row.addWidget(self.btn_ts_load)
+        row.addWidget(self.btn_ts_clear)
+        lay.addWidget(self.ts_controls)
+
         self.lab_ts = QLabel("未加载")
-        row = QHBoxLayout(); row.addWidget(self.chk_ts); row.addStretch(1)
-        lay.addLayout(row)
-        row2 = QHBoxLayout(); row2.addWidget(self.btn_ts_load); row2.addWidget(self.btn_ts_clear)
-        lay.addLayout(row2)
         lay.addWidget(self.lab_ts)
+
+        self.ts_controls.hide()
+        self.lab_ts.hide()
 
         self.btn_ts_load.clicked.connect(self._open_ts_dialog)
         self.btn_ts_clear.clicked.connect(self._on_clear_ts)
@@ -151,6 +160,14 @@ class PipelinePage(QWidget):
         self.btn_run.clicked.connect(self._on_run)
         lay.addStretch(1); lay.addWidget(self.btn_clear_results); lay.addWidget(self.btn_run)
         return box
+
+    # ------------------------------------------------------------------
+    # 时间序列启用开关
+    # ------------------------------------------------------------------
+    def _on_ts_toggle(self, checked: bool) -> None:
+        self.ts_controls.setVisible(checked)
+        self.lab_ts.setVisible(checked)
+        self.ts_input_wrap.setVisible(checked)
 
     # ------------------------------------------------------------------
     # 时间序列加载/清空
