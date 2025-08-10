@@ -5,10 +5,13 @@ import numpy as np
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QMessageBox, QSplitter, QFileDialog
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
+    QMessageBox, QSplitter, QInputDialog
 )
 
 from backend.fault_level_estimator import FaultLevelEstimator
+from backend.fault_model_manager import FaultModelManager
+from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
 
 from gui.smart_table import SmartTable, SmartTableConfig
 
@@ -26,6 +29,7 @@ class FaultLevelPage(QWidget):
         self._scaler_code: str = "standard"
         self._method_code: str = 'wknn'  # 默认更稳健的距离加权 kNN
         self._estimator: FaultLevelEstimator | None = None
+        self.manager = FaultModelManager()
 
         # ---------------- Top Controls ----------------
         top = QHBoxLayout()
@@ -84,7 +88,7 @@ class FaultLevelPage(QWidget):
         self.btn_save = QPushButton("保存模型…")
         self.btn_save.clicked.connect(self._on_save_model)
         self.btn_load = QPushButton("加载模型…")
-        self.btn_load.clicked.connect(self._on_load_model)
+        self.btn_load.clicked.connect(self._open_model_manager)
 
         bottom.addStretch()
         bottom.addWidget(self.btn_predict)
@@ -215,7 +219,7 @@ class FaultLevelPage(QWidget):
             QMessageBox.critical(self, "无有效样本", "清洗后样本为空，无法保存。")
             return
 
-        # 确保有一个估计器实例
+        # 构建估计器
         self._estimator = FaultLevelEstimator(
             X_lab,
             y_lab,
@@ -225,38 +229,43 @@ class FaultLevelPage(QWidget):
             feature_names=feat_cols,
         )
 
-        path, _ = QFileDialog.getSaveFileName(self, "保存模型", filter="Joblib (*.joblib);;All Files (*)")
-        if not path:
+        name, ok = QInputDialog.getText(self, "模型名称", "请输入模型名称：")
+        if not ok or not name.strip():
             return
+
         try:
-            self._estimator.save(path)
-            QMessageBox.information(self, "已保存", f"模型已保存：{path}\n方法：{self._methods[self._method_code]}")
+            mid = self.manager.save_model(self._estimator, name.strip(), label_col=label_col)
+            QMessageBox.information(self, "已保存", f"模型已保存：{mid}")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存模型失败：{e}")
 
-    def _on_load_model(self):
-        path, _ = QFileDialog.getOpenFileName(self, "加载模型", filter="Joblib (*.joblib);;All Files (*)")
-        if not path:
-            return
-        try:
-            est = FaultLevelEstimator.load(path)
-            self._estimator = est
-            # 同步 UI：方法、标准化开关
-            keys = list(self._methods.keys())
-            if est.method in keys:
-                self.cb_method.setCurrentIndex(keys.index(est.method))
-                self._method_code = est.method
-            # 缩放器状态
-            s_keys = list(FaultLevelEstimator.available_scalers().keys())
-            code = est.scaler_spec if est.scaler_spec in s_keys else "none"
-            self.cb_scaler.setCurrentIndex(s_keys.index(code))
-            self._scaler_code = code
+    # ------------------------------------------------------------------
+    def _open_model_manager(self):
+        dlg = ModelManagerDialog(self.manager, self)
+        dlg.model_loaded.connect(self._load_model_by_id)
+        dlg.exec()
 
-            # 给出提示信息
-            fnames = est.feature_names or []
-            QMessageBox.information(
-                self, "已加载",
-                f"已加载模型：{path}\n方法：{est.method}\n特征列：{fnames if fnames else '（未记录）'}"
-            )
+    def _load_model_by_id(self, model_id: str):
+        try:
+            est = self.manager.load_model(model_id)
         except Exception as e:
             QMessageBox.critical(self, "加载失败", f"加载模型失败：{e}")
+            return
+
+        self._estimator = est
+        # 同步 UI：方法、缩放器
+        keys = list(self._methods.keys())
+        if est.method in keys:
+            self.cb_method.setCurrentIndex(keys.index(est.method))
+            self._method_code = est.method
+        s_keys = list(FaultLevelEstimator.available_scalers().keys())
+        code = est.scaler_spec if est.scaler_spec in s_keys else "none"
+        self.cb_scaler.setCurrentIndex(s_keys.index(code))
+        self._scaler_code = code
+
+        fnames = est.feature_names or []
+        QMessageBox.information(
+            self,
+            "已加载",
+            f"已加载模型：{model_id}\n方法：{est.method}\n特征列：{fnames if fnames else '（未记录）'}",
+        )
