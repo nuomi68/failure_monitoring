@@ -87,6 +87,7 @@ class FaultLevelPage(QWidget):
         self.btn_predict.clicked.connect(self._on_predict)
         self.btn_save = QPushButton("保存模型…")
         self.btn_save.clicked.connect(self._on_save_model)
+        self.btn_save.setEnabled(False)
         self.btn_load = QPushButton("加载模型…")
         self.btn_load.clicked.connect(self._open_model_manager)
 
@@ -199,6 +200,7 @@ class FaultLevelPage(QWidget):
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
+        self.btn_save.setEnabled(True)
         QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。\n方法：{self._methods[self._method_code]}")
 
     def _on_save_model(self):
@@ -258,10 +260,14 @@ class FaultLevelPage(QWidget):
         if est.method in keys:
             self.cb_method.setCurrentIndex(keys.index(est.method))
             self._method_code = est.method
-        s_keys = list(FaultLevelEstimator.available_scalers().keys())
-        code = est.scaler_spec if est.scaler_spec in s_keys else "none"
-        self.cb_scaler.setCurrentIndex(s_keys.index(code))
-        self._scaler_code = code
+        s_specs = [spec for _, spec in FaultLevelEstimator.available_scalers()]
+        if est.scaler_spec in s_specs:
+            idx = s_specs.index(est.scaler_spec)
+        else:
+            idx = s_specs.index("none") if "none" in s_specs else 0
+        self.cb_scaler.setCurrentIndex(idx)
+        self._scaler_code = s_specs[idx]
+        self.btn_save.setEnabled(True)
 
         fnames = est.feature_names or []
         QMessageBox.information(
