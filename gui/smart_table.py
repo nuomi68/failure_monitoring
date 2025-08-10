@@ -157,7 +157,7 @@ class SmartTable(QWidget):
 
         if self.cfg.show_label_selector:
             lab = QHBoxLayout()
-            lab.addWidget(QLabel("等级列："))
+            lab.addWidget(QLabel("破口大小列："))
             self.cb_label = QComboBox()
             self.cb_label.currentIndexChanged.connect(self._on_label_changed)
             lab.addWidget(self.cb_label)
@@ -232,6 +232,10 @@ class SmartTable(QWidget):
         self._update_undo_redo_buttons()
         if self._features_sink is not None:
             self._sync_features_sink_headers()
+        if self.cfg.show_label_selector:
+            inferred = self._infer_label_column(df)
+            if inferred:
+                self.set_label_column(inferred)
 
     def dataframe(self) -> pd.DataFrame:
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
@@ -318,6 +322,10 @@ class SmartTable(QWidget):
             if headers != default_headers:
                 df = df.reindex(columns=headers)
         self.set_dataframe(df)
+        if self.cfg.show_label_selector:
+            inferred = self._infer_label_column(df)
+            if inferred:
+                self.set_label_column(inferred)
 
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出到 CSV", "", "CSV Files (*.csv)")
@@ -582,3 +590,17 @@ class SmartTable(QWidget):
         if self._features_sink is None:
             return
         self._features_sink.set_headers(self._feature_headers())
+
+    def _infer_label_column(self, df: pd.DataFrame) -> Optional[str]:
+        if df is None or df.empty:
+            return None
+        for c in df.columns:
+            col = df[c].dropna()
+            if not col.empty and col.map(lambda x: isinstance(x, str)).all():
+                return c
+        numeric_counts = {
+            c: pd.to_numeric(df[c], errors="coerce").notna().sum() for c in df.columns
+        }
+        if numeric_counts:
+            return max(numeric_counts, key=numeric_counts.get)
+        return None

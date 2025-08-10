@@ -17,14 +17,14 @@ from gui.smart_table import SmartTable, SmartTableConfig
 
 
 class FaultLevelPage(QWidget):
-    """故障等级估计器页面，使用 SmartTable 统一表格展示
+    """破口大小估计器页面，使用 SmartTable 统一表格展示
     - 前端可选择算法方法
     - 可保存/加载模型（包含方法、参数、特征名）
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("故障等级估计器")
+        self.setWindowTitle("破口大小估计器")
 
         self._scaler_code: str = "standard"
         self._method_code: str = 'wknn'  # 默认更稳健的距离加权 kNN
@@ -63,11 +63,11 @@ class FaultLevelPage(QWidget):
 
         upper = QWidget()
         up_lay = QVBoxLayout(upper)
-        up_lay.addWidget(QLabel("故障等级样本表"))
+        up_lay.addWidget(QLabel("破口大小样本表"))
         self.tbl_labelled = SmartTable(
             SmartTableConfig(
                 show_label_selector=True,
-                default_headers=["feat1", "feat2", "fault_level"],
+                default_headers=["feat1", "feat2", "break_size"],
             )
         )
         up_lay.addWidget(self.tbl_labelled)
@@ -83,7 +83,7 @@ class FaultLevelPage(QWidget):
 
         # ---------------- Bottom Buttons ----------------
         bottom = QHBoxLayout()
-        self.btn_predict = QPushButton("计算等级")
+        self.btn_predict = QPushButton("计算破口大小")
         self.btn_predict.clicked.connect(self._on_predict)
         self.btn_save = QPushButton("保存模型…")
         self.btn_save.clicked.connect(self._on_save_model)
@@ -109,10 +109,10 @@ class FaultLevelPage(QWidget):
         demo = pd.DataFrame({
             "feat1": [0.2, 1.0, 0.1],
             "feat2": [0.5, 0.9, 0.2],
-            "fault_level": [0, 2, 1],
+            "break_size": [0, 2, 1],
         })
         self.tbl_labelled.set_dataframe(demo)
-        self.tbl_labelled.set_label_column("fault_level")
+        self.tbl_labelled.set_label_column("break_size")
 
     # ---------------- Slots ----------------
     def _on_method_changed(self, _: int):
@@ -121,15 +121,15 @@ class FaultLevelPage(QWidget):
     def _on_predict(self):
         label_col = self.tbl_labelled.label_column()
         if not label_col:
-            QMessageBox.warning(self, "提示", "请选择故障等级列。")
+            QMessageBox.warning(self, "提示", "请选择破口大小列。")
             return
 
         df_lab = self.tbl_labelled.dataframe()
         if df_lab.empty:
-            QMessageBox.warning(self, "提示", "故障等级样本表为空。")
+            QMessageBox.warning(self, "提示", "破口大小样本表为空。")
             return
         if label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", f"等级列“{label_col}”不在样本表中。")
+            QMessageBox.warning(self, "提示", f"破口大小列“{label_col}”不在样本表中。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
@@ -190,25 +190,25 @@ class FaultLevelPage(QWidget):
 
         preds = self._estimator.predict(X_un_valid)
 
-        df_un["预测等级"] = ""
-        df_un.loc[keep_un.to_numpy().nonzero()[0], "预测等级"] = preds
+        df_un["预测破口大小"] = ""
+        df_un.loc[keep_un.to_numpy().nonzero()[0], "预测破口大小"] = preds
         with self.tbl_unlabelled.no_record():
             self.tbl_unlabelled.set_dataframe(df_un, record_state=False)
-            pred_col = df_un.columns.get_loc("预测等级")
+            pred_col = df_un.columns.get_loc("预测破口大小")
             for r in range(self.tbl_unlabelled.table.rowCount()):
                 item = self.tbl_unlabelled.table.item(r, pred_col)
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
         self.btn_save.setEnabled(True)
-        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。\n方法：{self._methods[self._method_code]}")
+        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测破口大小。\n方法：{self._methods[self._method_code]}")
 
     def _on_save_model(self):
         # 需要有样本才可保存
         df_lab = self.tbl_labelled.dataframe()
         label_col = self.tbl_labelled.label_column()
         if df_lab.empty or not label_col or label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", "请先准备好样本表并指定等级列，再保存模型。")
+            QMessageBox.warning(self, "提示", "请先准备好样本表并指定破口大小列，再保存模型。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
