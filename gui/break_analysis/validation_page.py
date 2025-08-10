@@ -154,7 +154,10 @@ class ValidationPage(QWidget):
         res: Dict[str, np.ndarray] = {}
         for t, arr in sub.items():
             arr = np.asarray(arr).ravel()
-            full = np.full((n,), np.nan)
+            if arr.dtype.kind in {"U", "S", "O"}:
+                full = np.full((n,), None, dtype=object)
+            else:
+                full = np.full((n,), np.nan)
             full[valid_idx[: len(arr)]] = arr[: len(valid_idx)]
             res[t] = full
         df_all = df_feat.copy()

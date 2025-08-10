@@ -273,6 +273,13 @@ def _train_impl(
             label_encoder = LabelEncoder()
             y_work = label_encoder.fit_transform(y)
         strat = y_work if (adapter.kind == "supervised_clf" and stratify is None and len(np.unique(y_work)) > 1) else stratify
+        if strat is not None:
+            try:
+                _, cnts = np.unique(strat, return_counts=True)
+                if cnts.min() < 2:
+                    strat = None
+            except Exception:
+                strat = None
         X_tr, X_te, y_tr, y_te, scaler_obj = _fit_transform_supervised(
             X_enc, y_work, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
         )
