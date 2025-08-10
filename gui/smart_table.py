@@ -31,7 +31,7 @@ from PyQt6.QtGui import (
     QColor,
 )
 
-
+from gui.data_load_dialog import DataLoadDialog
 @dataclass
 class SmartTableConfig:
     show_label_selector: bool = False
@@ -41,7 +41,7 @@ class SmartTableConfig:
     editable: bool = True
     default_headers: Optional[List[str]] = None
     # 是否使用 DataLoadDialog 作为导入界面
-    use_data_load_dialog: bool = False
+    use_data_load_dialog: bool = True
     # 若使用 DataLoadDialog，是否强制选择时间列
     require_time_column: bool = False
     # DataLoadDialog 默认时间格式
@@ -275,7 +275,7 @@ class SmartTable(QWidget):
 
     def _import(self):
         if self.cfg.use_data_load_dialog:
-            from .nuclide_prediction.data_load_dialog import DataLoadDialog
+
 
             dlg = DataLoadDialog.from_file_dialog(
                 self,

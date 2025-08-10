@@ -12,8 +12,8 @@ from .calculator_widget import CalculatorWidget
 from .feature_preview import FeaturePreviewWidget,HeatmapCanvas
 from gui.feature_selector_widget import FeatureSelectorWidget
 from gui.tools import logger
+from gui.data_load_dialog import DataLoadDialog
 
-# ★ 新增：把公式同步到后端单例，便于训练/预测/保存时写入模型 meta
 from backend.ml_interface import ML
 
 class DataHandlePage(QWidget):
@@ -175,36 +175,23 @@ class DataHandlePage(QWidget):
             df = df.dropna()
             logger.info("删除含 NaN 的行 %d 条", removed)
 
-        self.df = df
-        self.populate_table(df)
-        self.populate_lists(df.columns.tolist())
-        self.calc.setDataFrame(df)
-        self.calc.new_column.connect(self._on_new_column)
-        self.heatmap_canvas.plot_corr(self.df)
-        self.top_stack.setCurrentIndex(1)
-        self.preview.set_dataframe(df)
-        self.preview.set_selected_columns(self.selected_columns())
+        self._apply_new_dataframe(df)
 
     def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件",
-                                              "", "Excel 文件 (*.xlsx *.xls)")
-        if not path:
+        # 直接用“加载数据”对话框：先选文件，再在弹窗内做缺失/时间列处理
+        dlg = DataLoadDialog.from_file_dialog(
+            self,
+            default_time_fmt="%Y年%m月%d日%H%M",
+            require_time_column=False,  # 如需强制时间列可设 True
+        )
+        if dlg is None:
             return
-        df = pd.read_excel(path)
-        removed = int(df.isna().any(axis=1).sum())
-        if removed:
-            df = df.dropna()
-            logger.info("删除含 NaN 的行 %d 条", removed)
-        self.df = df
-        self.populate_table(df)
-        self.populate_lists(df.columns.tolist())
-        self.calc.setDataFrame(df)
-        self.calc.new_column.connect(self._on_new_column)
-        self.heatmap_canvas.plot_corr(self.df)
-        self.top_stack.setCurrentIndex(1)      # 只切上半部分！
 
-        self.preview.set_dataframe(df)
-        self.preview.set_selected_columns(self.selected_columns())
+        df = dlg.loaded_dataframe()
+        if df is None or df.empty:
+            return
+
+        self._apply_new_dataframe(df)
 
     def reset_ui(self):
         self.table.clear()
@@ -231,6 +218,49 @@ class DataHandlePage(QWidget):
         self.cmb.clear()
         for c in cols:
             self.cmb.addItem(c)
+
+    def _apply_new_dataframe(self, df: pd.DataFrame):
+        """切换到新的 DataFrame 并安全刷新所有相关 UI。"""
+        self.df = df
+
+        # 1) 表格（只渲染前100行即可）
+        self.populate_table(df)
+
+        # 2) 左侧列清单 & 监督学习下拉
+        #    切换列头时临时屏蔽 selectionChanged，避免预览收到“旧选择”
+        self.feature_selector.blockSignals(True)
+        try:
+            self.populate_lists(df.columns.tolist())
+        finally:
+            self.feature_selector.blockSignals(False)
+
+        # 3) 计算器（先断开旧信号，避免重复连接）
+        self.calc.setDataFrame(df)
+        try:
+            self.calc.new_column.disconnect(self._on_new_column)
+        except Exception:
+            pass
+        self.calc.new_column.connect(self._on_new_column)
+
+        # 4) 热力图 + 顶部页切换
+        self.heatmap_canvas.plot_corr(self.df)
+        self.heatmap_canvas.setMaximumWidth(500)
+        self.top_stack.setCurrentIndex(1)
+
+        # 5) 预览：先设置数据，再“清空/过滤”已选列，必要时给个默认
+        self.preview.set_dataframe(df)
+
+        # 旧选择中过滤掉不存在于当前 df 的列
+        selected = [c for c in self.selected_columns() if c in df.columns]
+        if not selected:
+            # 默认选择：最多取前三个数值列（防止空画布）
+            try:
+                import pandas as _pd
+                selected = [c for c in df.columns if _pd.api.types.is_numeric_dtype(df[c])][:3]
+            except Exception:
+                selected = []
+
+        self.preview.set_selected_columns(selected)
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked.value)

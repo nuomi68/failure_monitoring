@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 from backend.timeseries_interface import ModelManager
 from gui.tools import logger,TrainWorker
 
-from .data_load_dialog import DataLoadDialog, DataFrameModel
+from  gui.data_load_dialog import DataLoadDialog, DataFrameModel
 from .model_manager_dialog import ModelManagerDialog
 from .param_panel import ParamPanel
 from ..feature_selector_widget import FeatureSelectorWidget
