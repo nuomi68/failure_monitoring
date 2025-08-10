@@ -332,7 +332,7 @@ class SupervisedPage(QWidget):
             QMessageBox.warning(self,"提示","请选择特征")
             return
 
-        X = self.df[cols].astype(float).values
+        X = self.df[cols].values
         y = self.df[self.target_col].values
         code = self.alg_combo.currentData()
         scaler_spec = self.scaler_combo.currentData()
@@ -470,7 +470,12 @@ class SupervisedPage(QWidget):
         choice = self.viz_combo.currentText()
         if self.is_clf:
             if choice == "ROC 曲线" and self.binary and self.test_scores is not None:
-                self.canvas.plot_roc(self.y_true, self.test_scores)
+                classes = list(self.meta.get("classes_", []))
+                mapping = {c: i for i, c in enumerate(classes)} if classes else None
+                y_true_num = (
+                    np.vectorize(mapping.get)(self.y_true) if mapping is not None else self.y_true
+                )
+                self.canvas.plot_roc(y_true_num, self.test_scores)
             elif choice == "混淆矩阵":
                 self.canvas.plot_confmat(self.y_true, self.y_pred)
             elif choice == "指标汇总":

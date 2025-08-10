@@ -38,6 +38,7 @@ class ModelArtifact:
     scaler: Optional[Any]
     meta: Dict[str, Any]
     label_encoder: Optional[LabelEncoder] = None
+    x_encoders: Optional[Dict[str, LabelEncoder]] = None
 
 
 @dataclass
@@ -149,6 +150,40 @@ def _apply_calc_recipes_to_table(X_table: dict[str, np.ndarray], recipes: list[d
     return {c: df[c].to_numpy() for c in df.columns}
 
 
+def _fit_encode_X(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, Dict[str, LabelEncoder]]:
+    """检测并编码 X 中的非数值列，返回编码后的 X 及每列的编码器。"""
+    X_work = np.asarray(X, dtype=object).copy()
+    encoders: Dict[str, LabelEncoder] = {}
+    for i in range(X_work.shape[1]):
+        col = X_work[:, i]
+        try:
+            X_work[:, i] = col.astype(float)
+        except Exception:
+            le = LabelEncoder()
+            X_work[:, i] = le.fit_transform(col)
+            feat = feature_names[i] if i < len(feature_names) else f"f{i}"
+            encoders[feat] = le
+    return X_work.astype(float), encoders
+
+
+def _encode_X(X: np.ndarray, feature_names: list[str], encoders: Dict[str, LabelEncoder]) -> np.ndarray:
+    if not encoders:
+        return np.asarray(X, dtype=float)
+    X_work = np.asarray(X, dtype=object).copy()
+    for i, feat in enumerate(feature_names):
+        le = encoders.get(feat)
+        if le is None:
+            try:
+                X_work[:, i] = X_work[:, i].astype(float)
+            except Exception:
+                pass
+            continue
+        mapping = {cls: idx for idx, cls in enumerate(le.classes_)}
+        col = X_work[:, i]
+        X_work[:, i] = [mapping.get(v, -1) for v in col]
+    return X_work.astype(float)
+
+
 # ---------------------------- 工具：公式依赖 ----------------------------
 
 _EXPR_FUNC_TOKENS = {"np", "sqrt", "log", "log10", "abs"}
@@ -230,6 +265,8 @@ def _train_impl(
     if adapter.kind.startswith("supervised"):
         if y is None:
             raise ValueError("监督学习需要提供 y")
+        feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
+        X_enc, x_encoders = _fit_encode_X(X, feature_names)
         label_encoder: Optional[LabelEncoder] = None
         y_work = y
         if adapter.kind == "supervised_clf" and not np.issubdtype(np.asarray(y).dtype, np.number):
@@ -237,7 +274,7 @@ def _train_impl(
             y_work = label_encoder.fit_transform(y)
         strat = y_work if (adapter.kind == "supervised_clf" and stratify is None and len(np.unique(y_work)) > 1) else stratify
         X_tr, X_te, y_tr, y_te, scaler_obj = _fit_transform_supervised(
-            X, y_work, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
+            X_enc, y_work, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
         )
         n_classes = int(len(np.unique(y_work))) if adapter.kind == "supervised_clf" else None
         is_binary = (adapter.kind == "supervised_clf" and n_classes == 2)
@@ -308,12 +345,20 @@ def _train_impl(
         }
         y_te_out = label_encoder.inverse_transform(y_te) if label_encoder is not None else y_te
         y_pred_out = label_encoder.inverse_transform(y_pred) if label_encoder is not None else y_pred
-        art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta, label_encoder=label_encoder)
+        art = ModelArtifact(
+            model=model,
+            scaler=scaler_obj,
+            meta=meta,
+            label_encoder=label_encoder,
+            x_encoders=x_encoders or None,
+        )
         rep = TrainReport(y_true=y_te_out, y_pred=y_pred_out, scores=scores, metrics_text=metrics_text)
         return art, rep
 
     # 无监督
-    Xs, scaler_obj = _fit_transform_unsupervised(X, scaler_spec=scaler)
+    feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
+    X_enc, x_encoders = _fit_encode_X(X, feature_names)
+    Xs, scaler_obj = _fit_transform_unsupervised(X_enc, scaler_spec=scaler)
     model = adapter.build(**params)
     model = adapter.fit(model, Xs, None)
     scores = adapter.scores(model, Xs)
@@ -331,13 +376,16 @@ def _train_impl(
         "target": (target_name if target_name else "是否破损"),
         "calc_recipes": recipes_final,
     }
-    art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
+    art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta, x_encoders=x_encoders or None)
     rep = TrainReport(scores=scores)
     return art, rep
 
 
 def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
-    Xs = artifact.scaler.transform(X) if artifact.scaler is not None else X
+    feats = artifact.meta.get("features", [])
+    enc = artifact.x_encoders or {}
+    X_enc = _encode_X(X, feats, enc)
+    Xs = artifact.scaler.transform(X_enc) if artifact.scaler is not None else X_enc
     mtype = artifact.meta.get("model_type")
     mapping = {"knn_clf": "knn_clf", "rf": "rf_clf", "knn_reg": "knn_reg", "rf_reg": "rf_reg", "knn": "knn",
                "iforest": "iforest", "autoencoder": "autoencoder"}
@@ -566,8 +614,10 @@ class ML:
             # 简化：集合/多输出不提供 transform
             return X
         if isinstance(cur, ModelArtifact):
+            X_enc = _encode_X(X, cur.meta.get("features", []), cur.x_encoders or {})
             sc = cur.scaler
-        return sc.transform(X) if sc is not None else X
+            return sc.transform(X_enc) if sc is not None else X_enc
+        return X
 
     @classmethod
     def get_meta(cls) -> Dict[str, Any]:
@@ -690,7 +740,8 @@ def save_artifact(path: str | Path, artifact: ModelArtifact) -> None:
         "scaler": artifact.scaler,
         "meta": artifact.meta,
         "label_encoder": artifact.label_encoder,
-        "_interface": "ml_interface.singleton.scaler.v4",
+        "x_encoders": artifact.x_encoders,
+        "_interface": "ml_interface.singleton.scaler.v5",
     }
     model = artifact.model
     mtype = artifact.meta.get("model_type")
@@ -713,6 +764,7 @@ def load_artifact(path: str | Path) -> ModelArtifact:
     meta = obj.get("meta", {})
     scaler = obj.get("scaler")
     label_encoder = obj.get("label_encoder")
+    x_encoders = obj.get("x_encoders")
     model_field = obj.get("model")
 
     if isinstance(model_field, dict) and model_field.get("_adapter"):
@@ -733,4 +785,4 @@ def load_artifact(path: str | Path) -> ModelArtifact:
             meta["features"] = []
     # 兼容：若旧模型没有 calc_recipes 字段，补空
     meta.setdefault("calc_recipes", [])
-    return ModelArtifact(model=model, scaler=scaler, meta=meta, label_encoder=label_encoder)
+    return ModelArtifact(model=model, scaler=scaler, meta=meta, label_encoder=label_encoder, x_encoders=x_encoders)
