@@ -8,8 +8,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QMessageBox, QSplitter, QFileDialog
 )
 
-from sklearn.preprocessing import StandardScaler
-from backend.fault_level_estimator import FaultLevelEstimator, METHODS_DISPLAY
+from backend.fault_level_estimator import (
+    FaultLevelEstimator,
+    METHODS_DISPLAY,
+    SCALERS_DISPLAY,
+)
 from gui.smart_table import SmartTable, SmartTableConfig
 
 
@@ -23,7 +26,7 @@ class FaultLevelPage(QWidget):
         super().__init__()
         self.setWindowTitle("故障等级估计器")
 
-        self._use_scaler: bool = True
+        self._scaler_code: str = "standard"
         self._method_code: str = 'wknn'  # 默认更稳健的距离加权 kNN
         self._estimator: FaultLevelEstimator | None = None
 
@@ -43,12 +46,13 @@ class FaultLevelPage(QWidget):
         top.addWidget(self.cb_method)
 
         top.addSpacing(16)
-        top.addWidget(QLabel("特征标准化："))
+        top.addWidget(QLabel("特征缩放："))
         self.cb_scaler = QComboBox()
-        self.cb_scaler.addItems(["启用（StandardScaler）", "不启用"])
-        self.cb_scaler.setCurrentIndex(0)
+        for code, name in SCALERS_DISPLAY.items():
+            self.cb_scaler.addItem(name, userData=code)
+        self.cb_scaler.setCurrentIndex(list(SCALERS_DISPLAY.keys()).index(self._scaler_code))
         self.cb_scaler.currentIndexChanged.connect(
-            lambda _: setattr(self, "_use_scaler", self.cb_scaler.currentIndex() == 0)
+            lambda _: setattr(self, "_scaler_code", self.cb_scaler.currentData())
         )
         top.addWidget(self.cb_scaler)
 
@@ -168,17 +172,12 @@ class FaultLevelPage(QWidget):
         keep_un = ~X_un.isna().any(axis=1)
         X_un_valid = X_un[keep_un].to_numpy(dtype=float)
 
-        # 仅当使用 1NN 时才构造外部 scaler；其余方法内部会根据 self._use_scaler 决定是否标准化
-        scaler = None
-        if self._method_code == '1nn' and self._use_scaler:
-            scaler = StandardScaler().fit(X_lab)
-
         self._estimator = FaultLevelEstimator(
-            X_lab, y_lab,
+            X_lab,
+            y_lab,
             method=self._method_code,
-            metric='euclidean',
-            scaler=scaler,
-            scale=self._use_scaler,
+            metric="euclidean",
+            scaler=self._scaler_code,
             feature_names=feat_cols,
         )
 
@@ -219,15 +218,12 @@ class FaultLevelPage(QWidget):
             return
 
         # 确保有一个估计器实例
-        scaler = None
-        if self._method_code == '1nn' and self._use_scaler:
-            scaler = StandardScaler().fit(X_lab)
         self._estimator = FaultLevelEstimator(
-            X_lab, y_lab,
+            X_lab,
+            y_lab,
             method=self._method_code,
-            metric='euclidean',
-            scaler=scaler,
-            scale=self._use_scaler,
+            metric="euclidean",
+            scaler=self._scaler_code,
             feature_names=feat_cols,
         )
 
@@ -252,10 +248,11 @@ class FaultLevelPage(QWidget):
             if est.method in keys:
                 self.cb_method.setCurrentIndex(keys.index(est.method))
                 self._method_code = est.method
-            # 标准化状态：1-NN 用是否有 scaler；其余用 est.scale
-            use_scaler = bool(est.scaler) if est.method == '1nn' else bool(est.scale)
-            self.cb_scaler.setCurrentIndex(0 if use_scaler else 1)
-            self._use_scaler = use_scaler
+            # 缩放器状态
+            s_keys = list(SCALERS_DISPLAY.keys())
+            code = est.scaler_spec if est.scaler_spec in s_keys else "none"
+            self.cb_scaler.setCurrentIndex(s_keys.index(code))
+            self._scaler_code = code
 
             # 给出提示信息
             fnames = est.feature_names or []
