@@ -6,10 +6,17 @@ import numpy as np
 import pandas as pd
 
 from backend.ml_interface import ML
+from backend.ml_model_manager import MLModelManager
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QMessageBox,
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QHBoxLayout,
+    QMessageBox,
+    QInputDialog,
 )
 
 from gui.smart_table import SmartTable, SmartTableConfig
@@ -30,6 +37,7 @@ class ValidationPage(QWidget):
         self.features: List[str] = []
         self._external_mode: bool = False
         self._external_cb: Callable[[pd.DataFrame], Dict[str, np.ndarray]] | None = None
+        self.manager = MLModelManager()
 
         layout = QVBoxLayout(self)
         self.table = SmartTable(SmartTableConfig(min_rows=self.MIN_ROWS))
@@ -169,9 +177,12 @@ class ValidationPage(QWidget):
         if not ML.get_meta():
             QMessageBox.warning(self, "提示", "暂无可保存的模型")
             return
+        name, ok = QInputDialog.getText(self, "保存模型", "模型名称：")
+        if not ok or not name.strip():
+            return
         try:
-            ret = ML.save_auto()
-            QMessageBox.information(self, "已保存", f"模型已保存到:\n{ret['path']}")
+            mid = self.manager.save_current(name.strip())
+            QMessageBox.information(self, "已保存", f"模型已保存为 ID: {mid}")
         except Exception as e:
             QMessageBox.warning(self, "错误", str(e))
 

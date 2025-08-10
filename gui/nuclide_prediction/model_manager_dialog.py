@@ -1,26 +1,32 @@
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QPushButton, QLineEdit, QLabel, QFileDialog, QMessageBox, QHeaderView
+    QDialog,
+    QHBoxLayout,
+    QVBoxLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QPushButton,
+    QLineEdit,
+    QLabel,
+    QFileDialog,
+    QMessageBox,
+    QHeaderView,
+    QAbstractItemView,
 )
 
 
 class ModelManagerDialog(QDialog):
-    """
-    模型管理弹窗：
-      - 列出已保存模型
-      - 加载为当前
-      - 重命名 / 删除
-      - 导出 / 导入
-    由外部注入 manager（backend.timeseries_interface.ModelManager）
-    """
-    model_loaded = pyqtSignal(str)  # model_id
+    """通用模型管理对话框，支持可选多选模式。"""
 
-    def __init__(self, manager, parent=None):
+    model_loaded = pyqtSignal(str)
+    models_loaded = pyqtSignal(list)
+
+    def __init__(self, manager, parent=None, *, multi_select: bool = False):
         super().__init__(parent)
         self.setWindowTitle("模型管理")
         self.resize(880, 560)
         self.manager = manager
+        self._multi = multi_select
 
         # top: search
         self.search_edit = QLineEdit()
@@ -33,6 +39,10 @@ class ModelManagerDialog(QDialog):
         )
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
+        if multi_select:
+            self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        else:
+            self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.doubleClicked.connect(self._load_clicked)
@@ -103,6 +113,16 @@ class ModelManagerDialog(QDialog):
 
     # ---------- actions ----------
     def _load_clicked(self):
+        if self._multi:
+            rows = {idx.row() for idx in self.table.selectedIndexes()}
+            ids = [self.table.item(r, 1).text() for r in rows if self.table.item(r, 1)]
+            if not ids:
+                QMessageBox.information(self, "提示", "请先选中一个模型。")
+                return
+            self.models_loaded.emit(ids)
+            self.accept()
+            return
+
         mid = self._selected_model_id()
         if not mid:
             QMessageBox.information(self, "提示", "请先选中一个模型。")
