@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from backend.ml_interface import ML
+from backend.ml_model_manager import MLModelManager
 from backend.fault_level_estimator import FaultLevelEstimator
 from backend.fault_model_manager import FaultModelManager
 from backend.timeseries_interface import ModelManager
@@ -38,6 +39,7 @@ class PipelinePage(QWidget):
         self.fault_manager = FaultModelManager()
         self.fault_model: Optional[FaultLevelEstimator] = None
 
+        self.ml_manager = MLModelManager()
         self.ml_loaded = False
 
         # ----- 四宫格布局 -----
@@ -112,7 +114,7 @@ class PipelinePage(QWidget):
         g = QGroupBox("通用 ML 模型")
         lay = QVBoxLayout(g)
         self.chk_ml = QCheckBox("启用")
-        self.btn_ml_load = QPushButton("加载（可多选）…")
+        self.btn_ml_load = QPushButton("选择模型…")
         self.btn_ml_clear = QPushButton("清空")
         self.lab_ml = QLabel("未加载")
         row = QHBoxLayout(); row.addWidget(self.chk_ml); row.addStretch(1)
@@ -121,7 +123,7 @@ class PipelinePage(QWidget):
         lay.addLayout(row2)
         lay.addWidget(self.lab_ml)
 
-        self.btn_ml_load.clicked.connect(self._on_load_ml)
+        self.btn_ml_load.clicked.connect(self._open_ml_dialog)
         self.btn_ml_clear.clicked.connect(self._on_clear_ml)
         return g
 
@@ -197,19 +199,15 @@ class PipelinePage(QWidget):
     # ------------------------------------------------------------------
     # ML 加载/清空
     # ------------------------------------------------------------------
-    def _on_load_ml(self) -> None:
-        from PyQt6.QtWidgets import QFileDialog
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "加载 ML 模型", filter="Joblib (*.joblib);;All Files (*)"
-        )
-        if not paths:
-            return
+    def _open_ml_dialog(self) -> None:
+        dlg = ModelManagerDialog(self.ml_manager, self, multi_select=True)
+        dlg.models_loaded.connect(self._load_ml_by_ids)
+        dlg.exec()
+
+    def _load_ml_by_ids(self, model_ids: list[str]) -> None:
         try:
-            if len(paths) == 1:
-                ML.load(paths[0])
-            else:
-                ML.load_many(paths, method="mean")
-            self.lab_ml.setText(" | ".join(paths))
+            self.ml_manager.load_models(model_ids)
+            self.lab_ml.setText(" | ".join(model_ids))
             self.chk_ml.setChecked(True)
             self.ml_loaded = True
         except Exception as e:
