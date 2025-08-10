@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Protocol, runtime_checkable, Literal
 from pathlib import Path
 import time
+import re
 
 import numpy as np
 import pandas as pd
@@ -144,6 +145,40 @@ def _apply_calc_recipes_to_table(X_table: dict[str, np.ndarray], recipes: list[d
         except Exception:
             df[name] = np.nan
     return {c: df[c].to_numpy() for c in df.columns}
+
+
+# ---------------------------- 工具：公式依赖 ----------------------------
+
+_EXPR_FUNC_TOKENS = {"np", "sqrt", "log", "log10", "abs"}
+
+
+def _extract_vars_from_expr(expr: str) -> set[str]:
+    """从规范化表达式中提取变量名（包含反引号列名）。"""
+    expr = _normalize_expr(str(expr))
+    vars_: set[str] = set(re.findall(r"`([^`]+)`", expr))
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)
+    for tok in tokens:
+        if tok not in _EXPR_FUNC_TOKENS:
+            vars_.add(tok)
+    return vars_
+
+
+def infer_input_features(features: list[str], recipes: list[dict]) -> list[str]:
+    """给定模型特征和计算配方，推断预测时需提供的原始特征列。"""
+    deps = {str(r.get("name")): _extract_vars_from_expr(r.get("expr", "")) for r in (recipes or [])}
+    required = set(features)
+    changed = True
+    while changed:
+        changed = False
+        for name, vars_ in deps.items():
+            if name in required:
+                for v in vars_:
+                    if v not in required:
+                        required.add(v)
+                        changed = True
+    derived = set(deps.keys())
+    base = sorted(f for f in required if f not in derived)
+    return base
 
 
 # ---------------------------- 数据预处理（缩放） ----------------------------
@@ -549,7 +584,11 @@ class ML:
                 t = art.meta.get("model_type", "目标")
             groups.setdefault(str(t), []).append(art)
         STATE.current = MultiOutputArtifact(groups=groups, method=method)
-        features_union = sorted({f for art in arts for f in art.meta.get("features", [])})
+        features_union = sorted({
+            f
+            for art in arts
+            for f in infer_input_features(art.meta.get("features", []), art.meta.get("calc_recipes", []))
+        })
         # 多模型情况下，pending 公式暂不合并（按 predict() 时动态收集）
         return {"ok": True, "method": method, "groups": {k: len(v) for k, v in groups.items()},
                 "features_union": features_union}

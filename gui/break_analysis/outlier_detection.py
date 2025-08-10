@@ -6,6 +6,7 @@ from .data_handle import DataHandlePage
 from .unsupervised_page import UnsupervisedPage
 from .supervised_page import SupervisedPage
 from .validation_page import ValidationPage
+from backend.ml_interface import ML, infer_input_features
 
 class OutlierDetectionPage(QWidget):
     """Top-level page managing the data handle and ML views."""
@@ -13,6 +14,9 @@ class OutlierDetectionPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._step = 0
+        # flags to avoid resetting selections when navigating back
+        self._unsup_inited = False
+        self._sup_inited = False
 
         layout = QVBoxLayout(self)
 
@@ -55,26 +59,32 @@ class OutlierDetectionPage(QWidget):
         self.prev_btn.setEnabled(self._step > 0)
         self.next_btn.setEnabled(self._step < self.stack.count() - 1)
         self.stack.setCurrentIndex(self._step)
-        if self._step == 1:
-            self.unsup_page.set_data(
-                self.data_page.df,
-                self.data_page.selected_columns(),
-            )
-        elif self._step == 2:
-            self.sup_page.set_data(
-                self.data_page.df,
-                self.data_page.selected_columns(),
-                target=self.data_page.target_column(),
-            )
-        elif self._step == 3:
+        if self._step == 3:
             src = self.sup_page if self.data_page.has_target() else self.unsup_page
-            self.valid_page.configure(
-                src.selected_columns(),
-            )
+            feats = src.selected_columns()
+            recipes = ML.get_calc_recipes()
+            raw_feats = infer_input_features(feats, recipes)
+            self.valid_page.configure(raw_feats)
 
     def next_step(self) -> None:
         if self._step == 0:
-            self._step = 2 if self.data_page.has_target() else 1
+            if self.data_page.has_target():
+                if not self._sup_inited:
+                    self.sup_page.set_data(
+                        self.data_page.df,
+                        self.data_page.selected_columns(),
+                        target=self.data_page.target_column(),
+                    )
+                    self._sup_inited = True
+                self._step = 2
+            else:
+                if not self._unsup_inited:
+                    self.unsup_page.set_data(
+                        self.data_page.df,
+                        self.data_page.selected_columns(),
+                    )
+                    self._unsup_inited = True
+                self._step = 1
         elif self._step in (1, 2):
             self._step = 3
         else:
@@ -86,6 +96,9 @@ class OutlierDetectionPage(QWidget):
             self._step = 2 if self.data_page.has_target() else 1
         elif self._step in (1, 2):
             self._step = 0
+            # moving back to data page resets initialization
+            self._unsup_inited = False
+            self._sup_inited = False
         else:
             return
         self.update_steps()
