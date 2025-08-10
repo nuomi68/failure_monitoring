@@ -16,7 +16,9 @@ from gui.smart_table import SmartTable, SmartTableConfig
 
 
 class ValidationPage(QWidget):
-    """批量样本验证页，改用 :class:`SmartTable` 统一表格组件。"""
+    """批量样本验证页，改用 :class:`SmartTable` 统一表格组件。
+    - ★ 关键改造：若已保存“计算器公式”，预测时优先构造列字典并让后端自动补齐派生特征
+    """
 
     MIN_ROWS = 5
 
@@ -106,19 +108,36 @@ class ValidationPage(QWidget):
             self.result_lbl.setText("结果: 本次没有完整行，已跳过")
             return
         df_valid = df_feat.iloc[valid_idx].reset_index(drop=True)
-        is_multi = bool(meta.get("multi_output", False))
-        is_ens = bool(meta.get("ensemble", False))
+
+        # ★ 若模型元信息里含有 calc_recipes，则强制使用“列字典”进入后端，便于其自动补齐派生列
+        use_table = False
+        calc_recipes = None
         try:
-            if is_multi or is_ens:
+            calc_recipes = meta.get("calc_recipes")
+        except Exception:
+            calc_recipes = None
+        if isinstance(calc_recipes, list) and len(calc_recipes) > 0:
+            use_table = True
+        else:
+            # 次优策略：若模型 features 中存在当前 df 没有的列，也切换为列字典
+            need_feats = set(meta.get("features", []))
+            has_feats = set(df_valid.columns.tolist())
+            if not need_feats.issubset(has_feats):
+                use_table = True
+
+        try:
+            if use_table:
                 X = {c: df_valid[c].to_numpy() for c in df_valid.columns}
                 ret = ML.predict(X)
             else:
                 ret = ML.predict(df_valid.to_numpy())
         except Exception:
+            # 兜底：两种方式都试一遍
             try:
                 ret = ML.predict({c: df_valid[c].to_numpy() for c in df_valid.columns})
             except Exception:
                 ret = ML.predict(df_valid.to_numpy())
+
         sub = self._normalize_backend_result(ret)
         if not isinstance(sub, dict) or not sub:
             self.result_lbl.setText("结果: 空")
@@ -163,8 +182,5 @@ class ValidationPage(QWidget):
         if isinstance(ret, dict) and all(isinstance(v, dict) and "labels" in v for v in ret.values()):
             return {t: v.get("labels") for t, v in ret.items()}
         if isinstance(ret, dict) and "labels" in ret:
-            return {str(ret.get("target", "输出")): ret.get("labels")}
-        if isinstance(ret, tuple) and len(ret) >= 1:
-            return {"输出": ret[0]}
-        return {"输出": ret}
-
+            return {ret.get("target", "目标"): ret.get("labels")}
+        return {}

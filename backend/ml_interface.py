@@ -3,6 +3,7 @@
 - 指令式：train / predict / transform / save / load / clear / get_meta
 - 新训练覆盖旧模型
 - 支持可选归一化器（standard/minmax/robust/maxabs/power/quantile/normalizer/none），并将拟合后的 scaler 与模型一起保存
+- ★ 新增：支持“计算器公式（calc_recipes）”的保存与加载；预测时自动补齐派生特征
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 import time
 
 import numpy as np
+import pandas as pd
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
@@ -21,12 +23,11 @@ from sklearn.metrics import (
 )
 import joblib
 
-
 from .model_registry import register as registry_register, ROOT as REGISTRY_ROOT
 # 引入适配器
 from .models.supervised_core import ADAPTERS as SUPERVISED_ADAPTERS
 from .models.unsupervised_core import ADAPTERS as UNSUPERVISED_ADAPTERS
-from .tools import make_scaler,SCALERS_DISPLAY
+from .tools import make_scaler, SCALERS_DISPLAY
 
 # ---------------------------- 数据结构 ----------------------------
 @dataclass
@@ -71,8 +72,7 @@ class AlgoAdapter(Protocol):
 
     def scores(self, model: Any, X: np.ndarray, *, classes_: Optional[np.ndarray] = None) -> Optional[np.ndarray]: ...
 
-    def default_tau(self, scores: Optional[np.ndarray], *, classes_: Optional[np.ndarray] = None) -> Optional[
-        float]: ...
+    def default_tau(self, scores: Optional[np.ndarray], *, classes_: Optional[np.ndarray] = None) -> Optional[float]: ...
 
     def meta_model_type(self) -> str: ...
 
@@ -101,8 +101,52 @@ class _State:
 
 STATE = _State()
 
+# ★：暂存“计算器公式”，用于在训练后写入 meta，或在加载后同步
+_PENDING_CALC_RECIPES: list[dict] | None = None
 
 
+# ---------------------------- 工具：公式求值 ----------------------------
+def _normalize_expr(expr: str) -> str:
+    return (str(expr).replace("^", "**")
+                    .replace("√", "sqrt")
+                    .replace("ln", "log")
+                    .replace("log10", "log10"))
+
+
+def _apply_calc_recipes_to_table(X_table: dict[str, np.ndarray], recipes: list[dict]) -> dict[str, np.ndarray]:
+    """给定原始列字典 + 公式，计算派生列并返回 *新的列字典*（不修改输入）。
+    - 顺序执行，允许链式引用
+    - 失败的条目以 NaN 兜底
+    """
+    if not recipes:
+        return dict(X_table)
+    # 转为 DataFrame 统一计算
+    n = 0
+    for v in X_table.values():
+        n = len(v); break
+    df = pd.DataFrame(index=range(n))
+    for k, v in X_table.items():
+        df[k] = np.asarray(v).ravel()
+    for item in recipes:
+        try:
+            name = str(item.get("name"))
+            expr = _normalize_expr(str(item.get("expr")))
+            res = df.eval(expr, engine="python",
+                          local_dict={
+                              "np": np,
+                              "sqrt": np.sqrt,
+                              "log": np.log,
+                              "log10": np.log10,
+                              "abs": np.abs,
+                          })
+            res = pd.Series(res).replace([np.inf, -np.inf], np.nan).fillna(0)
+            df[name] = res
+        except Exception:
+            df[name] = np.nan
+    return {c: df[c].to_numpy() for c in df.columns}
+
+
+# ---------------------------- 数据预处理（缩放） ----------------------------
 def _fit_transform_supervised(X: np.ndarray, y: np.ndarray, scaler_spec: Any, *, test_size: float, random_state: int,
                               stratify: Optional[np.ndarray]):
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=stratify)
@@ -136,13 +180,11 @@ def _train_impl(
         random_state: int = 0,
         stratify: Optional[np.ndarray] = None,
         feature_names: Optional[list[str]] = None,
+        calc_recipes: Optional[list[dict]] = None,
 ) -> Tuple[ModelArtifact, TrainReport]:
     # 统一：保存预测目标名称（监督：真实列名；无监督：默认“是否破损”）
     params = dict(params or {})
-    # ---- 提取训练参数里传入的“目标名称”，并从 params 移除，避免传给模型构造 ----
     target_name = None
-
-
     if "target_name" in params and params.get("target_name"):
         target_name = str(params.pop("target_name"))
 
@@ -154,7 +196,6 @@ def _train_impl(
         X_tr, X_te, y_tr, y_te, scaler_obj = _fit_transform_supervised(
             X, y, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
         )
-        # 任务信息
         n_classes = int(len(np.unique(y))) if adapter.kind == "supervised_clf" else None
         is_binary = (adapter.kind == "supervised_clf" and n_classes == 2)
         model = adapter.build(**params)
@@ -165,10 +206,9 @@ def _train_impl(
             scores = adapter.scores(model, X_te, classes_=getattr(model, "classes_", None))
         except Exception:
             scores = None
-        # 多分类不提供 scores（避免前端将其当“正类概率”使用）
-
         if adapter.kind == "supervised_clf" and not is_binary:
             scores = None
+
         metrics_text = ""
         if adapter.kind == "supervised_clf":
             parts = []
@@ -202,6 +242,9 @@ def _train_impl(
 
         tau = adapter.default_tau(None) if is_binary else None
 
+        # ★ 合并公式：优先用调用方传入的 calc_recipes；否则回退到 _PENDING
+        recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
+
         meta = {
             "model_type": adapter.meta_model_type(),
             "tau": tau,
@@ -212,8 +255,8 @@ def _train_impl(
             "task": adapter.kind,                      # "supervised_clf" | "supervised_reg"
             "n_classes": n_classes if adapter.kind == "supervised_clf" else 1,
             "is_binary": bool(is_binary) if adapter.kind == "supervised_clf" else False,
-            # 监督学习：要求前端传入真实列名；若未传则退回 "目标"
             "target": (target_name if target_name else "目标"),
+            "calc_recipes": recipes_final,            # ★ 保存“计算器公式”
         }
         art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
         rep = TrainReport(y_true=y_te, y_pred=y_pred, scores=scores, metrics_text=metrics_text)
@@ -225,6 +268,7 @@ def _train_impl(
     model = adapter.fit(model, Xs, None)
     scores = adapter.scores(model, Xs)
     tau = adapter.default_tau(scores)
+    recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
     meta = {
         "model_type": adapter.meta_model_type(),
         "tau": tau,
@@ -235,6 +279,7 @@ def _train_impl(
         "n_classes": 2,
         "is_binary": True,
         "target": (target_name if target_name else "是否破损"),
+        "calc_recipes": recipes_final,
     }
     art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta)
     rep = TrainReport(scores=scores)
@@ -250,7 +295,6 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     adapter = get_adapter(alg)
 
     if adapter.kind == "unsupervised":
-        # 统一：无监督也返回 (labels, scores)
         scores = adapter.scores(artifact.model, Xs)
         tau = artifact.meta.get("tau")
         if scores is None:
@@ -270,8 +314,6 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
         scores = adapter.scores(artifact.model, Xs, classes_=artifact.meta.get("classes_"))
     except Exception:
         scores = None
-    # 多分类不返回 scores
-
     if artifact.meta.get("task") == "supervised_clf" and not artifact.meta.get("is_binary", False):
         scores = None
     return y_pred, scores
@@ -299,12 +341,8 @@ def _predict_ensemble(bundle: EnsembleArtifact, X_table: Dict[str, np.ndarray]):
                else np.nanmean(np.stack(scores_list, axis=0), axis=0))
     return maj, sc_mean
 
+
 def _predict_grouped(moa: MultiOutputArtifact, X_table: Dict[str, np.ndarray]):
-    """
-    针对 MultiOutputArtifact：对每个目标组分别预测；
-    - 若该目标有多个模型：按 moa.method 集成
-    - 返回 {target: (pred, scores)}
-    """
     out: dict[str, tuple[np.ndarray, Optional[np.ndarray]]] = {}
     for target, arts in moa.groups.items():
         preds, scores_list = [], []
@@ -331,9 +369,9 @@ def _predict_grouped(moa: MultiOutputArtifact, X_table: Dict[str, np.ndarray]):
                 out[target] = (y_mean, sc_mean)
     return out
 
+
 def _dict_to_array_for_model(artifact: ModelArtifact, X_table: dict[str, np.ndarray]) -> np.ndarray:
     """单模型也支持列字典输入：按 meta['features'] 顺序取列，缺失补 NaN。"""
-    import numpy as np
     feats = artifact.meta.get("features", [])
     if not feats:
         feats = sorted(X_table.keys())
@@ -356,6 +394,8 @@ def _dict_to_array_for_model(artifact: ModelArtifact, X_table: dict[str, np.ndar
             col = np.full((n,), np.nan)
         cols.append(col)
     return np.stack(cols, axis=1)
+
+
 # ---------------------------- 对外 API（单例） ----------------------------
 class ML:
     @classmethod
@@ -366,6 +406,7 @@ class ML:
             y: Optional[np.ndarray] = None,
             *,
             feature_names: Optional[list[str]] = None,
+            calc_recipes: Optional[list[dict]] = None,
             **kwargs,
     ) -> TrainReport:
         art, rep = _train_impl(
@@ -373,9 +414,13 @@ class ML:
             X=X,
             y=y,
             feature_names=feature_names,
+            calc_recipes=calc_recipes,
             **kwargs,
         )
         STATE.current = art  # 覆盖旧模型
+        # 训练结束后清理 pending（以模型内的为准）
+        global _PENDING_CALC_RECIPES
+        _PENDING_CALC_RECIPES = list(art.meta.get("calc_recipes", []) or [])
         return rep
 
     @classmethod
@@ -383,14 +428,26 @@ class ML:
         if STATE.current is None:
             raise RuntimeError("当前没有已训练/加载的模型。请先训练/加载。")
         cur = STATE.current
+
         # 多目标：返回 {target: {"labels": y, "scores": s}}
         if isinstance(cur, MultiOutputArtifact):
             assert isinstance(X, dict), "MultiOutput 预测需要传入列字典：{feature: ndarray}"
+            # ★ 对列字典先补齐计算列
+            recipes = []
+            for arts in cur.groups.values():
+                for a in arts:
+                    recipes.extend(a.meta.get("calc_recipes", []) or [])
+            X = _apply_calc_recipes_to_table(X, recipes)
             grouped = _predict_grouped(cur, X)
             return {t: {"labels": ys, "scores": sc} for t, (ys, sc) in grouped.items()}
-        # 旧式集合（同目标）：返回 {"target": name, "labels": y, "scores": s}
+
+        # 旧式集合（同目标）
         if isinstance(cur, EnsembleArtifact):
             assert isinstance(X, dict)
+            recipes = []
+            for a in cur.members:
+                recipes.extend(a.meta.get("calc_recipes", []) or [])
+            X = _apply_calc_recipes_to_table(X, recipes)
             y, sc = _predict_ensemble(cur, X)
             tgt = None
             try:
@@ -398,24 +455,29 @@ class ML:
             except Exception:
                 tgt = None
             return {"target": (tgt or "目标"), "labels": y, "scores": sc}
-        # 单模型：输入 ndarray
-          # 单模型：支持 ndarray 或 列字典
 
+        # 单模型：支持 ndarray 或 列字典
         if isinstance(X, dict):
-            X = _dict_to_array_for_model(cur, X)
+            recipes = STATE.current.meta.get("calc_recipes", []) or []
+            X_table = _apply_calc_recipes_to_table(X, recipes)
+            X_arr = _dict_to_array_for_model(cur, X_table)
         else:
-            assert isinstance(X, np.ndarray)
-        y, sc = _predict_impl(cur, X)
-        tgt = cur.meta.get("target", "目标")
-        return {"target": tgt, "labels": y, "scores": sc}
+            X_arr = X
+        y, sc = _predict_impl(cur, X_arr)
+        return {"target": cur.meta.get("target", "目标"), "labels": y, "scores": sc}
 
     @classmethod
     def transform(cls, X: np.ndarray):
-        """使用当前模型保存的 scaler 对 X 做变换；若无 scaler 则原样返回。"""
         if STATE.current is None:
-            raise RuntimeError("当前没有已训练/加载的模型，无法进行归一化变换。")
-        sc = STATE.current.scaler
-        return (sc.transform(X) if sc is not None else X)
+            raise RuntimeError("当前没有已训练/加载的模型。请先训练/加载。")
+        cur = STATE.current
+        sc = None
+        if isinstance(cur, (EnsembleArtifact, MultiOutputArtifact)):
+            # 简化：集合/多输出不提供 transform
+            return X
+        if isinstance(cur, ModelArtifact):
+            sc = cur.scaler
+        return sc.transform(X) if sc is not None else X
 
     @classmethod
     def get_meta(cls) -> Dict[str, Any]:
@@ -436,6 +498,20 @@ class ML:
             }
         return dict(cur.meta)
 
+    # ★ 新增：在训练前后、或任意时机注入/覆盖“计算器公式”
+    @classmethod
+    def set_calc_recipes(cls, recipes: list[dict] | None):
+        global _PENDING_CALC_RECIPES
+        _PENDING_CALC_RECIPES = list(recipes or [])
+        if isinstance(STATE.current, ModelArtifact):
+            STATE.current.meta["calc_recipes"] = list(_PENDING_CALC_RECIPES)
+
+    @classmethod
+    def get_calc_recipes(cls) -> list[dict]:
+        if isinstance(STATE.current, ModelArtifact):
+            return list(STATE.current.meta.get("calc_recipes", []) or [])
+        return list(_PENDING_CALC_RECIPES or [])
+
     @classmethod
     def save(cls, path: str) -> None:
         if STATE.current is None:
@@ -447,6 +523,7 @@ class ML:
         if STATE.current is None:
             raise RuntimeError("没有可保存的模型。")
         ts = time.strftime("%Y%m%d_%H%M%S")
+        # 文件名仍然只与模型类型相关，保存逻辑保持不变
         fname = f"{ts}_{name or STATE.current.meta.get('model_type','model')}.joblib"
         path = REGISTRY_ROOT / fname
         save_artifact(path, STATE.current)
@@ -457,17 +534,14 @@ class ML:
     def load(cls, path: str) -> Dict[str, Any]:
         art = load_artifact(path)
         STATE.current = art
+        # 同步 pending，便于前端需要时读取
+        global _PENDING_CALC_RECIPES
+        _PENDING_CALC_RECIPES = list(art.meta.get("calc_recipes", []) or [])
         return dict(art.meta)
 
     @classmethod
     def load_many(cls, paths: list[str], *, method: str = "mean") -> Dict[str, Any]:
-        """
-        读取多个模型；自动按目标名分组：
-        - 同一 target 的多个模型：按 method 进行集成（"mean"|"vote"）
-        - 不同 target：分别输出
-        """
         arts = [load_artifact(p) for p in paths]
-        # 构建分组
         groups: dict[str, list[ModelArtifact]] = {}
         for art in arts:
             t = art.meta.get("target")
@@ -476,11 +550,14 @@ class ML:
             groups.setdefault(str(t), []).append(art)
         STATE.current = MultiOutputArtifact(groups=groups, method=method)
         features_union = sorted({f for art in arts for f in art.meta.get("features", [])})
+        # 多模型情况下，pending 公式暂不合并（按 predict() 时动态收集）
         return {"ok": True, "method": method, "groups": {k: len(v) for k, v in groups.items()},
                 "features_union": features_union}
 
     @classmethod
     def clear(cls) -> None:
+        global _PENDING_CALC_RECIPES
+        _PENDING_CALC_RECIPES = None
         STATE.current = None
 
     @classmethod
@@ -511,30 +588,28 @@ class ML:
     def available_scalers():
         return SCALERS_DISPLAY.copy()
 
+
 # ---------------------------- 持久化 ----------------------------
-def save_artifact(path: str, artifact: ModelArtifact) -> None:
+def save_artifact(path: str | Path, artifact: ModelArtifact) -> None:
+    # 保存逻辑保持不变：模型、scaler、meta 打包
     obj: Dict[str, Any] = {"scaler": artifact.scaler, "meta": artifact.meta, "_interface": "ml_interface.singleton.scaler.v4"}
     model = artifact.model
     mtype = artifact.meta.get("model_type")
     adapter = get_adapter(mtype)
 
-    # 优先走适配器的 persist 钩子（如 AE）
     if hasattr(adapter, "persist"):
         try:
             payload = adapter.persist(model)  # type: ignore[attr-defined]
             obj["model"] = {"_adapter": mtype, "payload": payload}
             joblib.dump(obj, str(path)); return
-        except Exception as e:
-            # 回退到直接保存（sklearn），AE 不建议回退
+        except Exception:
             obj["model"] = model
-
     else:
         obj["model"] = model
-    print(path)
     joblib.dump(obj, str(path))
 
 
-def load_artifact(path: str) -> ModelArtifact:
+def load_artifact(path: str | Path) -> ModelArtifact:
     obj = joblib.load(str(path))
     meta = obj.get("meta", {})
     scaler = obj.get("scaler")
@@ -556,5 +631,6 @@ def load_artifact(path: str) -> ModelArtifact:
             meta["features"] = [f"X{i}" for i in range(n_feat)]
         except Exception:
             meta["features"] = []
+    # 兼容：若旧模型没有 calc_recipes 字段，补空
+    meta.setdefault("calc_recipes", [])
     return ModelArtifact(model=model, scaler=scaler, meta=meta)
-
