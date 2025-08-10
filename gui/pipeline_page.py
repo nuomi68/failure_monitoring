@@ -504,7 +504,11 @@ class PipelinePage(QWidget):
             return
         df_out = df.copy()
         for name, arr in result_cols.items():
-            col = np.full(len(df_out), np.nan)
+            arr = np.asarray(arr).ravel()
+            if arr.dtype.kind in {"U", "S", "O"}:
+                col = np.full(len(df_out), None, dtype=object)
+            else:
+                col = np.full(len(df_out), np.nan)
             col[idx[: len(arr)]] = arr[: len(idx)]
             df_out[name] = col
         with self.tbl_common.no_record():
