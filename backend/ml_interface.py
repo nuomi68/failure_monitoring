@@ -117,9 +117,14 @@ def _normalize_expr(expr: str) -> str:
                     .replace("log10", "log10"))
 
 
-def _apply_calc_recipes_to_table(X_table: dict[str, np.ndarray], recipes: list[dict]) -> dict[str, np.ndarray]:
+def _apply_calc_recipes_to_table(
+    X_table: dict[str, np.ndarray],
+    recipes: list[dict],
+    encoders: Dict[str, LabelEncoder] | None = None,
+) -> dict[str, np.ndarray]:
     """给定原始列字典 + 公式，计算派生列并返回 *新的列字典*（不修改输入）。
     - 顺序执行，允许链式引用
+    - 若提供 `encoders`，则对已知的字符串列先行转码，避免表达式中直接出现字符导致计算失败
     - 失败的条目以 NaN 兜底
     """
     if not recipes:
@@ -130,21 +135,37 @@ def _apply_calc_recipes_to_table(X_table: dict[str, np.ndarray], recipes: list[d
         n = len(v); break
     df = pd.DataFrame(index=range(n))
     for k, v in X_table.items():
-        df[k] = np.asarray(v).ravel()
+        arr = np.asarray(v).ravel()
+        le = (encoders or {}).get(k)
+        if le is not None:
+            try:
+                arr = le.transform(arr.astype(str))
+            except Exception:
+                pass
+        df[k] = arr
     for item in recipes:
         try:
             name = str(item.get("name"))
             expr = _normalize_expr(str(item.get("expr")))
-            res = df.eval(expr, engine="python",
-                          local_dict={
-                              "np": np,
-                              "sqrt": np.sqrt,
-                              "log": np.log,
-                              "log10": np.log10,
-                              "abs": np.abs,
-                          })
+            res = df.eval(
+                expr,
+                engine="python",
+                local_dict={
+                    "np": np,
+                    "sqrt": np.sqrt,
+                    "log": np.log,
+                    "log10": np.log10,
+                    "abs": np.abs,
+                },
+            )
             res = pd.Series(res).replace([np.inf, -np.inf], np.nan).fillna(0)
             df[name] = res
+            le = (encoders or {}).get(name)
+            if le is not None:
+                try:
+                    df[name] = le.transform(df[name].astype(str))
+                except Exception:
+                    pass
         except Exception:
             df[name] = np.nan
     return {c: df[c].to_numpy() for c in df.columns}
@@ -371,6 +392,8 @@ def _train_impl(
     scores = adapter.scores(model, Xs)
     tau = adapter.default_tau(scores)
     recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
+    le = LabelEncoder()
+    le.fit(["否", "是"])
     meta = {
         "model_type": adapter.meta_model_type(),
         "tau": tau,
@@ -383,7 +406,13 @@ def _train_impl(
         "target": (target_name if target_name else "是否破损"),
         "calc_recipes": recipes_final,
     }
-    art = ModelArtifact(model=model, scaler=scaler_obj, meta=meta, x_encoders=x_encoders or None)
+    art = ModelArtifact(
+        model=model,
+        scaler=scaler_obj,
+        meta=meta,
+        label_encoder=le,
+        x_encoders=x_encoders or None,
+    )
     rep = TrainReport(scores=scores)
     return art, rep
 
@@ -572,22 +601,28 @@ class ML:
         # 多目标：返回 {target: {"labels": y, "scores": s}}
         if isinstance(cur, MultiOutputArtifact):
             assert isinstance(X, dict), "MultiOutput 预测需要传入列字典：{feature: ndarray}"
-            # ★ 对列字典先补齐计算列
-            recipes = []
+            # ★ 对列字典先补齐计算列，并应用各模型的编码器
+            recipes: list[dict] = []
+            enc_all: Dict[str, LabelEncoder] = {}
             for arts in cur.groups.values():
                 for a in arts:
                     recipes.extend(a.meta.get("calc_recipes", []) or [])
-            X = _apply_calc_recipes_to_table(X, recipes)
+                    if a.x_encoders:
+                        enc_all.update(a.x_encoders)
+            X = _apply_calc_recipes_to_table(X, recipes, encoders=enc_all)
             grouped = _predict_grouped(cur, X)
             return {t: {"labels": ys, "scores": sc} for t, (ys, sc) in grouped.items()}
 
         # 旧式集合（同目标）
         if isinstance(cur, EnsembleArtifact):
             assert isinstance(X, dict)
-            recipes = []
+            recipes: list[dict] = []
+            enc_all: Dict[str, LabelEncoder] = {}
             for a in cur.members:
                 recipes.extend(a.meta.get("calc_recipes", []) or [])
-            X = _apply_calc_recipes_to_table(X, recipes)
+                if a.x_encoders:
+                    enc_all.update(a.x_encoders)
+            X = _apply_calc_recipes_to_table(X, recipes, encoders=enc_all)
             y, sc = _predict_ensemble(cur, X)
             tgt = None
             try:
@@ -599,7 +634,8 @@ class ML:
         # 单模型：支持 ndarray 或 列字典
         if isinstance(X, dict):
             recipes = STATE.current.meta.get("calc_recipes", []) or []
-            X_table = _apply_calc_recipes_to_table(X, recipes)
+            enc = cur.x_encoders or {}
+            X_table = _apply_calc_recipes_to_table(X, recipes, encoders=enc)
             X_arr = _dict_to_array_for_model(cur, X_table)
         else:
             X_arr = X

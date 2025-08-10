@@ -6,7 +6,8 @@ from typing import Optional, Callable, Any, Dict, List
 import numpy as np
 import joblib
 from sklearn.metrics import pairwise_distances
-from .tools import make_scaler,SCALERS_DISPLAY
+from sklearn.preprocessing import LabelEncoder
+from .tools import make_scaler, SCALERS_DISPLAY
 
 # 引入更稳健的多种分类方法（已在 fault_level_model.py 中实现）
 from backend.models.fault_level_model import (
@@ -71,6 +72,7 @@ class FaultLevelEstimator:
     _labelled_scaled: np.ndarray | None = field(init=False, default=None)
     model_: Any | None = field(init=False, default=None)
     scaler_spec: Any | None = field(init=False, default=None)
+    label_encoder: LabelEncoder | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.labelled_X.shape[0] != self.labels.shape[0]:
@@ -78,6 +80,12 @@ class FaultLevelEstimator:
         self.method = self.method.lower()
         if self.method not in METHODS_DISPLAY:
             raise ValueError(f"未知方法: {self.method}. 可选: {list(METHODS_DISPLAY)}")
+
+        # 若标签为非数值，则先做编码
+        if not np.issubdtype(self.labels.dtype, np.number):
+            le = LabelEncoder()
+            self.labels = le.fit_transform(self.labels.astype(str))
+            self.label_encoder = le
 
         # 统一处理缩放
         self.scaler_spec = self.scaler
@@ -125,8 +133,20 @@ class FaultLevelEstimator:
     # ------------------------------------------------------------------
     # 预测接口
     # ------------------------------------------------------------------
-    def predict(self, X: np.ndarray, *, metric: Optional[str | Callable[[np.ndarray, np.ndarray], float]] = None) -> np.ndarray:
-        """对 X 进行故障等级预测。"""
+    def predict(
+        self,
+        X: np.ndarray,
+        *,
+        metric: Optional[str | Callable[[np.ndarray, np.ndarray], float]] = None,
+        decode: bool = True,
+    ) -> np.ndarray:
+        """对 X 进行故障等级预测。
+
+        Parameters
+        ----------
+        decode : bool, default True
+            若为 True 且存在 label_encoder，则输出原始标签；否则输出内部编码后的整数。
+        """
         if metric is None:
             metric = self.metric
 
@@ -140,10 +160,16 @@ class FaultLevelEstimator:
         if self.method == "1nn":
             dists = pairwise_distances(X_scaled, self._labelled_scaled, metric=metric)
             nearest_idx = np.argmin(dists, axis=1)
-            return self.labels[nearest_idx]
+            preds = self.labels[nearest_idx]
         else:
             self._ensure_model_fit()
-            return self.model_.predict(X_scaled)
+            preds = self.model_.predict(X_scaled)
+        if decode and self.label_encoder is not None:
+            try:
+                preds = self.label_encoder.inverse_transform(preds.astype(int))
+            except Exception:
+                pass
+        return preds
 
     # ------------------------------------------------------------------
     # 持久化
@@ -159,6 +185,7 @@ class FaultLevelEstimator:
             "feature_names": self.feature_names,
             "scaler_spec": self.scaler_spec,
             "scaler": self.scaler,
+            "label_encoder": self.label_encoder,
         }
         if self.method != "1nn":
             # 确保已拟合后保存
@@ -180,6 +207,7 @@ class FaultLevelEstimator:
             feature_names=data.get("feature_names", None),
         )
         obj.scaler_spec = data.get("scaler_spec", obj.scaler_spec)
+        obj.label_encoder = data.get("label_encoder", None)
         if method != "1nn":
             obj.model_ = data.get("model", None)
         return obj
