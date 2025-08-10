@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 import numpy as np
 
+from sklearn.preprocessing import LabelEncoder
+
 from .fault_level_estimator import FaultLevelEstimator
 
 
@@ -161,18 +163,34 @@ class FaultModelManager:
         """
         if not estimators:
             return np.array([])
-        preds = []
+        preds: list[np.ndarray] = []
+        enc: LabelEncoder | None = None
+        numeric = True
         for est in estimators:
             feats = est.feature_names or []
             arr = np.stack([
                 X.get(c, pd.Series([np.nan] * len(X))).to_numpy()
                 for c in feats
             ], axis=1)
-            preds.append(np.asarray(est.predict(arr)))
+            y = np.asarray(est.predict(arr, decode=False))
+            preds.append(y)
+            if enc is None and est.label_encoder is not None:
+                enc = est.label_encoder
+            if numeric and not np.issubdtype(y.dtype, np.number):
+                numeric = False
         stack = np.vstack(preds)
-        if np.array_equal(stack, stack.astype(int)):
-            return pd.DataFrame(stack.T).mode(axis=1)[0].to_numpy()
-        return np.nanmean(stack, axis=0)
+        if numeric and np.array_equal(stack, stack.astype(int)):
+            agg = pd.DataFrame(stack.T).mode(axis=1)[0].to_numpy()
+        elif numeric:
+            agg = np.nanmean(stack.astype(float), axis=0)
+        else:
+            agg = pd.DataFrame(stack.T).mode(axis=1)[0].to_numpy()
+        if enc is not None:
+            try:
+                agg = enc.inverse_transform(np.asarray(agg).astype(int))
+            except Exception:
+                pass
+        return agg
 
     # ------------------------------------------------------------------
     def delete_model(self, model_id: str) -> bool:

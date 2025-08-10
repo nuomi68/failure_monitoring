@@ -332,7 +332,7 @@ class SupervisedPage(QWidget):
             QMessageBox.warning(self,"提示","请选择特征")
             return
 
-        X = self.df[cols].astype(float).values
+        X = self.df[cols].values
         y = self.df[self.target_col].values
         code = self.alg_combo.currentData()
         scaler_spec = self.scaler_combo.currentData()
@@ -341,6 +341,13 @@ class SupervisedPage(QWidget):
         test_size = float(params_base.get("test_size", 0.2))
         rs = int(params_base.get("random_state", 0))
         stratify = y if (self.is_clf and len(np.unique(y)) > 1) else None
+        if stratify is not None:
+            try:
+                _, cnts = np.unique(stratify, return_counts=True)
+                if cnts.min() < 2:
+                    stratify = None
+            except Exception:
+                stratify = None
 
         n_main = self.k_spin.value()
         params = params_base.copy()
@@ -418,19 +425,27 @@ class SupervisedPage(QWidget):
         if self.y_true is None: return
         if self.is_clf:
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+            import numpy as np
             auc = None
-
-            if self.binary and self.test_scores is not None:
-
+            classes = list(self.meta.get("classes_", []))
+            mapping = {c: i for i, c in enumerate(classes)} if classes else None
+            if self.binary and self.test_scores is not None and mapping is not None:
                 try:
-                    auc = roc_auc_score(self.y_true, self.test_scores)
+                    y_true_num = np.vectorize(mapping.get)(self.y_true)
+                    auc = roc_auc_score(y_true_num, self.test_scores)
                 except Exception:
                     auc = None
             acc = accuracy_score(self.y_true, self.y_pred)
             avg = "binary" if self.binary else "macro"
-            prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+            if self.binary and classes:
+                pos_label = classes[1] if len(classes) > 1 else classes[0]
+                prec = precision_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+                rec = recall_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+                f1 = f1_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+            else:
+                prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+                rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+                f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
             parts = [f"Accuracy={acc:.3f}", f"Precision={prec:.3f}", f"Recall={rec:.3f}", f"F1={f1:.3f}"]
             if auc is not None: parts.append(f"AUC={auc:.3f}")
             self.metrics_text = " | ".join(parts)
@@ -462,7 +477,12 @@ class SupervisedPage(QWidget):
         choice = self.viz_combo.currentText()
         if self.is_clf:
             if choice == "ROC 曲线" and self.binary and self.test_scores is not None:
-                self.canvas.plot_roc(self.y_true, self.test_scores)
+                classes = list(self.meta.get("classes_", []))
+                mapping = {c: i for i, c in enumerate(classes)} if classes else None
+                y_true_num = (
+                    np.vectorize(mapping.get)(self.y_true) if mapping is not None else self.y_true
+                )
+                self.canvas.plot_roc(y_true_num, self.test_scores)
             elif choice == "混淆矩阵":
                 self.canvas.plot_confmat(self.y_true, self.y_pred)
             elif choice == "指标汇总":
