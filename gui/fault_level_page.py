@@ -5,26 +5,44 @@ import numpy as np
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QMessageBox, QSplitter
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QMessageBox, QSplitter, QFileDialog
 )
 
 from sklearn.preprocessing import StandardScaler
-from backend.fault_level_estimator import FaultLevelEstimator
+from backend.fault_level_estimator import FaultLevelEstimator, METHODS_DISPLAY
 from gui.smart_table import SmartTable, SmartTableConfig
 
 
 class FaultLevelPage(QWidget):
-    """故障等级估计器页面，使用 SmartTable 统一表格展示"""
+    """故障等级估计器页面，使用 SmartTable 统一表格展示
+    - 前端可选择算法方法
+    - 可保存/加载模型（包含方法、参数、特征名）
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("故障等级估计器")
 
         self._use_scaler: bool = True
+        self._method_code: str = 'wknn'  # 默认更稳健的距离加权 kNN
         self._estimator: FaultLevelEstimator | None = None
 
+        # ---------------- Top Controls ----------------
         top = QHBoxLayout()
         top.addStretch()
+
+        top.addWidget(QLabel("算法方法："))
+        self.cb_method = QComboBox()
+        # 以 METHODS_DISPLAY 的顺序加入
+        for k, v in METHODS_DISPLAY.items():
+            self.cb_method.addItem(v, userData=k)
+        # 默认选中 self._method_code
+        idx_default = list(METHODS_DISPLAY.keys()).index(self._method_code)
+        self.cb_method.setCurrentIndex(idx_default)
+        self.cb_method.currentIndexChanged.connect(self._on_method_changed)
+        top.addWidget(self.cb_method)
+
+        top.addSpacing(16)
         top.addWidget(QLabel("特征标准化："))
         self.cb_scaler = QComboBox()
         self.cb_scaler.addItems(["启用（StandardScaler）", "不启用"])
@@ -34,6 +52,7 @@ class FaultLevelPage(QWidget):
         )
         top.addWidget(self.cb_scaler)
 
+        # ---------------- Splitter (Tables) ----------------
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         upper = QWidget()
@@ -56,12 +75,22 @@ class FaultLevelPage(QWidget):
         splitter.addWidget(upper)
         splitter.addWidget(lower)
 
+        # ---------------- Bottom Buttons ----------------
         bottom = QHBoxLayout()
         self.btn_predict = QPushButton("计算等级")
         self.btn_predict.clicked.connect(self._on_predict)
+        self.btn_save = QPushButton("保存模型…")
+        self.btn_save.clicked.connect(self._on_save_model)
+        self.btn_load = QPushButton("加载模型…")
+        self.btn_load.clicked.connect(self._on_load_model)
+
         bottom.addStretch()
         bottom.addWidget(self.btn_predict)
+        bottom.addSpacing(12)
+        bottom.addWidget(self.btn_save)
+        bottom.addWidget(self.btn_load)
 
+        # ---------------- Root Layout ----------------
         root = QVBoxLayout(self)
         root.addLayout(top)
         root.addWidget(splitter)
@@ -69,6 +98,7 @@ class FaultLevelPage(QWidget):
 
         self.tbl_labelled.bind_features_sink(self.tbl_unlabelled)
 
+        # Demo 数据
         demo = pd.DataFrame({
             "feat1": [0.2, 1.0, 0.1],
             "feat2": [0.5, 0.9, 0.2],
@@ -76,6 +106,10 @@ class FaultLevelPage(QWidget):
         })
         self.tbl_labelled.set_dataframe(demo)
         self.tbl_labelled.set_label_column("fault_level")
+
+    # ---------------- Slots ----------------
+    def _on_method_changed(self, _: int):
+        self._method_code = self.cb_method.currentData()
 
     def _on_predict(self):
         label_col = self.tbl_labelled.label_column()
@@ -114,7 +148,11 @@ class FaultLevelPage(QWidget):
             QMessageBox.warning(self, "提示", "待预测样本表为空，请先填写。")
             return
 
-        use_cols = [c for c in feat_cols if c in df_un.columns]
+        # 优先使用保存/加载的特征顺序
+        feat_for_predict = feat_cols
+        if self._estimator and self._estimator.feature_names:
+            feat_for_predict = list(self._estimator.feature_names)
+        use_cols = [c for c in feat_for_predict if c in df_un.columns]
         if not use_cols:
             QMessageBox.critical(self, "列不匹配", "待预测表与样本表的特征列不匹配。")
             return
@@ -130,11 +168,24 @@ class FaultLevelPage(QWidget):
         keep_un = ~X_un.isna().any(axis=1)
         X_un_valid = X_un[keep_un].to_numpy(dtype=float)
 
-        scaler = (StandardScaler().fit(X_lab) if self._use_scaler else None)
-        self._estimator = FaultLevelEstimator(X_lab, y_lab, scaler=scaler)
+        # 仅当使用 1NN 时才构造外部 scaler；其余方法内部会根据 self._use_scaler 决定是否标准化
+        scaler = None
+        if self._method_code == '1nn' and self._use_scaler:
+            scaler = StandardScaler().fit(X_lab)
+
+        self._estimator = FaultLevelEstimator(
+            X_lab, y_lab,
+            method=self._method_code,
+            metric='euclidean',
+            scaler=scaler,
+            scale=self._use_scaler,
+            feature_names=feat_cols,
+        )
+
         if X_un_valid.shape[0] == 0:
             QMessageBox.warning(self, "提示", "清洗后待预测表无有效行。")
             return
+
         preds = self._estimator.predict(X_un_valid)
 
         df_un["预测等级"] = ""
@@ -147,4 +198,70 @@ class FaultLevelPage(QWidget):
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。")
+        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测等级。\n方法：{METHODS_DISPLAY[self._method_code]}")
+
+    def _on_save_model(self):
+        # 需要有样本才可保存
+        df_lab = self.tbl_labelled.dataframe()
+        label_col = self.tbl_labelled.label_column()
+        if df_lab.empty or not label_col or label_col not in df_lab.columns:
+            QMessageBox.warning(self, "提示", "请先准备好样本表并指定等级列，再保存模型。")
+            return
+
+        feat_cols = [c for c in df_lab.columns if c != label_col]
+        X_lab = df_lab[feat_cols].apply(pd.to_numeric, errors="coerce")
+        y_lab = df_lab[label_col]
+        keep_lab = ~X_lab.isna().any(axis=1)
+        X_lab = X_lab[keep_lab].to_numpy(dtype=float)
+        y_lab = y_lab[keep_lab].to_numpy()
+        if X_lab.size == 0:
+            QMessageBox.critical(self, "无有效样本", "清洗后样本为空，无法保存。")
+            return
+
+        # 确保有一个估计器实例
+        scaler = None
+        if self._method_code == '1nn' and self._use_scaler:
+            scaler = StandardScaler().fit(X_lab)
+        self._estimator = FaultLevelEstimator(
+            X_lab, y_lab,
+            method=self._method_code,
+            metric='euclidean',
+            scaler=scaler,
+            scale=self._use_scaler,
+            feature_names=feat_cols,
+        )
+
+        path, _ = QFileDialog.getSaveFileName(self, "保存模型", filter="Joblib (*.joblib);;All Files (*)")
+        if not path:
+            return
+        try:
+            self._estimator.save(path)
+            QMessageBox.information(self, "已保存", f"模型已保存：{path}\n方法：{METHODS_DISPLAY[self._method_code]}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"保存模型失败：{e}")
+
+    def _on_load_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, "加载模型", filter="Joblib (*.joblib);;All Files (*)")
+        if not path:
+            return
+        try:
+            est = FaultLevelEstimator.load(path)
+            self._estimator = est
+            # 同步 UI：方法、标准化开关
+            keys = list(METHODS_DISPLAY.keys())
+            if est.method in keys:
+                self.cb_method.setCurrentIndex(keys.index(est.method))
+                self._method_code = est.method
+            # 标准化状态：1-NN 用是否有 scaler；其余用 est.scale
+            use_scaler = bool(est.scaler) if est.method == '1nn' else bool(est.scale)
+            self.cb_scaler.setCurrentIndex(0 if use_scaler else 1)
+            self._use_scaler = use_scaler
+
+            # 给出提示信息
+            fnames = est.feature_names or []
+            QMessageBox.information(
+                self, "已加载",
+                f"已加载模型：{path}\n方法：{METHODS_DISPLAY.get(est.method, est.method)}\n特征列：{fnames if fnames else '（未记录）'}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", f"加载模型失败：{e}")

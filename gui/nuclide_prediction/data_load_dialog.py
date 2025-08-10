@@ -567,7 +567,7 @@ class DataLoadDialog(QDialog):
         # 解析：先通用解析，再对未成功部分尝试用户指定格式
         if col:
             try:
-                ser = pd.to_datetime(self._work_df[col])
+                ser = pd.to_datetime(self._work_df[col],errors="coerce")
                 mask = ser.isna() & self._work_df[col].notna()
                 if mask.any() and fmt:
                     ser_fmt = pd.to_datetime(self._work_df.loc[mask, col], format=fmt)
