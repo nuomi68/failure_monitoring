@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
+import numpy as np
 
 from .fault_level_estimator import FaultLevelEstimator
 
@@ -151,6 +152,27 @@ class FaultModelManager:
         meta["name"] = new_name
         self._write_registry()
         return True
+
+    # ------------------------------------------------------------------
+    def predict_many(self, estimators: List[FaultLevelEstimator], X: pd.DataFrame) -> np.ndarray:
+        """Aggregate predictions from multiple estimators.
+
+        Classification models vote, regression models average.
+        """
+        if not estimators:
+            return np.array([])
+        preds = []
+        for est in estimators:
+            feats = est.feature_names or []
+            arr = np.stack([
+                X.get(c, pd.Series([np.nan] * len(X))).to_numpy()
+                for c in feats
+            ], axis=1)
+            preds.append(np.asarray(est.predict(arr)))
+        stack = np.vstack(preds)
+        if np.array_equal(stack, stack.astype(int)):
+            return pd.DataFrame(stack.T).mode(axis=1)[0].to_numpy()
+        return np.nanmean(stack, axis=0)
 
     # ------------------------------------------------------------------
     def delete_model(self, model_id: str) -> bool:

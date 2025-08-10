@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QPushButton,
     QMessageBox,
-    QComboBox,
 )
 
 from backend.ml_interface import ML, infer_input_features
@@ -55,6 +54,9 @@ class PipelinePage(QWidget):
         self.ml_model_ids: List[str] = []
         self.ml_names: Dict[str, str] = {}
         self.ml_features: Dict[str, List[str]] = {}
+        self.ml_targets: Dict[str, str] = {}
+
+        self.pred_cols: set[str] = set()
 
         # ----- 四宫格布局 -----
         self.grp_ts = self._build_ts_block()
@@ -199,13 +201,6 @@ class PipelinePage(QWidget):
         self.btn_ml_clear = QPushButton("清空")
         row = QHBoxLayout(); row.addWidget(self.chk_ml); row.addStretch(1)
         lay.addLayout(row)
-        method_row = QHBoxLayout()
-        method_row.addWidget(QLabel("集成方式"))
-        self.cmb_ml_method = QComboBox()
-        self.cmb_ml_method.addItems(["平均", "投票"])
-        method_row.addWidget(self.cmb_ml_method)
-        method_row.addStretch(1)
-        lay.addLayout(method_row)
         row2 = QHBoxLayout(); row2.addWidget(self.btn_ml_load); row2.addWidget(self.btn_ml_clear)
         lay.addLayout(row2)
         self.ml_model_wrap = QWidget()
@@ -225,13 +220,6 @@ class PipelinePage(QWidget):
         self.btn_fault_clear = QPushButton("清空")
         row = QHBoxLayout(); row.addWidget(self.chk_fault); row.addStretch(1)
         lay.addLayout(row)
-        method_row = QHBoxLayout()
-        method_row.addWidget(QLabel("集成方式"))
-        self.cmb_fault_method = QComboBox()
-        self.cmb_fault_method.addItems(["平均", "投票"])
-        method_row.addWidget(self.cmb_fault_method)
-        method_row.addStretch(1)
-        lay.addLayout(method_row)
         row2 = QHBoxLayout(); row2.addWidget(self.btn_fault_load); row2.addWidget(self.btn_fault_clear)
         lay.addLayout(row2)
         self.fault_model_wrap = QWidget()
@@ -323,12 +311,15 @@ class PipelinePage(QWidget):
                 meta = self.ml_manager.load_models([mid])
                 name = self.ml_manager.registry.get(mid, {}).get("name", mid)
                 feats = infer_input_features(meta.get("features", []), meta.get("calc_recipes", []))
+                tgt = meta.get("target", "ml_pred")
                 if mid not in self.ml_model_ids:
                     self.ml_model_ids.append(mid)
                 self.ml_names[mid] = name
                 self.ml_features[mid] = feats
+                self.ml_targets[mid] = tgt
             except Exception as e:
                 QMessageBox.warning(self, "加载失败", str(e))
+        ML.clear()
         if self.ml_model_ids:
             self.chk_ml.setChecked(True)
         self._refresh_ml_models()
@@ -338,6 +329,7 @@ class PipelinePage(QWidget):
             self.ml_model_ids.remove(model_id)
         self.ml_names.pop(model_id, None)
         self.ml_features.pop(model_id, None)
+        self.ml_targets.pop(model_id, None)
         self._refresh_ml_models()
 
     def _on_clear_ml(self) -> None:
@@ -348,6 +340,7 @@ class PipelinePage(QWidget):
         self.ml_model_ids.clear()
         self.ml_names.clear()
         self.ml_features.clear()
+        self.ml_targets.clear()
         self._refresh_ml_models()
         self.chk_ml.setChecked(False)
 
@@ -466,7 +459,11 @@ class PipelinePage(QWidget):
         if df.empty:
             QMessageBox.information(self, "提示", "下游输入表为空。")
             return
-        df_num = df.apply(pd.to_numeric, errors="coerce")
+        feats_required = self._required_common_features()
+        if not feats_required:
+            QMessageBox.information(self, "提示", "暂无可用特征。")
+            return
+        df_num = df.reindex(columns=feats_required).apply(pd.to_numeric, errors="coerce")
         valid = ~df_num.isna().any(axis=1)
         idx = np.where(valid.to_numpy())[0]
         if idx.size == 0:
@@ -476,51 +473,27 @@ class PipelinePage(QWidget):
         result_cols: Dict[str, np.ndarray] = {}
 
         if self.chk_ml.isChecked() and self.ml_model_ids:
-            preds_list: List[np.ndarray] = []
-            for mid in self.ml_model_ids:
-                feats = self.ml_features.get(mid, [])
-                try:
-                    self.ml_manager.load_models([mid])
-                    X_table = {
-                        f: X_valid.get(f, pd.Series([np.nan] * len(X_valid))).to_numpy()
-                        for f in feats
-                    }
-                    ret = ML.predict(X_table)
-                    y = np.asarray(ret.get("labels") if isinstance(ret, dict) else ret).ravel()
-                    preds_list.append(y)
-                except Exception as e:
-                    QMessageBox.warning(self, f"ML 模型 {self.ml_names.get(mid, mid)} 预测失败", str(e))
-            if preds_list:
-                arr = np.vstack(preds_list)
-                if self.cmb_ml_method.currentText() == "投票":
-                    y = pd.DataFrame(arr.T).mode(axis=1)[0].to_numpy()
-                else:
-                    y = np.mean(arr, axis=0)
-                result_cols["ml_pred"] = y
+            try:
+                self.ml_manager.load_models(self.ml_model_ids)
+                X_table = {f: X_valid.get(f, pd.Series([np.nan] * len(X_valid))).to_numpy() for f in X_valid.columns}
+                ret = ML.predict(X_table)
+                if isinstance(ret, dict) and "labels" in ret:
+                    target = ret.get("target", "ml_pred")
+                    result_cols[target] = np.asarray(ret.get("labels")).ravel()
+                elif isinstance(ret, dict):
+                    for tgt, info in ret.items():
+                        if isinstance(info, dict) and "labels" in info:
+                            result_cols[str(tgt)] = np.asarray(info["labels"]).ravel()
+            except Exception as e:
+                QMessageBox.warning(self, "ML 预测失败", str(e))
 
         if self.chk_fault.isChecked() and self.fault_models:
-            preds_list: List[np.ndarray] = []
-            for mid, est in self.fault_models.items():
-                feats = self.fault_features.get(mid, [])
-                miss = [f for f in feats if f not in X_valid.columns]
-                if miss:
-                    QMessageBox.warning(self, "特征缺失", f"故障模型{self.fault_names.get(mid, mid)}缺失列：{miss}")
-                try:
-                    arr = np.stack([
-                        X_valid.get(c, pd.Series([np.nan] * len(X_valid))).to_numpy()
-                        for c in feats
-                    ], axis=1)
-                    preds = np.asarray(est.predict(arr)).ravel()
-                    preds_list.append(preds)
-                except Exception as e:
-                    QMessageBox.warning(self, f"故障模型{self.fault_names.get(mid, mid)}预测失败", str(e))
-            if preds_list:
-                arr = np.vstack(preds_list)
-                if self.cmb_fault_method.currentText() == "投票":
-                    y = pd.DataFrame(arr.T).mode(axis=1)[0].to_numpy()
-                else:
-                    y = np.mean(arr, axis=0)
-                result_cols["fault_pred"] = y
+            try:
+                y = self.fault_manager.predict_many(list(self.fault_models.values()), X_valid)
+                if y.size:
+                    result_cols["fault_pred"] = y
+            except Exception as e:
+                QMessageBox.warning(self, "故障等级预测失败", str(e))
 
         if not result_cols:
             QMessageBox.information(self, "提示", "没有生成任何结果。")
@@ -532,13 +505,15 @@ class PipelinePage(QWidget):
             df_out[name] = col
         with self.tbl_common.no_record():
             self.tbl_common.set_dataframe(df_out, record_state=False)
+        self.pred_cols.update(result_cols.keys())
         QMessageBox.information(self, "完成", f"已写入结果列：{list(result_cols.keys())}")
 
     def _on_clear_results(self) -> None:
         df = self.tbl_common.dataframe()
-        drop = [c for c in df.columns if c.startswith("ml_pred") or c.startswith("fault_pred")]
+        drop = [c for c in df.columns if c in self.pred_cols]
         if not drop:
             return
         df2 = df.drop(columns=drop)
         with self.tbl_common.no_record():
             self.tbl_common.set_dataframe(df2, record_state=False)
+        self.pred_cols.clear()

@@ -391,16 +391,23 @@ def _predict_grouped(moa: MultiOutputArtifact, X_table: Dict[str, np.ndarray]):
         if len(preds) == 1:
             out[target] = (preds[0], scores_list[0])
         else:
-            if moa.method == "vote":
+            task = arts[0].meta.get("task")
+            if task == "supervised_clf":
                 votes = np.stack(preds, axis=1)
                 maj = np.apply_along_axis(lambda r: np.bincount(r.astype(int)).argmax(), 1, votes)
-                sc_mean = (None if any(s is None for s in scores_list)
-                           else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+                sc_mean = (
+                    None
+                    if any(s is None for s in scores_list)
+                    else np.nanmean(np.stack(scores_list, axis=0), axis=0)
+                )
                 out[target] = (maj, sc_mean)
             else:
                 y_mean = np.nanmean(np.stack(preds, axis=0), axis=0)
-                sc_mean = (None if any(s is None for s in scores_list)
-                           else np.nanmean(np.stack(scores_list, axis=0), axis=0))
+                sc_mean = (
+                    None
+                    if any(s is None for s in scores_list)
+                    else np.nanmean(np.stack(scores_list, axis=0), axis=0)
+                )
                 out[target] = (y_mean, sc_mean)
     return out
 
