@@ -418,19 +418,27 @@ class SupervisedPage(QWidget):
         if self.y_true is None: return
         if self.is_clf:
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+            import numpy as np
             auc = None
-
-            if self.binary and self.test_scores is not None:
-
+            classes = list(self.meta.get("classes_", []))
+            mapping = {c: i for i, c in enumerate(classes)} if classes else None
+            if self.binary and self.test_scores is not None and mapping is not None:
                 try:
-                    auc = roc_auc_score(self.y_true, self.test_scores)
+                    y_true_num = np.vectorize(mapping.get)(self.y_true)
+                    auc = roc_auc_score(y_true_num, self.test_scores)
                 except Exception:
                     auc = None
             acc = accuracy_score(self.y_true, self.y_pred)
             avg = "binary" if self.binary else "macro"
-            prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+            if self.binary and classes:
+                pos_label = classes[1] if len(classes) > 1 else classes[0]
+                prec = precision_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+                rec = recall_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+                f1 = f1_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
+            else:
+                prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+                rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
+                f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
             parts = [f"Accuracy={acc:.3f}", f"Precision={prec:.3f}", f"Recall={rec:.3f}", f"F1={f1:.3f}"]
             if auc is not None: parts.append(f"AUC={auc:.3f}")
             self.metrics_text = " | ".join(parts)
