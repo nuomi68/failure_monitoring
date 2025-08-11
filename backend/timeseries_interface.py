@@ -17,8 +17,7 @@ import uuid
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from sklearn.preprocessing import StandardScaler
-import  torch
+import torch
 import numpy as np
 import pandas as pd
 import joblib
@@ -30,6 +29,7 @@ from sklearn.model_selection import train_test_split
 
 
 from backend.data_utils import build_windows
+from backend.tools import encode_and_scale
 from backend.models import (
     gru_model,
     tcn_model,
@@ -383,9 +383,8 @@ class ModelManager:
 
         feature_names = feat_df.columns.tolist()
 
-        # 标准化
-        scaler = StandardScaler()
-        data_scaled = scaler.fit_transform(feat_df.values.astype(float))
+        # 统一编码与缩放
+        data_scaled, scaler, _ = encode_and_scale(feat_df)
 
         # 构造窗口
         default_lb = DATA_CFG.get(model_type, 14)  # controller 里给的默认窗口长度
@@ -635,7 +634,7 @@ class ModelManager:
         feature_names = meta.get("feature_names")
         if feature_names:
             try:
-                feat_df = df[feature_names].astype(float)
+                feat_df = df[feature_names]
             except KeyError as exc:
                 raise ValueError(f"数据集中缺少列: {exc}") from exc
         else:
@@ -645,8 +644,8 @@ class ModelManager:
                 raise ValueError("数据集中不包含数值列，无法加载模型。")
             feature_names = feat_df.columns.tolist()
 
-        scaler = StandardScaler()
-        data_scaled = scaler.fit_transform(feat_df.values.astype(float))
+        # 统一编码与缩放
+        data_scaled, scaler, _ = encode_and_scale(feat_df)
 
         # ---- 在加载阶段也需构造与训练完成后一致的运行时状态 ----
         # 避免旧状态残留，先重置再写入

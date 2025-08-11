@@ -1,8 +1,10 @@
 from sklearn.preprocessing import (
     StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,
-    PowerTransformer, QuantileTransformer, Normalizer
+    PowerTransformer, QuantileTransformer, Normalizer, LabelEncoder,
 )
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
+import pandas as pd
+import numpy as np
 
 # 供前端显示的缩放器选项
 SCALERS_DISPLAY = [("标准化 (Z‑score)", "standard"),
@@ -51,3 +53,39 @@ def make_scaler(spec: Any):
     if name in ("none",):
         return None
     raise ValueError(f"Unknown scaler name: {name}")
+
+
+def encode_and_scale(
+    df: pd.DataFrame, scaler_spec: Any = "standard"
+) -> Tuple[np.ndarray, Any, Dict[str, LabelEncoder]]:
+    """Encode categorical columns and apply scaling in one step.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw feature table from front-end.
+    scaler_spec : Any, default "standard"
+        Specification passed to :func:`make_scaler`.
+
+    Returns
+    -------
+    tuple
+        ``(data_scaled, scaler_obj, encoders)`` where ``data_scaled`` is a
+        ``numpy.ndarray`` after encoding and scaling, ``scaler_obj`` is the
+        fitted scaler (or ``None``) and ``encoders`` maps column names to
+        their ``LabelEncoder``.
+    """
+
+    work = df.copy()
+    encoders: Dict[str, LabelEncoder] = {}
+    for col in work.select_dtypes(include=["object", "category"]).columns:
+        le = LabelEncoder()
+        work[col] = le.fit_transform(work[col].astype(str))
+        encoders[col] = le
+
+    scaler = make_scaler(scaler_spec)
+    arr = work.to_numpy(dtype=float)
+    if scaler is not None:
+        arr = scaler.fit_transform(arr)
+
+    return arr, scaler, encoders
