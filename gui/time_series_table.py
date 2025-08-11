@@ -6,15 +6,9 @@ import pandas as pd
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QTableView,
-    QHeaderView,
-    QStyledItemDelegate,
-)
+from PyQt6.QtWidgets import QTableWidgetItem
 
-from .data_load_dialog import DataFrameModel
+from .smart_table import SmartTable, SmartTableConfig
 
 # ========================== 行配色常量 ========================== #
 GREEN = QColor(Qt.GlobalColor.green).lighter(160)
@@ -22,57 +16,32 @@ BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
 PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
 
 
-class SolidColorDelegate(QStyledItemDelegate):
-    """让背景色整块铺满，不留白边"""
-
-    def paint(self, painter, option, index):  # type: ignore[override]
-        bg = index.data(Qt.ItemDataRole.BackgroundRole)
-        if bg:
-            painter.fillRect(option.rect, bg)
-        super().paint(painter, option, index)
-
-
-class TimeSeriesTable(QWidget):
+class TimeSeriesTable(SmartTable):
     """带有背景色滑动窗口效果的时间序列表格."""
 
     def __init__(self, headers: Optional[List[str]] = None, look_back: int = 14, parent=None) -> None:
-        super().__init__(parent)
+        cfg = SmartTableConfig(default_headers=headers or [])
+        super().__init__(cfg)
         self._look_back = look_back
         self._input_rows: List[int] | None = None
         self._pend_row: int | None = None
         self._pred_row: int | None = None
 
-        self.table = QTableView(self)
-        hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setStretchLastSection(False)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.table)
-
-        self._df = pd.DataFrame(columns=headers or [])
-        self._model = DataFrameModel(self._df)
-        self._model.row_filled_sig.connect(self._on_row_filled)
-        self.table.setModel(self._model)
-        self.table.setItemDelegate(SolidColorDelegate(self.table))
+        self.table.itemChanged.connect(self._check_row_complete)
         self.ensure_blank_row()
         self.apply_row_colors()
 
     # ------------------ 公共接口 ------------------ #
     def dataframe(self) -> pd.DataFrame:
-        return self._model.dataframe()
+        return super().dataframe()
 
     def set_headers(self, headers: List[str]) -> None:
-        self.set_dataframe(pd.DataFrame(columns=headers))
+        super().set_headers(headers)
+        self.init_input_window()
 
     def set_dataframe(self, df: pd.DataFrame) -> None:
-        self._df = df.copy()
-        self._model.setDataFrame(self._df)
-        self.ensure_blank_row()
-        self.apply_row_colors()
+        super().set_dataframe(df)
+        self.init_input_window()
 
     def set_look_back(self, n: int) -> None:
         self._look_back = int(n)
@@ -89,23 +58,29 @@ class TimeSeriesTable(QWidget):
 
     # 将预测结果写入最后一行
     def fill_last_row(self, row: Dict[str, float]) -> None:
-        if self._df.empty:
+        if self.table.rowCount() == 0:
             return
-        for col in self._df.columns:
+        r = self.table.rowCount() - 1
+        headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
+        for c, col in enumerate(headers):
             val = row.get(col, pd.NA)
-            self._df.iloc[-1, self._df.columns.get_loc(col)] = val
-        self._model.setDataFrame(self._df)
+            it = self.table.item(r, c)
+            if it is None:
+                it = QTableWidgetItem()
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(r, c, it)
+            it.setText("" if pd.isna(val) else str(val))
 
     # 注册新的预测行并准备下一空行
     def register_new_prediction(self) -> None:
-        self._pred_row = len(self._df) - 1
+        self._pred_row = self.table.rowCount() - 1
         self.ensure_blank_row(force=True)
-        self._pend_row = len(self._df) - 1
+        self._pend_row = self.table.rowCount() - 1
         self.apply_row_colors()
 
     # 初始化窗口，通常在训练或加载模型后调用
     def init_input_window(self) -> None:
-        df = self._df
+        df = self.dataframe()
         if df.empty:
             self._input_rows = []
             self._pend_row = 0
@@ -119,6 +94,14 @@ class TimeSeriesTable(QWidget):
         self.apply_row_colors()
 
     # ------------------ 内部辅助 ------------------ #
+    def _check_row_complete(self, item: QTableWidgetItem) -> None:
+        r = item.row()
+        if r != self.table.rowCount() - 1:
+            return
+        cols = self.table.columnCount()
+        if all(self._cell_text(r, c).strip() != "" for c in range(cols)):
+            self._on_row_filled(r)
+
     def _on_row_filled(self, row: int) -> None:
         if row != self._pend_row or self._input_rows is None:
             return
@@ -126,28 +109,45 @@ class TimeSeriesTable(QWidget):
         while len(self._input_rows) > self._look_back:
             self._input_rows.pop(0)
         self.ensure_blank_row()
-        self._pend_row = len(self._df) - 1
+        self._pend_row = self.table.rowCount() - 1
         self.apply_row_colors()
 
     def ensure_blank_row(self, force: bool = False) -> None:
-        if self._df is None:
-            return
-        need_new = force or self._df.empty or self._df.iloc[-1].notna().all()
+        rc = self.table.rowCount()
+        need_new = force or rc == 0 or all(
+            self._cell_text(rc - 1, c).strip() != "" for c in range(self.table.columnCount())
+        )
         if need_new:
-            self._df = self._df.reset_index(drop=True)
-            new_len = len(self._df) + 1
-            self._df = self._df.reindex(range(new_len))
-            self._model.setDataFrame(self._df)
+            self.table.insertRow(rc)
+            for c in range(self.table.columnCount()):
+                it = QTableWidgetItem("")
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(rc, c, it)
 
     def apply_row_colors(self) -> None:
-        self._model.clear_row_colors()
+        for r in range(self.table.rowCount()):
+            for c in range(self.table.columnCount()):
+                it = self.table.item(r, c)
+                if it is not None:
+                    it.setBackground(QColor())
         if self._input_rows:
             for r in self._input_rows:
-                self._model.set_row_color(r, GREEN)
+                self._set_row_color(r, GREEN)
         if self._pend_row is not None:
-            self._model.set_row_color(self._pend_row, PEND)
+            self._set_row_color(self._pend_row, PEND)
         if self._pred_row is not None:
-            self._model.set_row_color(self._pred_row, BLUE)
+            self._set_row_color(self._pred_row, BLUE)
+
+    def _set_row_color(self, row: int, color: QColor) -> None:
+        if row < 0 or row >= self.table.rowCount():
+            return
+        for c in range(self.table.columnCount()):
+            it = self.table.item(row, c)
+            if it is None:
+                it = QTableWidgetItem("")
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(row, c, it)
+            it.setBackground(color)
 
     # 方便外部调用滚动到底部
     def scrollToBottom(self) -> None:  # pragma: no cover - 简单转调
