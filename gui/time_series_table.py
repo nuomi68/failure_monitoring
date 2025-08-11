@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .data_load_dialog import DataFrameModel
+from .smart_table import _CellEditorDelegate
 
 # ========================== 行配色常量 ========================== #
 GREEN = QColor(Qt.GlobalColor.green).lighter(160)
@@ -22,8 +23,8 @@ BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
 PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
 
 
-class SolidColorDelegate(QStyledItemDelegate):
-    """让背景色整块铺满，不留白边"""
+class _SmartColorDelegate(_CellEditorDelegate):
+    """结合 SmartTable 编辑器样式与完整背景色填充."""
 
     def paint(self, painter, option, index):  # type: ignore[override]
         bg = index.data(Qt.ItemDataRole.BackgroundRole)
@@ -57,7 +58,8 @@ class TimeSeriesTable(QWidget):
         self._model = DataFrameModel(self._df)
         self._model.row_filled_sig.connect(self._on_row_filled)
         self.table.setModel(self._model)
-        self.table.setItemDelegate(SolidColorDelegate(self.table))
+        # 使用 SmartTable 的编辑样式，同时保持完整背景色渲染
+        self.table.setItemDelegate(_SmartColorDelegate(self.table))
         self.ensure_blank_row()
         self.apply_row_colors()
 
