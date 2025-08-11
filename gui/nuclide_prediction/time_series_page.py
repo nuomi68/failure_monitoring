@@ -23,7 +23,7 @@ import pandas as pd
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFormLayout,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
     QHeaderView, QComboBox, QMessageBox, QInputDialog, QStyledItemDelegate
 )
@@ -32,10 +32,11 @@ from PyQt6.QtWidgets import (
 from backend.timeseries_interface import ModelManager
 from gui.tools import logger,TrainWorker
 
-from  gui.data_load_dialog import DataLoadDialog, DataFrameModel
+from  gui.data_load_dialog import DataLoadDialog
 from .model_manager_dialog import ModelManagerDialog
 from .param_panel import ParamPanel
 from ..feature_selector_widget import FeatureSelectorWidget
+from ..smart_table import SmartTable, SmartTableConfig
 
 # ========================== 行配色常量 ========================== #
 GREEN = QColor(Qt.GlobalColor.green).lighter(160)
@@ -84,12 +85,14 @@ class TimeSeriesPage(QWidget):
         self._features_dirty: bool = False
 
         # ================= 左侧：数据表格 =================
-        self.table = QTableView()
-        hh = self.table.horizontalHeader()
+        st_cfg = SmartTableConfig(show_toolbar=False, min_rows=1, editable=True, use_data_load_dialog=False)
+        self.table = SmartTable(st_cfg)
+        tbl = self.table.table
+        hh = tbl.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         left = QVBoxLayout()
         left.addWidget(QLabel("数据预览"))
@@ -228,13 +231,14 @@ class TimeSeriesPage(QWidget):
         self._pred_row = None
         self._set_table_model(self._df)
         if self._time_col is not None:
-            model = self.table.model()
-            for col in range(model.columnCount()):
-                hh = self.table.horizontalHeader()
-                header_text = model.headerData(col, Qt.Orientation.Horizontal)
+            tbl = self.table.table
+            hh = tbl.horizontalHeader()
+            for col in range(tbl.columnCount()):
+                header_item = tbl.horizontalHeaderItem(col)
+                header_text = header_item.text() if header_item else ""
                 if header_text == self._time_col:
                     hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-                    self.table.resizeColumnsToContents()
+                    tbl.resizeColumnsToContents()
                     hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
                     break
         # 通过 ModelManager 注册数据集，拿到 dataset_id
@@ -347,7 +351,7 @@ class TimeSeriesPage(QWidget):
         self._ensure_blank_row()
         self._init_input_window()
         self.btn_predict.setEnabled(True)
-        self.table.scrollToBottom()
+        self.table.table.scrollToBottom()
 
     # ============================================================
     # 训练
@@ -399,7 +403,7 @@ class TimeSeriesPage(QWidget):
         self._orig_rows = len(self._df) if self._df is not None else 0
         self._ensure_blank_row()
         self._init_input_window()
-        self.table.scrollToBottom()
+        self.table.table.scrollToBottom()
         self.btn_predict.setEnabled(True)
         self._trained_feature_cols_last = list(self._feature_cols)
         self._features_dirty = False
@@ -462,12 +466,40 @@ class TimeSeriesPage(QWidget):
     # 预测与表格辅助
     # ============================================================
     def _set_table_model(self, df: pd.DataFrame):
-        mdl = DataFrameModel(df)
-        mdl.row_filled_sig.connect(self._on_row_filled)
-        self.table.setModel(mdl)
-          # 让颜色铺满
-        self.table.setItemDelegate(SolidColorDelegate(self.table))
+        self._disconnect_table_signals()
+        self.table.set_dataframe(df, record_state=False)
+        self.table.table.itemChanged.connect(self._on_table_item_changed)
         self._apply_row_colors()
+
+    def _disconnect_table_signals(self):
+        try:
+            self.table.table.itemChanged.disconnect(self._on_table_item_changed)
+        except Exception:
+            pass
+
+    def _on_table_item_changed(self, item):
+        if getattr(self.table, "_restoring", False):
+            return
+        df_raw = self.table.dataframe()
+        if self._time_col and self._time_col in df_raw.columns:
+            t_ser = pd.to_datetime(df_raw[self._time_col], format=self._time_fmt, errors="coerce")
+            df_num = df_raw.drop(columns=[self._time_col]).apply(pd.to_numeric, errors="coerce")
+            df_num[self._time_col] = t_ser
+            df_num = df_num[df_raw.columns]
+        else:
+            df_num = df_raw.apply(pd.to_numeric, errors="coerce")
+        self._df = df_num
+
+        last_row = self.table.table.rowCount() - 1
+        if item.row() == last_row:
+            filled = True
+            for c in range(self.table.table.columnCount()):
+                it = self.table.table.item(last_row, c)
+                if it is None or str(it.text()).strip() == "":
+                    filled = False
+                    break
+            if filled and self._pend_row == last_row:
+                self._on_row_filled(last_row)
 
     # --------- 颜色相关状态 --------- #
     _look_back: int = 14           # 训练完成后会被真实参数覆盖
@@ -477,17 +509,15 @@ class TimeSeriesPage(QWidget):
 
     # --------- 颜色刷新 --------- #
     def _apply_row_colors(self):
-        mdl = self.table.model()
-        if not isinstance(mdl, DataFrameModel):
-            return
-        mdl.clear_row_colors()
+        tbl = self.table
+        tbl.clear_row_colors()
         if self._input_rows:
             for r in self._input_rows:
-                mdl.set_row_color(r, GREEN)
+                tbl.set_row_color(r, GREEN)
         if self._pend_row is not None:
-            mdl.set_row_color(self._pend_row, PEND)
+            tbl.set_row_color(self._pend_row, PEND)
         if self._pred_row is not None:
-            mdl.set_row_color(self._pred_row, BLUE)
+            tbl.set_row_color(self._pred_row, BLUE)
 
     # --------- 特征选择回调 --------- #
     def _on_feature_selection_changed(self, cols: list[str]):
@@ -521,12 +551,7 @@ class TimeSeriesPage(QWidget):
         """根据当前选择的特征列重建 _df 并刷新表格模型"""
         if self._base_df is None:
             self._df = None
-             # 轻量刷新：优先复用现有模型
-            mdl = self.table.model()
-            if hasattr(mdl, "setDataFrame"):
-                mdl.setDataFrame(pd.DataFrame())
-            else:
-                self._set_table_model(pd.DataFrame())
+            self._set_table_model(pd.DataFrame())
             return
 
         cols = []
@@ -541,15 +566,10 @@ class TimeSeriesPage(QWidget):
 
         if self._df is None or list(new_df.columns) != list(getattr(self._df, "columns", [])):
             self._df = new_df
-            mdl = self.table.model()
-            if hasattr(mdl, "setDataFrame"):
-                mdl.setDataFrame(self._df)
-            else:
-                self._set_table_model(self._df)
-                self._apply_row_colors()
+            self._set_table_model(self._df)
         else:
-         # 列集一致，仅数据引用更新（几乎不会触发，但保持一致性）
-           self._df = new_df
+            # 列集一致，仅数据引用更新（几乎不会触发，但保持一致性）
+            self._df = new_df
 
     # --------- 训练完成后初始化窗口 --------- #
     def _init_input_window(self):
@@ -599,9 +619,7 @@ class TimeSeriesPage(QWidget):
                 col_idx = self._df.columns.get_loc(self._time_col)
                 # 用 NaT 代替
                 self._df.iat[new_len - 1, col_idx] = pd.NaT
-            mdl = self.table.model()
-            if hasattr(mdl, "setDataFrame"):
-                mdl.setDataFrame(self._df)
+            self._set_table_model(self._df)
 
     def _on_predict(self):
         if not self._dataset_id:
@@ -652,9 +670,7 @@ class TimeSeriesPage(QWidget):
                 row_vals.append(float(v) if pd.notna(v) else pd.NA)
         # 用预测结果覆盖最后一行
         self._df.iloc[-1] = row_vals
-        mdl = self.table.model()
-        if hasattr(mdl, "setDataFrame"):
-            mdl.setDataFrame(self._df)
+        self._set_table_model(self._df)
 
         # 🔑 把 *刚生成的预测行* 也写回运行时 —— 下一次窗口才能用到它
         try:
@@ -665,4 +681,4 @@ class TimeSeriesPage(QWidget):
 
         self._register_new_prediction()
         self.status_label.setText("✅ 预测已完成，结果见列表。")
-        self.table.scrollToBottom()
+        self.table.table.scrollToBottom()

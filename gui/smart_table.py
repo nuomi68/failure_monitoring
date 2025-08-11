@@ -124,6 +124,7 @@ class SmartTable(QWidget):
         self._redo_stack: list[list[list[str]]] = []
         self._label_col: Optional[str] = None
         self._features_sink: Optional["SmartTable"] = None
+        self._row_colors: dict[int, QColor] = {}
 
         root = QVBoxLayout(self)
 
@@ -223,11 +224,19 @@ class SmartTable(QWidget):
                     it = QTableWidgetItem(val)
                     self._apply_editable_flag(it, c, editable)
                     self.table.setItem(r, c, it)
+            # 清除多余行内容
+            for r in range(len(df), self.table.rowCount()):
+                for c in range(self.table.columnCount()):
+                    self.table.setItem(r, c, QTableWidgetItem(""))
         finally:
             self._restoring = False
         if record_state:
             self._push_state()
         self.table.resizeColumnsToContents()
+        # 重新应用行背景色
+        if self._row_colors:
+            for r, color in self._row_colors.items():
+                self.set_row_color(r, color)
         self.dataframeChanged.emit(self.dataframe())
         self._update_undo_redo_buttons()
         if self._features_sink is not None:
@@ -252,6 +261,29 @@ class SmartTable(QWidget):
             if not empty:
                 rows.append(row)
         return pd.DataFrame(rows, columns=headers)
+
+    def set_row_color(self, row: int, color: QColor) -> None:
+        """Set background color for an entire row."""
+        self._row_colors[row] = color
+        if 0 <= row < self.table.rowCount():
+            for c in range(self.table.columnCount()):
+                item = self.table.item(row, c)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    self.table.setItem(row, c, item)
+                item.setBackground(color)
+
+    def clear_row_colors(self) -> None:
+        if not self._row_colors:
+            return
+        rows = list(self._row_colors.keys())
+        for r in rows:
+            if 0 <= r < self.table.rowCount():
+                for c in range(self.table.columnCount()):
+                    item = self.table.item(r, c)
+                    if item is not None:
+                        item.setBackground(QColor())
+        self._row_colors.clear()
 
     def dataframe_numeric(self, *, drop_na_rows: bool = True, use_features_only: bool = False) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
         df = self.dataframe()
