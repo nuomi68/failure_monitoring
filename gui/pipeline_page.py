@@ -23,6 +23,7 @@ from backend.fault_model_manager import FaultModelManager
 from backend.timeseries_interface import ModelManager
 
 from gui.smart_table import SmartTable, SmartTableConfig
+from gui.time_series_table import TimeSeriesTable
 from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
 
 
@@ -67,7 +68,7 @@ class PipelinePage(QWidget):
         self.ts_input_wrap = QWidget()
         right_top = QVBoxLayout(self.ts_input_wrap)
         right_top.addWidget(QLabel("时间序列输入"))
-        self.tbl_ts = SmartTable(SmartTableConfig(default_headers=["feat1", "feat2"]))
+        self.tbl_ts = TimeSeriesTable(["feat1", "feat2"])
         right_top.addWidget(self.tbl_ts)
         right_top.addWidget(self._make_ts_actions())
         self.ts_input_wrap.hide()
@@ -120,14 +121,17 @@ class PipelinePage(QWidget):
             layout.addWidget(w)
         layout.addStretch(1)
 
-    def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
-        df = tbl.dataframe()
-        df_new = pd.DataFrame(columns=headers)
-        for c in df.columns:
-            if c in df_new.columns:
-                df_new[c] = df[c]
-        with tbl.no_record():
-            tbl.set_dataframe(df_new, record_state=False)
+    def _set_table_headers(self, tbl, headers: List[str]) -> None:
+        if isinstance(tbl, TimeSeriesTable):
+            tbl.set_headers(headers)
+        else:
+            df = tbl.dataframe()
+            df_new = pd.DataFrame(columns=headers)
+            for c in df.columns:
+                if c in df_new.columns:
+                    df_new[c] = df[c]
+            with tbl.no_record():
+                tbl.set_dataframe(df_new, record_state=False)
 
     def _required_ts_features(self) -> List[str]:
         feats: set[str] = set()
@@ -385,6 +389,7 @@ class PipelinePage(QWidget):
         if not (self.chk_ts.isChecked() and self.ts_model_ids):
             QMessageBox.information(self, "提示", "请先加载并启用时间序列模型。")
             return
+        self.tbl_ts.advance_window_before_predict()
         df_ts = self.tbl_ts.dataframe()
         if df_ts.empty:
             QMessageBox.information(self, "提示", "时间序列表为空。")
@@ -433,9 +438,8 @@ class PipelinePage(QWidget):
             c: pred_df[c].iloc[0] if c in pred_df.columns else np.nan
             for c in df_ts_orig.columns
         }
-        df_ts_new = pd.concat([df_ts_orig, pd.DataFrame([new_row_ts])], ignore_index=True)
-        with self.tbl_ts.no_record():
-            self.tbl_ts.set_dataframe(df_ts_new, record_state=False)
+        self.tbl_ts.fill_last_row(new_row_ts)
+        self.tbl_ts.register_new_prediction()
 
         # 根据共用表头追加行
         headers = list(self.tbl_common.dataframe().columns)
