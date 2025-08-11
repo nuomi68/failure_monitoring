@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
     QCursor,
     QPalette,
     QColor,
+    QBrush,
 )
 
 from gui.data_load_dialog import DataLoadDialog
@@ -108,11 +109,21 @@ class _CellEditorDelegate(QStyledItemDelegate):
             editor.deselect()
             editor.setCursorPosition(len(editor.text()))
 
+    def paint(self, painter, option, index):
+        """Fill background color fully for colored rows."""
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        if isinstance(bg, QBrush):
+            painter.fillRect(option.rect, bg)
+        elif isinstance(bg, QColor):
+            painter.fillRect(option.rect, bg)
+        super().paint(painter, option, index)
+
 
 class SmartTable(QWidget):
     dataframeChanged = pyqtSignal(pd.DataFrame)
     schemaChanged = pyqtSignal(list)
     labelColumnChanged = pyqtSignal(str)
+    row_filled = pyqtSignal(int)
 
     def __init__(self, cfg: SmartTableConfig):
         super().__init__()
@@ -124,6 +135,7 @@ class SmartTable(QWidget):
         self._redo_stack: list[list[list[str]]] = []
         self._label_col: Optional[str] = None
         self._features_sink: Optional["SmartTable"] = None
+        self._row_colors: Dict[int, QColor] = {}
 
         root = QVBoxLayout(self)
 
@@ -252,6 +264,28 @@ class SmartTable(QWidget):
             if not empty:
                 rows.append(row)
         return pd.DataFrame(rows, columns=headers)
+
+    # ---- row color helpers ----
+    def set_row_color(self, row: int, color: QColor) -> None:
+        """Set background color for entire row."""
+        self._row_colors[row] = color
+        for c in range(self.table.columnCount()):
+            it = self.table.item(row, c)
+            if it is None:
+                it = QTableWidgetItem("")
+                self._apply_editable_flag(it, c, None)
+                self.table.setItem(row, c, it)
+            it.setData(Qt.ItemDataRole.BackgroundRole, color)
+
+    def clear_row_colors(self) -> None:
+        if not self._row_colors:
+            return
+        for r in list(self._row_colors.keys()):
+            for c in range(self.table.columnCount()):
+                it = self.table.item(r, c)
+                if it is not None:
+                    it.setData(Qt.ItemDataRole.BackgroundRole, None)
+        self._row_colors.clear()
 
     def dataframe_numeric(self, *, drop_na_rows: bool = True, use_features_only: bool = False) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
         df = self.dataframe()
@@ -545,6 +579,17 @@ class SmartTable(QWidget):
         if self.table.state() == QAbstractItemView.State.EditingState:
             self._edit_dirty = True
         self.dataframeChanged.emit(self.dataframe())
+        # Emit row_filled when last row is fully populated
+        r = item.row()
+        if r == self.table.rowCount() - 1:
+            filled = True
+            for c in range(self.table.columnCount()):
+                it = self.table.item(r, c)
+                if it is None or not it.text():
+                    filled = False
+                    break
+            if filled:
+                self.row_filled.emit(r)
 
     def _on_commit_data(self, _editor):
         self._edit_dirty = True
