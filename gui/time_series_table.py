@@ -5,17 +5,16 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QTableView,
     QHeaderView,
-    QStyledItemDelegate,
-    QLineEdit,
 )
 
 from .data_load_dialog import DataFrameModel
+from .smart_table import _CellEditorDelegate
 
 # ========================== 行配色常量 ========================== #
 GREEN = QColor(Qt.GlobalColor.green).lighter(160)
@@ -23,35 +22,14 @@ BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
 PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
 
 
-class _SmartColorDelegate(QStyledItemDelegate):
-    """在填充背景色的同时应用 SmartTable 的编辑器样式."""
+class _SmartColorDelegate(_CellEditorDelegate):
+    """在填充背景色的同时继承 SmartTable 的编辑器样式."""
 
     def paint(self, painter, option, index):  # type: ignore[override]
         bg = index.data(Qt.ItemDataRole.BackgroundRole)
         if bg:
             painter.fillRect(option.rect, bg)
         super().paint(painter, option, index)
-
-    def createEditor(self, parent, option, index):  # type: ignore[override]
-        editor = super().createEditor(parent, option, index)
-        if isinstance(editor, QLineEdit):
-            editor.setFrame(False)
-            editor.setStyleSheet(
-                "border: none; border-radius: 0; padding: 0; background: palette(base); color: black;"
-            )
-            pal = editor.palette()
-            pal.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-            pal.setColor(QPalette.ColorRole.Highlight, QColor("#c1c1c1"))
-            pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            editor.setPalette(pal)
-            editor.setAutoFillBackground(True)
-        return editor
-
-    def setEditorData(self, editor, index):  # type: ignore[override]
-        super().setEditorData(editor, index)
-        if isinstance(editor, QLineEdit):
-            editor.deselect()
-            editor.setCursorPosition(len(editor.text()))
 
 
 class TimeSeriesTable(QWidget):
