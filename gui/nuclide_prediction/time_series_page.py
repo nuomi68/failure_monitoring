@@ -208,15 +208,23 @@ class TimeSeriesPage(QWidget):
     # ============================================================
     def _open_load_dialog(self):
         """弹出清洗弹窗；确认后注册数据集并在左侧显示。"""
-        dlg = DataLoadDialog.from_file_dialog(
-            self,
-            default_time_fmt=self._time_fmt,
-            require_time_column=True,
-        )
+        try:
+            dlg = DataLoadDialog.from_file_dialog(
+                self,
+                default_time_fmt=self._time_fmt,
+                require_time_column=True,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"读取数据失败：{exc}")
+            return
         if dlg is None:
             return
 
-        df = dlg.loaded_dataframe()
+        try:
+            df = dlg.loaded_dataframe()
+        except Exception as exc:
+            QMessageBox.warning(self, "提示", f"未获取到清洗后的数据：{exc}")
+            return
         if df is None:
             QMessageBox.warning(self, "提示", "未获取到清洗后的数据。")
             return
@@ -467,7 +475,7 @@ class TimeSeriesPage(QWidget):
     # ============================================================
     def _set_table_model(self, df: pd.DataFrame):
         self._handling_change = True
-        self.table.set_dataframe(df)
+        self.table.set_dataframe(df, record_state=False)
         self._handling_change = False
         self._apply_row_colors()
 
