@@ -46,6 +46,8 @@ class SmartTableConfig:
     require_time_column: bool = False
     # DataLoadDialog 默认时间格式
     data_load_default_time_fmt: str = "%Y年%m月%d日%H%M"
+    # 初始化/恢复时是否自动根据内容调整列宽
+    auto_resize_columns: bool = True
 
 
 class _CellEditorDelegate(QStyledItemDelegate):
@@ -232,7 +234,8 @@ class SmartTable(QWidget):
             self._restoring = False
         if record_state:
             self._push_state()
-        self.table.resizeColumnsToContents()
+        if self.cfg.auto_resize_columns:
+            self.table.resizeColumnsToContents()
         # 重新应用行背景色
         if self._row_colors:
             for r, color in self._row_colors.items():
@@ -567,7 +570,8 @@ class SmartTable(QWidget):
                     self.table.setItem(r, c, it)
         finally:
             self._restoring = False
-        self.table.resizeColumnsToContents()
+        if self.cfg.auto_resize_columns:
+            self.table.resizeColumnsToContents()
         self.dataframeChanged.emit(self.dataframe())
         self._update_undo_redo_buttons()
 

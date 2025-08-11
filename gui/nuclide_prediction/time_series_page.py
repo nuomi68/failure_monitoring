@@ -25,7 +25,8 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFormLayout,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QMessageBox, QInputDialog, QStyledItemDelegate
+    QHeaderView, QComboBox, QMessageBox, QInputDialog,
+    QStyledItemDelegate, QAbstractItemView, QAbstractItemDelegate
 )
 
 # —— 后端 ——
@@ -85,7 +86,13 @@ class TimeSeriesPage(QWidget):
         self._features_dirty: bool = False
 
         # ================= 左侧：数据表格 =================
-        st_cfg = SmartTableConfig(show_toolbar=False, min_rows=1, editable=True, use_data_load_dialog=False)
+        st_cfg = SmartTableConfig(
+            show_toolbar=False,
+            min_rows=1,
+            editable=True,
+            use_data_load_dialog=False,
+            auto_resize_columns=False,
+        )
         self.table = SmartTable(st_cfg)
         tbl = self.table.table
         hh = tbl.horizontalHeader()
@@ -592,6 +599,25 @@ class TimeSeriesPage(QWidget):
         self._apply_row_colors()
 
     # --------- 预测辅助 --------- #
+    def _sync_last_row(self):
+        tbl = self.table.table
+        if tbl.state() == QAbstractItemView.State.EditingState:
+            editor = tbl.focusWidget()
+            if editor:
+                tbl.itemDelegate().closeEditor(editor, QAbstractItemDelegate.EndEditHint.NoHint)
+        df_raw = self.table.dataframe()
+        if self._time_col and self._time_col in df_raw.columns:
+            t_ser = pd.to_datetime(df_raw[self._time_col], format=self._time_fmt, errors="coerce")
+            df_num = df_raw.drop(columns=[self._time_col]).apply(pd.to_numeric, errors="coerce")
+            df_num[self._time_col] = t_ser
+            df_num = df_num[df_raw.columns]
+        else:
+            df_num = df_raw.apply(pd.to_numeric, errors="coerce")
+        self._df = df_num
+        last = len(self._df) - 1
+        if self._pend_row == last and self._df.iloc[last].notna().all():
+            self._on_row_filled(last)
+
     def _advance_window_before_predict(self):
         if self._pred_row is not None:
             self._input_rows.append(self._pred_row)
@@ -630,6 +656,8 @@ class TimeSeriesPage(QWidget):
             QMessageBox.warning(self, "提示", "特征与训练时不一致，请先重新训练。")
             return
 
+        # 先同步尾行，确保最新输入被纳入窗口
+        self._sync_last_row()
         # ① 先把之前的蓝色行并入窗口
         self._advance_window_before_predict()
 
