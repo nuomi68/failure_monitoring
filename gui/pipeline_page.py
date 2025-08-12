@@ -25,6 +25,7 @@ from backend.timeseries_interface import ModelManager
 from gui.smart_table import SmartTable, SmartTableConfig
 from gui.time_series_table import TimeSeriesTable
 from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
+from gui.data_load_dialog import DataLoadDialog
 
 
 class PipelinePage(QWidget):
@@ -45,6 +46,7 @@ class PipelinePage(QWidget):
         self.ts_model_ids: List[str] = []
         self.ts_names: Dict[str, str] = {}
         self.ts_features: Dict[str, List[str]] = {}
+        self.ts_look_backs: Dict[str, int] = {}
 
         self.fault_manager = FaultModelManager()
         self.fault_models: Dict[str, FaultLevelEstimator] = {}
@@ -154,6 +156,8 @@ class PipelinePage(QWidget):
             self._set_table_headers(self.tbl_ts, headers)
         else:
             self._set_table_headers(self.tbl_ts, [])
+        lb = max(self.ts_look_backs.values(), default=self.tbl_ts._look_back)
+        self.tbl_ts.set_look_back(lb)
 
     def _refresh_ml_models(self) -> None:
         self._rebuild_model_chips(self.ml_model_layout, self.ml_model_ids, self.ml_names, self._remove_ml_model)
@@ -240,10 +244,34 @@ class PipelinePage(QWidget):
     # ------------------------------------------------------------------
     def _make_ts_actions(self) -> QWidget:
         box = QWidget(); lay = QHBoxLayout(box)
+        self.btn_ts_import = QPushButton("读取表格")
+        self.btn_ts_import.clicked.connect(self._on_ts_import)
         self.btn_ts_to_down = QPushButton("生成预测 ➜ 下游")
         self.btn_ts_to_down.clicked.connect(self._on_ts_generate)
+        lay.addWidget(self.btn_ts_import)
         lay.addStretch(1); lay.addWidget(self.btn_ts_to_down)
         return box
+
+    def _on_ts_import(self) -> None:
+        if not self.ts_model_ids:
+            QMessageBox.information(self, "提示", "请先加载时间序列模型。")
+            return
+        dlg = DataLoadDialog.from_file_dialog(self, require_time_column=False)
+        if dlg is None:
+            return
+        df = dlg.loaded_dataframe()
+        if df is None:
+            return
+        headers = [
+            self.tbl_ts.table.horizontalHeaderItem(c).text()
+            for c in range(self.tbl_ts.table.columnCount())
+        ]
+        df = df.reindex(columns=headers)
+        lb = max(self.ts_look_backs.values(), default=self.tbl_ts._look_back)
+        self.tbl_ts.set_look_back(lb)
+        df = df.tail(lb).reset_index(drop=True).reindex(range(lb))
+        self.tbl_ts.set_dataframe(df)
+        self.tbl_ts.init_input_window()
 
     def _make_final_actions(self) -> QWidget:
         box = QWidget(); lay = QHBoxLayout(box)
@@ -274,10 +302,12 @@ class PipelinePage(QWidget):
         try:
             self.ts_manager.load_model(model_id)
             feats = self.ts_manager.current_feature_names() or []
+            lb = self.ts_manager.current_look_back() or self.tbl_ts._look_back
             name = self.ts_manager.models_registry.get(model_id, {}).get("name", model_id)
             if model_id not in self.ts_model_ids:
                 self.ts_model_ids.append(model_id)
             self.ts_features[model_id] = feats
+            self.ts_look_backs[model_id] = lb
             self.ts_names[model_id] = name
             self.chk_ts.setChecked(True)
             self._refresh_ts_models()
@@ -289,6 +319,7 @@ class PipelinePage(QWidget):
             self.ts_model_ids.remove(model_id)
         self.ts_features.pop(model_id, None)
         self.ts_names.pop(model_id, None)
+        self.ts_look_backs.pop(model_id, None)
         self._refresh_ts_models()
 
     def _on_clear_ts(self) -> None:
@@ -298,6 +329,7 @@ class PipelinePage(QWidget):
         self.ts_model_ids.clear()
         self.ts_features.clear()
         self.ts_names.clear()
+        self.ts_look_backs.clear()
         self._refresh_ts_models()
         self.chk_ts.setChecked(False)
 

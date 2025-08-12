@@ -31,6 +31,7 @@ class TimeSeriesTable(SmartTable):
             show_toolbar=False,
             min_rows=0,
             default_headers=headers or [],
+            auto_resize_columns=False,
         )
         # 需要在父类初始化前准备内部状态，避免 set_headers 调用时属性不存在
         self._look_back = look_back
