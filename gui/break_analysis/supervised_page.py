@@ -30,6 +30,7 @@ class PlotCanvas(FigureCanvas):
         self.fig, self.ax = plt.subplots()
         super().__init__(self.fig)
         self.setParent(parent)
+        self.cbar = None
         self.slider = QSlider(Qt.Orientation.Horizontal, parent)
         self.slider.setRange(0, 999)
         self.slider.setValue(500)
@@ -41,15 +42,24 @@ class PlotCanvas(FigureCanvas):
         self.threshold_changed.emit(tau)
     def clear(self):
         self.ax.clear()
+        if self.cbar:
+            self.cbar.remove()
+            self.cbar = None
         self.draw()
     def show_text(self, text: str):
         self.ax.clear()
+        if self.cbar:
+            self.cbar.remove()
+            self.cbar = None
         self.ax.text(0.5, 0.5, text, ha="center", va="center")
         self.ax.set_axis_off()
         self.fig.tight_layout()
         self.draw()
     def plot_pca(self, X: np.ndarray, labels: np.ndarray):
         self.ax.clear()
+        if self.cbar:
+            self.cbar.remove()
+            self.cbar = None
         XY = PCA(n_components=2, random_state=0).fit_transform(X)
         classes = np.unique(labels)
         for cls in classes:
@@ -78,7 +88,9 @@ class PlotCanvas(FigureCanvas):
         self.ax.set_xlabel("预测")
         self.ax.set_ylabel("真实")
         self.ax.set_title("混淆矩阵")
-        self.fig.colorbar(im, ax=self.ax)
+        if self.cbar:
+            self.cbar.remove()
+        self.cbar = self.fig.colorbar(im, ax=self.ax)
         self.fig.tight_layout()
         self.draw()
 
@@ -90,6 +102,9 @@ class PlotCanvas(FigureCanvas):
         x = np.arange(len(labels))
         w = 0.25
         self.ax.clear()
+        if self.cbar:
+            self.cbar.remove()
+            self.cbar = None
         self.ax.bar(x - w, p, w, label="精确率")
         self.ax.bar(x, r, w, label="召回率")
         self.ax.bar(x + w, f1, w, label="F1")
@@ -536,8 +551,8 @@ class SupervisedPage(QWidget):
                 self.canvas.plot_scores(self.y_true, self.y_pred, self.meta.get("classes_", None))
         else:
             if choice == "预测 vs 真实":
+                self.canvas.clear()
                 ax = self.canvas.ax
-                ax.clear()
                 ax.scatter(self.y_true, self.y_pred, s=12)
                 lo, hi = self.y_true.min(), self.y_true.max()
                 ax.plot([lo, hi], [lo, hi], "--", color="gray", lw=1)
@@ -546,18 +561,18 @@ class SupervisedPage(QWidget):
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "残差直方图":
+                self.canvas.clear()
                 res = self.y_pred - self.y_true
                 ax = self.canvas.ax
-                ax.clear()
                 ax.hist(res, bins=30, alpha=0.75)
                 ax.set_xlabel("残差")
                 ax.set_ylabel("频数")
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "残差散点":
+                self.canvas.clear()
                 res = self.y_pred - self.y_true
                 ax = self.canvas.ax
-                ax.clear()
                 ax.scatter(self.y_pred, res, s=12)
                 ax.axhline(0, color="gray", ls="--")
                 ax.set_xlabel("预测值")
@@ -565,12 +580,12 @@ class SupervisedPage(QWidget):
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "PCA 彩色散点":
+                self.canvas.clear()
                 XY = PCA(2, random_state=0).fit_transform(self.X_test)
                 err = np.abs(self.y_pred - self.y_true)
                 ax = self.canvas.ax
-                ax.clear()
                 sc = ax.scatter(XY[:, 0], XY[:, 1], c=err, cmap="viridis", s=15)
-                self.canvas.fig.colorbar(sc, ax=ax, label="|残差|")
+                self.canvas.cbar = self.canvas.fig.colorbar(sc, ax=ax, label="|残差|")
                 ax.set_xlabel("PC1")
                 ax.set_ylabel("PC2")
                 self.canvas.fig.tight_layout()
