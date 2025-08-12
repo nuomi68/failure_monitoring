@@ -42,12 +42,23 @@ class PlotCanvas(FigureCanvas):
     def clear(self):
         self.ax.clear()
         self.draw()
+    def show_text(self, text: str):
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, text, ha="center", va="center")
+        self.ax.set_axis_off()
+        self.fig.tight_layout()
+        self.draw()
     def plot_pca(self, X: np.ndarray, labels: np.ndarray):
         self.ax.clear()
         XY = PCA(n_components=2, random_state=0).fit_transform(X)
-        self.ax.scatter(XY[:, 0], XY[:, 1], c=labels, cmap="coolwarm", s=15)
+        classes = np.unique(labels)
+        for cls in classes:
+            mask = labels == cls
+            self.ax.scatter(XY[mask, 0], XY[mask, 1], s=15, label=str(cls))
         self.ax.set_xlabel("PC1")
         self.ax.set_ylabel("PC2")
+        self.ax.set_title("PCA 彩色散点")
+        self.ax.legend(title="类别")
         self.fig.tight_layout()
         self.draw()
     def plot_roc(self, y_true, y_score):
@@ -58,19 +69,27 @@ class PlotCanvas(FigureCanvas):
         self.ax.plot([0,1],[0,1],"--",color="gray",lw=1)
         self.ax.set_xlabel("FPR")
         self.ax.set_ylabel("TPR")
+        self.ax.set_title("ROC 曲线")
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
-    def plot_confmat(self, y_true, y_pred):
+    def plot_confmat(self, y_true, y_pred, labels=None):
         from sklearn.metrics import confusion_matrix
-        cm = confusion_matrix(y_true, y_pred)
+        if labels is None:
+            labels = np.unique(list(y_true) + list(y_pred))
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
         self.ax.clear()
         im = self.ax.imshow(cm, cmap="Blues")
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 self.ax.text(j, i, cm[i, j], ha="center", va="center")
-        self.ax.set_xlabel("Predicted")
-        self.ax.set_ylabel("True")
+        self.ax.set_xticks(range(len(labels)))
+        self.ax.set_yticks(range(len(labels)))
+        self.ax.set_xticklabels(labels, rotation=45, ha="right")
+        self.ax.set_yticklabels(labels)
+        self.ax.set_xlabel("预测")
+        self.ax.set_ylabel("真实")
+        self.ax.set_title("混淆矩阵")
         self.fig.colorbar(im, ax=self.ax)
         self.fig.tight_layout()
         self.draw()
@@ -484,9 +503,9 @@ class SupervisedPage(QWidget):
                 )
                 self.canvas.plot_roc(y_true_num, self.test_scores)
             elif choice == "混淆矩阵":
-                self.canvas.plot_confmat(self.y_true, self.y_pred)
+                self.canvas.plot_confmat(self.y_true, self.y_pred, self.meta.get("classes_", None))
             elif choice == "指标汇总":
-                self.canvas.clear()
+                self.canvas.show_text(self.metrics_text)
             elif choice == "PCA 彩色散点":
                 self.canvas.plot_pca(self.X_test, self.y_true)
         else:
