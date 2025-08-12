@@ -44,6 +44,7 @@ class EnsemblePage(QWidget):
         self.ts_model_ids: List[str] = []
         self.ts_names: Dict[str, str] = {}
         self.ts_features: Dict[str, List[str]] = {}
+        self.ts_lookbacks: Dict[str, int] = {}
 
         self.fault_manager = FaultModelManager()
         self.fault_models: Dict[str, FaultLevelEstimator] = {}
@@ -67,6 +68,8 @@ class EnsemblePage(QWidget):
         self.ts_input_wrap = QWidget()
         right_top = QVBoxLayout(self.ts_input_wrap)
         right_top.addWidget(QLabel("时间序列输入"))
+        self.lbl_ts_hint = QLabel()
+        right_top.addWidget(self.lbl_ts_hint)
         self.tbl_ts = SmartTable(SmartTableConfig(default_headers=["feat1", "feat2"]))
         right_top.addWidget(self.tbl_ts)
         right_top.addWidget(self._make_ts_actions())
@@ -150,6 +153,11 @@ class EnsemblePage(QWidget):
             self._set_table_headers(self.tbl_ts, headers)
         else:
             self._set_table_headers(self.tbl_ts, [])
+        if self.ts_lookbacks:
+            lb = max(self.ts_lookbacks.values())
+            self.lbl_ts_hint.setText(f"最少输入行数：{lb}")
+        else:
+            self.lbl_ts_hint.clear()
 
     def _refresh_ml_models(self) -> None:
         self._rebuild_model_chips(self.ml_model_layout, self.ml_model_ids, self.ml_names, self._remove_ml_model)
@@ -268,13 +276,15 @@ class EnsemblePage(QWidget):
 
     def _add_ts_model(self, model_id: str) -> None:
         try:
-            self.ts_manager.load_model(model_id)
+            info = self.ts_manager.load_model(model_id)
             feats = self.ts_manager.current_feature_names() or []
             name = self.ts_manager.models_registry.get(model_id, {}).get("name", model_id)
+            lb = int(info.get("meta", {}).get("params", {}).get("look_back", 1))
             if model_id not in self.ts_model_ids:
                 self.ts_model_ids.append(model_id)
             self.ts_features[model_id] = feats
             self.ts_names[model_id] = name
+            self.ts_lookbacks[model_id] = lb
             self.chk_ts.setChecked(True)
             self._refresh_ts_models()
         except Exception as e:
@@ -285,6 +295,7 @@ class EnsemblePage(QWidget):
             self.ts_model_ids.remove(model_id)
         self.ts_features.pop(model_id, None)
         self.ts_names.pop(model_id, None)
+        self.ts_lookbacks.pop(model_id, None)
         self._refresh_ts_models()
 
     def _on_clear_ts(self) -> None:
@@ -294,6 +305,7 @@ class EnsemblePage(QWidget):
         self.ts_model_ids.clear()
         self.ts_features.clear()
         self.ts_names.clear()
+        self.ts_lookbacks.clear()
         self._refresh_ts_models()
         self.chk_ts.setChecked(False)
 
@@ -393,6 +405,10 @@ class EnsemblePage(QWidget):
         df_ts = df_ts.dropna()
         if df_ts.empty:
             QMessageBox.information(self, "提示", "时间序列表无有效数值行。")
+            return
+        required_rows = max(self.ts_lookbacks.values()) if self.ts_lookbacks else 0
+        if len(df_ts) < required_rows:
+            QMessageBox.information(self, "提示", f"时间序列至少需要 {required_rows} 行有效数据。")
             return
 
         pred_sum: Dict[str, np.ndarray] = {}
