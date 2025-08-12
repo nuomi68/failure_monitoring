@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import uuid
 from datetime import datetime
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .ml_interface import ML
+from .model_store import ensure_root, JsonRegistry
 
 
 class MLModelManager:
@@ -19,55 +19,17 @@ class MLModelManager:
     """
 
     def __init__(self) -> None:
-        root = Path(__file__).resolve().parents[1] / "models_saved" / "ml"
-        self.models_dir = root
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.registry_file = self.models_dir / "registry.json"
-        if self.registry_file.exists():
-            try:
-                self.registry: Dict[str, Dict[str, Any]] = json.loads(
-                    self.registry_file.read_text(encoding="utf-8")
-                )
-            except Exception:
-                self.registry = {}
-        else:
-            self.registry = {}
+        self.models_dir = ensure_root("ml")
+        self.registry = JsonRegistry(self.models_dir)
 
     # ------------------------------------------------------------------
     def _write_registry(self) -> None:
-        self.registry_file.write_text(
-            json.dumps(self.registry, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self.registry.write()
 
     # ------------------------------------------------------------------
     def refresh_models(self) -> List[Dict[str, Any]]:
         """Return metadata of all existing models."""
-        # Reload registry from disk to pick up models saved by other manager
-        # instances. Without this, pages that keep a long-lived manager would
-        # never see freshly saved models.
-        if self.registry_file.exists():
-            try:
-                self.registry = json.loads(
-                    self.registry_file.read_text(encoding="utf-8")
-                )
-            except Exception:
-                self.registry = {}
-        else:
-            self.registry = {}
-
-        changed = False
-        items: List[Dict[str, Any]] = []
-        for mid, meta in list(self.registry.items()):
-            path = Path(meta.get("path", ""))
-            if path.exists():
-                items.append(meta)
-            else:
-                changed = True
-                self.registry.pop(mid, None)
-        if changed:
-            self._write_registry()
-        return items
+        return self.registry.refresh()
 
     # ------------------------------------------------------------------
     def save_current(self, name: str) -> str:
@@ -93,7 +55,7 @@ class MLModelManager:
             "dataset_id": "",
             "metrics": meta.get("metrics", {}),
         }
-        self.registry[model_id] = reg
+        self.registry.data[model_id] = reg
         self._write_registry()
         return model_id
 
@@ -106,7 +68,7 @@ class MLModelManager:
         self.refresh_models()
         paths: List[str] = []
         for mid in model_ids:
-            meta = self.registry.get(mid)
+            meta = self.registry.data.get(mid)
             if not meta:
                 raise KeyError(f"model_id '{mid}' not found")
             paths.append(meta["path"])
@@ -120,7 +82,7 @@ class MLModelManager:
 
     # ------------------------------------------------------------------
     def rename_model(self, model_id: str, new_name: str) -> bool:
-        meta = self.registry.get(model_id)
+        meta = self.registry.data.get(model_id)
         if not meta:
             return False
         meta["name"] = new_name
@@ -129,7 +91,7 @@ class MLModelManager:
 
     # ------------------------------------------------------------------
     def delete_model(self, model_id: str) -> bool:
-        meta = self.registry.pop(model_id, None)
+        meta = self.registry.data.pop(model_id, None)
         if not meta:
             return False
         try:
@@ -141,7 +103,7 @@ class MLModelManager:
 
     # ------------------------------------------------------------------
     def export_model(self, model_id: str, dest: str) -> bool:
-        meta = self.registry.get(model_id)
+        meta = self.registry.data.get(model_id)
         if not meta:
             return False
         try:
@@ -171,6 +133,6 @@ class MLModelManager:
             "dataset_id": "",
             "metrics": {},
         }
-        self.registry[mid] = meta
+        self.registry.data[mid] = meta
         self._write_registry()
         return True

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import uuid
 from datetime import datetime
@@ -13,6 +12,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 
 from .fault_level_estimator import FaultLevelEstimator
+from .model_store import ensure_root, JsonRegistry
 
 
 class FaultModelManager:
@@ -24,51 +24,17 @@ class FaultModelManager:
     that the same ``ModelManagerDialog`` can be reused."""
 
     def __init__(self) -> None:
-        root = Path(__file__).resolve().parents[1] / "models_saved" / "fault_level"
-        self.models_dir = root
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.registry_file = self.models_dir / "registry.json"
-        if self.registry_file.exists():
-            try:
-                self.registry: Dict[str, Dict[str, Any]] = json.loads(self.registry_file.read_text(encoding="utf-8"))
-            except Exception:
-                self.registry = {}
-        else:
-            self.registry = {}
+        self.models_dir = ensure_root("fault_level")
+        self.registry = JsonRegistry(self.models_dir)
 
     # ------------------------------------------------------------------
     def _write_registry(self) -> None:
-        self.registry_file.write_text(
-            json.dumps(self.registry, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        self.registry.write()
 
     # ------------------------------------------------------------------
     def refresh_models(self) -> List[Dict[str, Any]]:
         """Return metadata of all existing models."""
-        # Registry may be modified by other manager instances, so reload from
-        # disk each time to ensure the dialog shows the latest list.
-        if self.registry_file.exists():
-            try:
-                self.registry = json.loads(
-                    self.registry_file.read_text(encoding="utf-8")
-                )
-            except Exception:
-                self.registry = {}
-        else:
-            self.registry = {}
-
-        changed = False
-        items: List[Dict[str, Any]] = []
-        for mid, meta in list(self.registry.items()):
-            path = Path(meta.get("path", ""))
-            if path.exists():
-                items.append(meta)
-            else:
-                changed = True
-                self.registry.pop(mid, None)
-        if changed:
-            self._write_registry()
-        return items
+        return self.registry.refresh()
 
     # ------------------------------------------------------------------
     def save_model(
@@ -120,7 +86,7 @@ class FaultModelManager:
                 "scaler": estimator.scaler_spec,
             },
         }
-        self.registry[model_id] = meta
+        self.registry.data[model_id] = meta
         self._write_registry()
         return model_id
 
@@ -128,7 +94,10 @@ class FaultModelManager:
     def load_model(self, model_id: str) -> Tuple[FaultLevelEstimator, pd.DataFrame | None, Dict[str, Any]]:
         """Load estimator and associated dataset."""
 
-        meta = self.registry.get(model_id)
+        # Refresh registry to include models saved by other processes
+        self.refresh_models()
+
+        meta = self.registry.data.get(model_id)
         if not meta:
             raise KeyError(f"model_id '{model_id}' not found")
 
@@ -148,7 +117,7 @@ class FaultModelManager:
 
     # ------------------------------------------------------------------
     def rename_model(self, model_id: str, new_name: str) -> bool:
-        meta = self.registry.get(model_id)
+        meta = self.registry.data.get(model_id)
         if not meta:
             return False
         meta["name"] = new_name
@@ -194,7 +163,7 @@ class FaultModelManager:
 
     # ------------------------------------------------------------------
     def delete_model(self, model_id: str) -> bool:
-        meta = self.registry.pop(model_id, None)
+        meta = self.registry.data.pop(model_id, None)
         if not meta:
             return False
         try:
@@ -207,7 +176,7 @@ class FaultModelManager:
 
     # ------------------------------------------------------------------
     def export_model(self, model_id: str, dest: str) -> bool:
-        meta = self.registry.get(model_id)
+        meta = self.registry.data.get(model_id)
         if not meta:
             return False
         try:
@@ -243,6 +212,6 @@ class FaultModelManager:
                 "scaler": est.scaler_spec,
             },
         }
-        self.registry[mid] = meta
+        self.registry.data[mid] = meta
         self._write_registry()
         return True

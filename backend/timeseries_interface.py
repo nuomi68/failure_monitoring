@@ -130,9 +130,12 @@ class ModelManager:
     """
 
     def __init__(self) -> None:
-        # 确定基础目录：当前文件位于 backend 子目录下，因此父目录的父目录为项目根
-        project_root = Path(__file__).resolve().parents[1]/"models_saved"
-        self.artifacts_dir = project_root / "artifacts"
+        # 确定基础目录：使路径与其它模型管理器一致
+        # 统一使用 ``models_saved/timeseries`` 作为时间序列相关文件的根目录，
+        # 避免因工作目录不同导致在旧的 ``artifacts`` 路径下找不到文件。
+        project_root = Path(__file__).resolve().parents[1] / "models_saved" / "timeseries"
+        # 为兼容既有变量命名，仍使用 artifacts_dir 表示根目录
+        self.artifacts_dir = project_root
         self.datasets_dir = self.artifacts_dir / "datasets"
         self.models_dir = self.artifacts_dir / "models"
         self.registries_dir = self.artifacts_dir / "registries"
@@ -248,6 +251,10 @@ class ModelManager:
 
         :returns: 更新后的模型元数据列表。
         """
+        # 每次调用都从磁盘重新读取注册表，以获取外部新增的模型
+        self.datasets_registry = self._load_json(self.datasets_registry_file) or {}
+        self.models_registry = self._load_json(self.models_registry_file) or {}
+
         # 先刷新数据集，移除磁盘上不存在的文件
         removed_datasets: List[str] = []
         for did, meta in list(self.datasets_registry.items()):

@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Protocol, runtime_checkable, Literal
 from pathlib import Path
-import time
 import re
 
 import numpy as np
@@ -25,7 +24,7 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 import joblib
 
-from .model_registry import register as registry_register, ROOT as REGISTRY_ROOT
+# Machine learning interface with single-model state and helpers.
 # 引入适配器
 from .models.supervised_core import ADAPTERS as SUPERVISED_ADAPTERS
 from .models.unsupervised_core import ADAPTERS as UNSUPERVISED_ADAPTERS
@@ -705,13 +704,14 @@ class ML:
     def save_auto(cls, name: str | None = None) -> Dict[str, Any]:
         if STATE.current is None:
             raise RuntimeError("没有可保存的模型。")
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        # 文件名仍然只与模型类型相关，保存逻辑保持不变
-        fname = f"{ts}_{name or STATE.current.meta.get('model_type','model')}.joblib"
-        path = REGISTRY_ROOT / fname
-        save_artifact(path, STATE.current)
-        registry_register(path, cls.get_meta())
-        return {"ok": True, "path": str(path)}
+        # 利用统一的模型管理器保存并写入注册表
+        from .ml_model_manager import MLModelManager  # 避免循环依赖
+
+        mgr = MLModelManager()
+        title = name or STATE.current.meta.get("model_type", "model")
+        model_id = mgr.save_current(title)
+        meta = mgr.registry.data.get(model_id, {})
+        return {"ok": True, "path": meta.get("path", "")}
 
     @classmethod
     def load(cls, path: str) -> Dict[str, Any]:
