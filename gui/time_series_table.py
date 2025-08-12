@@ -53,7 +53,11 @@ class TimeSeriesTable(SmartTable):
         return super().dataframe()
 
     def set_headers(self, headers: List[str]) -> None:  # type: ignore[override]
-        self.set_dataframe(pd.DataFrame(columns=headers))
+        super().set_headers(headers)
+        with self.no_record():
+            self.table.setRowCount(0)
+        self.ensure_blank_row(force=True)
+        self.apply_row_colors()
 
     def set_dataframe(self, df: pd.DataFrame) -> None:  # type: ignore[override]
         with self.no_record():
