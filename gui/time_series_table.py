@@ -32,16 +32,16 @@ class TimeSeriesTable(SmartTable):
             min_rows=0,
             default_headers=headers or [],
         )
-        super().__init__(cfg)
-        if parent is not None:
-            self.setParent(parent)
-
+        # 需要在父类初始化前准备内部状态，避免 set_headers 调用时属性不存在
         self._look_back = look_back
         self._input_rows: List[int] | None = None
         self._pend_row: int | None = None
         self._pred_row: int | None = None
         self._row_colors: Dict[int, QColor] = {}
         self._updating = False
+        super().__init__(cfg)
+        if parent is not None:
+            self.setParent(parent)
 
         self.table.itemChanged.connect(self._on_item_changed_local)
 
