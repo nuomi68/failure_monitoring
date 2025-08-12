@@ -259,6 +259,7 @@ class UnsupervisedPage(QWidget):
 
         # 每种算法的高级参数
         self.knn_params: Dict[str, Any] = {
+            "n_neighbors": 5,
             "algorithm": "auto",
             "leaf_size": 30,
             "metric": "minkowski",
@@ -266,6 +267,7 @@ class UnsupervisedPage(QWidget):
             "n_jobs": -1,
         }
         self.if_params: Dict[str, Any] = {
+            "n_estimators": 100,
             "max_samples": "auto",
             "max_features": 1.0,
             "bootstrap": False,
@@ -379,21 +381,22 @@ class UnsupervisedPage(QWidget):
         if alg == "knn":
             # KNN：邻居数 + 显示污染率
             self.k_label.setText("邻居数：")
-            self.k_spin.setValue( self.knn_params.get("leaf_size", 5) )
+            self.k_spin.setValue(int(self.knn_params.get("n_neighbors", 5)))
             self.contam_label.show()
             self.contam_spin.show()
 
         elif alg == "iforest":
             # 孤立森林：树数 + 显示污染率
             self.k_label.setText("树数：")
-            self.k_spin.setValue( self.if_params.get("n_estimators", self.k_spin.value()) )
+            self.k_spin.setValue(int(self.if_params.get("n_estimators", 100)))
+            self.contam_spin.setValue(float(self.if_params.get("contamination", 0.01)))
             self.contam_label.show()
             self.contam_spin.show()
 
         else:  # autoencoder
             # 自编码器：Epochs + 隐藏污染率
             self.k_label.setText("Epochs：")
-            self.k_spin.setValue( self.ae_params.get("epochs", 50) )
+            self.k_spin.setValue(int(self.ae_params.get("epochs", 50)))
             self.contam_label.hide()
             self.contam_spin.hide()
     # ---------------- 打开高级参数对话框 ----------------
@@ -423,11 +426,14 @@ class UnsupervisedPage(QWidget):
         scaler_spec = self.scaler_combo.currentData()
         # 主参数：为不同算法映射
         if alg == "knn":
-            # 取高级参数
+            self.knn_params["n_neighbors"] = self.k_spin.value()
             params = self.knn_params.copy()
         elif alg == "autoencoder":
+            self.ae_params["epochs"] = self.k_spin.value()
             params = self.ae_params.copy()
         else:
+            self.if_params["n_estimators"] = self.k_spin.value()
+            self.if_params["contamination"] = self.contam_spin.value()
             params = self.if_params.copy()
             # 解析 max_samples
             max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(X))
@@ -444,7 +450,8 @@ class UnsupervisedPage(QWidget):
         self.scores = rep.scores
         self.X_scaled = ML.transform(X)
 
-        tau = float(self.meta.get("tau", np.quantile(self.scores,0.95)))
+        default_tau = np.quantile(self.scores, 1 - self.contam_spin.value())
+        tau = float(self.meta.get("tau", default_tau))
         self.canvas.slider.setValue(int(tau * 1000))
         self.refresh_plot()
 

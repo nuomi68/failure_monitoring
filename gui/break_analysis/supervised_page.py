@@ -238,20 +238,29 @@ class SupervisedPage(QWidget):
         self.binary = False
         self.metrics_text = ""
 
-        self.knn_params: Dict[str, Any] = (
-            dict(weights="uniform",
-                 algorithm="auto",
-                 leaf_size=30,
-                 metric="minkowski",
-                 p=2,
-                 n_jobs=-1,
-                 test_size=0.2,
-                 random_state=0))
-        self.rf_params: Dict[str, Any]  = (
-            dict(criterion="gini",
-                 max_depth=None,
-                 min_samples_split=2,
-                 min_samples_leaf=1, max_features="sqrt", bootstrap=True, n_jobs=-1, test_size=0.2, random_state=0))
+        self.knn_params: Dict[str, Any] = {
+            "n_neighbors": 5,
+            "weights": "uniform",
+            "algorithm": "auto",
+            "leaf_size": 30,
+            "metric": "minkowski",
+            "p": 2,
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
+        self.rf_params: Dict[str, Any] = {
+            "n_estimators": 100,
+            "criterion": "gini",
+            "max_depth": None,
+            "min_samples_split": 2,
+            "min_samples_leaf": 1,
+            "max_features": "sqrt",
+            "bootstrap": True,
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
 
         top = QHBoxLayout()
         top.addWidget(QLabel("算法："))
@@ -369,6 +378,10 @@ class SupervisedPage(QWidget):
                 stratify = None
 
         n_main = self.k_spin.value()
+        if "knn" in code:
+            self.knn_params["n_neighbors"] = n_main
+        else:
+            self.rf_params["n_estimators"] = n_main
         params = params_base.copy()
         params.pop("test_size", None)
         params["random_state"] = rs
@@ -550,12 +563,13 @@ class SupervisedPage(QWidget):
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
 
-    def _on_alg_changed(self, _i:int):
+    def _on_alg_changed(self, _i: int):
         code = self.alg_combo.currentData()
         if code and "knn" in code:
             self.k_label.setText("邻居数：")
-            self.k_spin.setValue(self.knn_params.get("n_neighbors",5) if "n_neighbors" in self.knn_params else 5)
-        else: self.k_label.setText("树数：")
-        self.k_spin.setValue(self.rf_params.get("n_estimators",100) if "n_estimators" in self.rf_params else 100)
+            self.k_spin.setValue(int(self.knn_params.get("n_neighbors", 5)))
+        else:
+            self.k_label.setText("树数：")
+            self.k_spin.setValue(int(self.rf_params.get("n_estimators", 100)))
         self._reset_viz_mode()
 
