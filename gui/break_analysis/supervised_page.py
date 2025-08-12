@@ -74,19 +74,26 @@ class PlotCanvas(FigureCanvas):
         self.draw()
     def plot_confmat(self, y_true, y_pred, labels=None):
         from sklearn.metrics import confusion_matrix
-        if labels is None:
-            labels = np.unique(list(y_true) + list(y_pred))
-        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        # 若后端提供了原始类名，而 y_true/y_pred 是编码后的整数，
+        # 则用整数索引计算矩阵，但坐标轴显示原始标签。
+        if labels is not None and np.issubdtype(np.asarray(y_true).dtype, np.number):
+            cm_labels = list(range(len(labels)))
+            tick_labels = labels
+        else:
+            cm_labels = np.unique(list(y_true) + list(y_pred)) if labels is None else labels
+            tick_labels = cm_labels
+        cm = confusion_matrix(y_true, y_pred, labels=cm_labels)
         self._clear_cbar()
         self.ax.clear()
         im = self.ax.imshow(cm, cmap="Blues")
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 self.ax.text(j, i, cm[i, j], ha="center", va="center")
-        self.ax.set_xticks(range(len(labels)))
-        self.ax.set_yticks(range(len(labels)))
-        self.ax.set_xticklabels(labels, rotation=45, ha="right")
-        self.ax.set_yticklabels(labels)
+        ticks = range(len(cm_labels))
+        self.ax.set_xticks(ticks)
+        self.ax.set_yticks(ticks)
+        self.ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+        self.ax.set_yticklabels(tick_labels)
         self.ax.set_xlabel("预测")
         self.ax.set_ylabel("真实")
         self.ax.set_title("混淆矩阵")
@@ -96,10 +103,16 @@ class PlotCanvas(FigureCanvas):
 
     def plot_scores(self, y_true, y_pred, labels=None):
         from sklearn.metrics import precision_recall_fscore_support
-        if labels is None:
-            labels = np.unique(list(y_true) + list(y_pred))
-        p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, labels=labels, zero_division=0)
-        x = np.arange(len(labels))
+        if labels is not None and np.issubdtype(np.asarray(y_true).dtype, np.number):
+            score_labels = list(range(len(labels)))
+            tick_labels = labels
+        else:
+            score_labels = np.unique(list(y_true) + list(y_pred)) if labels is None else labels
+            tick_labels = score_labels
+        p, r, f1, _ = precision_recall_fscore_support(
+            y_true, y_pred, labels=score_labels, zero_division=0
+        )
+        x = np.arange(len(score_labels))
         w = 0.25
         self._clear_cbar()
         self.ax.clear()
@@ -107,7 +120,7 @@ class PlotCanvas(FigureCanvas):
         self.ax.bar(x, r, w, label="召回率")
         self.ax.bar(x + w, f1, w, label="F1")
         self.ax.set_xticks(x)
-        self.ax.set_xticklabels(labels, rotation=45, ha="right")
+        self.ax.set_xticklabels(tick_labels, rotation=45, ha="right")
         self.ax.set_ylim(0, 1)
         self.ax.set_ylabel("得分")
         self.ax.set_title("各类别指标")

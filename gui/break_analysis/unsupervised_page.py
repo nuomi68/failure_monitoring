@@ -12,8 +12,9 @@ import numpy as np, pandas as pd, matplotlib.pyplot as plt
 from typing import List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
-    QLabel, QComboBox, QSpinBox, QSlider, QFileDialog, QMessageBox,QDoubleSpinBox,
-    QLineEdit,QCheckBox,QFormLayout,QDialog, QDialogButtonBox,QTableWidget,QSplitter
+    QLabel, QComboBox, QSpinBox, QSlider, QFileDialog, QMessageBox, QDoubleSpinBox,
+    QLineEdit, QCheckBox, QFormLayout, QDialog, QDialogButtonBox, QTableWidget,
+    QTableWidgetItem, QSplitter
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -463,6 +464,7 @@ class UnsupervisedPage(QWidget):
         if self.scores is None:
             return
         tau = float(self.meta.get("tau", 0.5))
+        self._update_abn_table(tau)
         mode = self.viz_combo.currentText()
 
         if mode == "分数直方图":
@@ -472,8 +474,21 @@ class UnsupervisedPage(QWidget):
         elif mode == "时序折线":
             self.canvas.plot_timeseries(self.X_scaled, self.scores, tau)
         else:
-         # 万一路由到其它，默认直方图
+            # 万一路由到其它，默认直方图
             self.canvas.plot_hist(self.scores, tau)
+
+    def _update_abn_table(self, tau: float):
+        if self.scores is None:
+            return
+        mask = self.scores >= tau
+        idxs = np.where(mask)[0]
+        # 按分数从高到低排序
+        order = np.argsort(self.scores[idxs])[::-1]
+        idxs = idxs[order]
+        self.tbl_abn.setRowCount(len(idxs))
+        for row, idx in enumerate(idxs):
+            self.tbl_abn.setItem(row, 0, QTableWidgetItem(str(int(idx))))
+            self.tbl_abn.setItem(row, 1, QTableWidgetItem(f"{self.scores[idx]:.3f}"))
 
     def _parse_max_samples(self,val, n_samples: int):
         """Utility to parse IsolationForest max_samples value."""
