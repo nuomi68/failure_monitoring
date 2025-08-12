@@ -120,13 +120,12 @@ class DataFrameModel(QAbstractTableModel):
             if is_nan_like(val):
                 return QBrush(Qt.GlobalColor.blue).color().lighter(170)
 
-        if role == Qt.ItemDataRole.DisplayRole:
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             val = self._df.iat[index.row(), index.column()]
 
             if pd.isna(val):
                 return ""
 
-            # ✨ 浮点统一格式化，减少 “6....” 省略号
             if isinstance(val, float):
                 return self.FLOAT_FMT % val
             return str(val)

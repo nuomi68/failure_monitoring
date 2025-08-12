@@ -24,7 +24,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFormLayout,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QMessageBox, QInputDialog
+    QComboBox, QMessageBox, QInputDialog
 )
 
 # —— 后端 ——
@@ -206,16 +206,6 @@ class TimeSeriesPage(QWidget):
         self._base_df = df.copy()
         self._df = self._base_df.copy()
         self.table.set_dataframe(self._df)
-        if self._time_col is not None:
-            model = self.table.table.model()
-            for col in range(model.columnCount()):
-                hh = self.table.table.horizontalHeader()
-                header_text = model.headerData(col, Qt.Orientation.Horizontal)
-                if header_text == self._time_col:
-                    hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-                    self.table.table.resizeColumnsToContents()
-                    hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-                    break
         self.table.init_input_window()
         # 通过 ModelManager 注册数据集，拿到 dataset_id
         try:

@@ -240,6 +240,13 @@ class ModelManager:
         except Exception:
             return None
 
+    def current_look_back(self):
+        """返回当前模型的时间窗口大小（若未加载模型则为 None）"""
+        try:
+            return _RuntimeSingleton.get().look_back
+        except Exception:
+            return None
+
     def refresh_models(self) -> List[Dict[str, Any]]:
         """刷新模型与数据集注册表，清理已失效的记录。
 
