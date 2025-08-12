@@ -129,7 +129,7 @@ class DataHandlePage(QWidget):
 
         self.calc = CalculatorWidget()
         right_v.addWidget(self.calc)
-        # ★ 监听“新配方”并同步到后端
+        # ★ 监听“新公式”并同步到后端
         self.calc.recipe_added.connect(self._on_recipe_added)
 
         # -- 监督学习区 --
@@ -148,9 +148,10 @@ class DataHandlePage(QWidget):
         right_v.addStretch()
 
         layout.addWidget(self.data_page)
-        self.load_dev_file()
+        #debug
+        #self.load_dev_file()
 
-    # --------------------- 新增：配方处理 ---------------------
+    # --------------------- 公式处理 ---------------------
     def _on_recipe_added(self, name: str, expr: str):
         self.calc_recipes.append({"name": name, "expr": expr})
         try:
@@ -161,7 +162,7 @@ class DataHandlePage(QWidget):
     def get_calc_recipes(self) -> list[dict]:
         return list(self.calc_recipes)
 
-    # --------------------- 既有逻辑（略） ---------------------
+    # --------------------- 既有逻辑 ---------------------
     def load_dev_file(self):
         path = "./data/20230510-20240924_merged.xlsx"
         try:

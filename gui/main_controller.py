@@ -35,7 +35,6 @@ from gui.break_analysis.outlier_detection import OutlierDetectionPage
 from gui.ensemble_page import EnsemblePage
 from gui.nuclide_prediction.time_series_page import TimeSeriesPage
 from gui.fault_level_page import FaultLevelPage
-from gui.pipeline_page import PipelinePage
 
 class MainController(QMainWindow):
     """主界面控制器
@@ -93,7 +92,6 @@ class MainController(QMainWindow):
             (self.btn_anomaly, "🔍", "异常检测"),
             (self.btn_damage, "🔧", "损伤评估"),
             (self.btn_ensemble, "🧩", "模型集成"),
-            (self.btn_pipeline, "🔗", "流水线"),
         ]
 
         for btn, icon, label in self.menu_items:
@@ -120,12 +118,10 @@ class MainController(QMainWindow):
         self.damage_page = FaultLevelPage()
         self.ensemble_page = EnsemblePage()
         self.nuclide_page = TimeSeriesPage()
-        self.pipeline_page = PipelinePage()
         self.stack.addWidget(self.nuclide_page)
         self.stack.addWidget(self.anomaly_page)
         self.stack.addWidget(self.damage_page)
         self.stack.addWidget(self.ensemble_page)
-        self.stack.addWidget(self.pipeline_page)
 
         # 默认选中第一页
         self.btn_nuclide.setChecked(True)
@@ -144,7 +140,6 @@ class MainController(QMainWindow):
         self.btn_anomaly.clicked.connect(lambda: self.switch_page(self.btn_anomaly, self.anomaly_page))
         self.btn_damage.clicked.connect(lambda: self.switch_page(self.btn_damage, self.damage_page))
         self.btn_ensemble.clicked.connect(lambda: self.switch_page(self.btn_ensemble, self.ensemble_page))
-        self.btn_pipeline.clicked.connect(lambda: self.switch_page(self.btn_pipeline, self.pipeline_page))
         # 布局装载
         main_layout.addWidget(self.left_frame)
         main_layout.addWidget(right_widget, 4)

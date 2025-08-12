@@ -131,7 +131,8 @@ class TimeSeriesPage(QWidget):
         # 模型类型
         self.model_type_combo = QComboBox()
         all_model =self.manager.get_all_model_name()
-        self.model_type_combo.addItems(all_model)
+        for key, name in all_model.items():
+            self.model_type_combo.addItem(name,key )
         self.model_type_combo.setObjectName("model_type_combo")
         form.addRow("模型类型", self.model_type_combo)
 
@@ -319,10 +320,16 @@ class TimeSeriesPage(QWidget):
                 QMessageBox.warning(self, "提示", f"加载模型关联数据集失败：{exc}")
 
         model_type = meta.get("model_type", "")
-        if model_type and self.model_type_combo.findText(model_type) == -1:
-            self.model_type_combo.addItem(model_type)
-        if model_type:
-            self.model_type_combo.setCurrentText(model_type)
+        # 如果下拉框里还没有这个 key，就加进去
+        if self.model_type_combo.findData(model_type) == -1:
+            model_name_map =self.manager.get_all_model_name()
+            cn_name = model_name_map.get(model_type, model_type)
+            self.model_type_combo.addItem(cn_name, userData=model_type)
+
+        # 选中这个 key 对应的项
+        index = self.model_type_combo.findData(model_type)
+        if index != -1:
+            self.model_type_combo.setCurrentIndex(index)
 
         params = meta.get("params", {})
         self.param_panel.set_params(params)
@@ -367,7 +374,7 @@ class TimeSeriesPage(QWidget):
         w = TrainWorker(
             self.manager,
             self._dataset_id,
-            self.model_type_combo.currentText().strip(),
+            self.model_type_combo.currentData(),
             params,
             self
         )
@@ -389,7 +396,7 @@ class TimeSeriesPage(QWidget):
         self._trained_model = result["model"]
         self._trained_metrics = result["metrics"]
         self._trained_params = self.param_panel.params()
-        self._trained_model_type = self.model_type_combo.currentText().strip()
+        self._trained_model_type = self.model_type_combo.currentData()
         self._look_back = int(result.get("extra", {}).get("look_back", self._look_back))
         for k, v in self._trained_metrics.items():
             logger.info(f"{k}: {v}")
@@ -443,7 +450,7 @@ class TimeSeriesPage(QWidget):
             model_id = self.manager.save_model(
                 model_id=None,
                 name=name.strip(),
-                model_type=self._trained_model_type or self.model_type_combo.currentText(),
+                model_type=self._trained_model_type or self.model_type_combo.currentData(),
                 dataset_id=self._dataset_id,
                 # 把所选特征一并保存到 params，方便下次加载回填
                 params={**(self._trained_params or {}), "feature_cols": list(self._feature_cols)},
@@ -639,7 +646,7 @@ class TimeSeriesPage(QWidget):
         logger.info("\n" + table.to_string())
 
         # 将预测结果回填到表格尾部（覆盖空白行）
-        model_col = self._trained_model_type or self.model_type_combo.currentText().strip()
+        model_col = self._trained_model_type or self.model_type_combo.currentData()
         pred_series = table.get(model_col)
         if pred_series is None:
             pred_series = table.iloc[:, 0]
@@ -664,5 +671,4 @@ class TimeSeriesPage(QWidget):
             logger.warning(f"追加预测观测失败: {exc}")
 
         self._register_new_prediction()
-        self.status_label.setText("✅ 预测已完成，结果见列表。")
         self.table.scrollToBottom()

@@ -275,7 +275,7 @@ class DataLoadDialog(QDialog):
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择 CSV 或 Excel 文件...")
         self.path_edit.setReadOnly(True)
-        btn_load = QPushButton("选择并加载")
+        btn_load = QPushButton("选择文件")
         btn_load.clicked.connect(self._choose_and_load)
 
         self.ignore_first_col_chk = QCheckBox("忽略首列")
@@ -299,10 +299,10 @@ class DataLoadDialog(QDialog):
 
         # ---------- 表格预览（按内容自适应 + 横向滚动） ----------
         self.preview = QTableView()
-        hh = self.preview.horizontalHeader()
-        # 按内容自适应（注意：超大表可能有性能开销）
-        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hh.setStretchLastSection(False)
+        # hh = self.preview.horizontalHeader()
+        # # 按内容自适应（注意：超大表可能有性能开销）
+        # hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # hh.setStretchLastSection(False)
         self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setAlternatingRowColors(True)

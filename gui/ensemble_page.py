@@ -1,504 +1,527 @@
-from typing import Any, Dict, List, Optional, Callable
-import traceback
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from typing import Optional, Dict, List
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QComboBox, QPushButton, QLineEdit, QLabel, QTextEdit, QFileDialog,
-    QSplitter, QTabWidget, QScrollArea, QFormLayout, QGroupBox, QMessageBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QLabel,
+    QGroupBox,
+    QCheckBox,
+    QPushButton,
+    QMessageBox,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
-import pandas as pd
 
-from backend.ml_interface import ML
-from backend.model_registry import list_all as list_models
+from backend.ml_interface import ML, infer_input_features
+from backend.ml_model_manager import MLModelManager
+from backend.fault_level_estimator import FaultLevelEstimator
+from backend.fault_model_manager import FaultModelManager
+from backend.timeseries_interface import ModelManager
 
-from gui.break_analysis.validation_page import ValidationPage
+from gui.smart_table import SmartTable, SmartTableConfig
+from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
 
 
 class EnsemblePage(QWidget):
+    """模型流水线页面：
+
+    - 支持按块启用时间序列、通用 ML 与故障等级模型
+    - 仅做模型加载与推理，不涉及训练
+    - 若启用了时间序列模块，预测结果会自动追加到底部共用表
+    - 下游表可再喂给 ML 或故障等级模块进行最终推理
     """
-    模型集成页（不包含任何样式代码）
-    左侧：模型列表 + 集成方式 + 操作
-    右侧：Tab(单条输入 / 批量输入 / 结果 / 特征)
-    """
-    def __init__(self) -> None:
-        super().__init__()
-        self.is_ensemble = False  # 保留字段，但不再用于判断调用路径
-        # ====== 顶层：左右分栏 ======
-        root = QVBoxLayout(self)
-        splitter = QSplitter(self)
-        splitter.setOrientation(Qt.Orientation.Horizontal)
-        root.addWidget(splitter)
 
-        # ====== 左侧：模型区 ======
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("模型流水线")
 
-        # 搜索条与按钮行
-        search_bar = QHBoxLayout()
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜索模型（按名字/类型/备注）")
-        self.search_edit.textChanged.connect(self._apply_filter)
-        search_bar.addWidget(self.search_edit)
+        # 后端管理器 / 模型状态
+        self.ts_manager = ModelManager()
+        self.ts_model_ids: List[str] = []
+        self.ts_names: Dict[str, str] = {}
+        self.ts_features: Dict[str, List[str]] = {}
 
-        self.refresh_btn = QPushButton("刷新")
-        self.refresh_btn.clicked.connect(self._populate)
-        search_bar.addWidget(self.refresh_btn)
-        left_layout.addLayout(search_bar)
+        self.fault_manager = FaultModelManager()
+        self.fault_models: Dict[str, FaultLevelEstimator] = {}
+        self.fault_names: Dict[str, str] = {}
+        self.fault_features: Dict[str, List[str]] = {}
 
-        # 模型表
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["✔", "名字", "时间", "类型", "备注"])
-        self.table.setSortingEnabled(True)
-        self.table.verticalHeader().setVisible(False)
-        # 第一列仅用于复选，宽度稍小可以交给样式表控制
-        left_layout.addWidget(self.table)
+        self.ml_manager = MLModelManager()
+        self.ml_model_ids: List[str] = []
+        self.ml_names: Dict[str, str] = {}
+        self.ml_features: Dict[str, List[str]] = {}
+        self.ml_targets: Dict[str, str] = {}
 
-        # 快捷选择行
-        quick_sel = QHBoxLayout()
-        self.btn_sel_all = QPushButton("全选")
-        self.btn_sel_none = QPushButton("全不选")
-        self.btn_sel_inv = QPushButton("反选")
-        self.btn_sel_all.clicked.connect(lambda: self._set_all_checks(Qt.CheckState.Checked))
-        self.btn_sel_none.clicked.connect(lambda: self._set_all_checks(Qt.CheckState.Unchecked))
-        self.btn_sel_inv.clicked.connect(self._invert_checks)
-        quick_sel.addWidget(self.btn_sel_all)
-        quick_sel.addWidget(self.btn_sel_none)
-        quick_sel.addWidget(self.btn_sel_inv)
-        quick_sel.addStretch()
-        left_layout.addLayout(quick_sel)
+        self.pred_cols: set[str] = set()
 
-        # 控制行（集成方式 + 加载 + 验证）
-        ctrl = QHBoxLayout()
-        self.method_combo = QComboBox()
-        self.method_combo.addItems(["平均", "投票"])
-        ctrl.addWidget(QLabel("集成方式："))
-        ctrl.addWidget(self.method_combo)
+        # ----- 四宫格布局 -----
+        self.grp_ts = self._build_ts_block()
+        self.grp_ml = self._build_ml_block()
+        self.grp_fault = self._build_fault_block()
 
-        self.load_btn = QPushButton("加载")
-        self.load_btn.clicked.connect(self.on_load)
-        ctrl.addWidget(self.load_btn)
+        # 时间序列输入表（初始隐藏）
+        self.ts_input_wrap = QWidget()
+        right_top = QVBoxLayout(self.ts_input_wrap)
+        right_top.addWidget(QLabel("时间序列输入"))
+        self.tbl_ts = SmartTable(SmartTableConfig(default_headers=["feat1", "feat2"]))
+        right_top.addWidget(self.tbl_ts)
+        right_top.addWidget(self._make_ts_actions())
+        self.ts_input_wrap.hide()
 
-        ctrl.addStretch()
-        left_layout.addLayout(ctrl)
+        # 下游共用表（常驻）
+        self.common_wrap = QWidget()
+        right_bottom = QVBoxLayout(self.common_wrap)
+        right_bottom.addWidget(QLabel("下游共用输入"))
+        self.tbl_common = SmartTable(SmartTableConfig())
+        right_bottom.addWidget(self.tbl_common)
+        right_bottom.addWidget(self._make_final_actions())
 
-        # 状态行
-        self.status_label = QLabel("未加载")
-        left_layout.addWidget(self.status_label)
+        # 左下角：ML 与故障块
+        self.bottom_left = QWidget()
+        left_bottom = QVBoxLayout(self.bottom_left)
+        left_bottom.addWidget(self.grp_ml)
+        left_bottom.addWidget(self.grp_fault)
+        left_bottom.addStretch(1)
 
-        splitter.addWidget(left_panel)
+        # 根布局 2x2
+        root = QGridLayout(self)
+        root.addWidget(self.grp_ts, 0, 0)
+        root.addWidget(self.ts_input_wrap, 0, 1)
+        root.addWidget(self.bottom_left, 1, 0)
+        root.addWidget(self.common_wrap, 1, 1)
+        root.setColumnStretch(1, 1)
+        root.setRowStretch(1, 1)
 
-        # ====== 右侧：输入/结果/特征 ======
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        self.tabs = QTabWidget()
+        # 关联时间序列启用开关
+        self.chk_ts.toggled.connect(self._on_ts_toggle)
 
-        # --- 单条输入 Tab ---
-        self.single_tab = QWidget()
-        st_layout = QVBoxLayout(self.single_tab)
-
-        self.single_form_group = QGroupBox("输入特征")
-        self.single_form_layout = QFormLayout(self.single_form_group)
-        # 动态表单会在加载模型后构建
-        st_layout.addWidget(self.single_form_group)
-
-        single_btns = QHBoxLayout()
-        self.btn_single_predict = QPushButton("预测")
-        self.btn_single_predict.clicked.connect(self._predict_single)
-        self.btn_single_clear = QPushButton("清空")
-        self.btn_single_clear.clicked.connect(self._clear_single_inputs)
-        single_btns.addWidget(self.btn_single_predict)
-        single_btns.addWidget(self.btn_single_clear)
-        single_btns.addStretch()
-        st_layout.addLayout(single_btns)
-
-        self.single_msg = QLabel("")
-        st_layout.addWidget(self.single_msg)
-
-        self.tabs.addTab(self.single_tab, "单条输入")
-
-        # --- 批量输入 Tab ---
-        self.batch_tab = QWidget()
-        bt_layout = QVBoxLayout(self.batch_tab)
-
-        helper = QLabel("可整体粘贴表格，但需手动对其相应的列")
-        bt_layout.addWidget(helper)
-
-
-        # 嵌入表格编辑器（沿用 ValidationPage，但外部模式）
-        self.batch_editor = ValidationPage()
-        self.batch_editor.save_btn.setEnabled(False)
-        bt_layout.addWidget(self.batch_editor)
-
-
-        self.tabs.addTab(self.batch_tab, "批量输入")
-
-        # --- 结果 Tab ---
-        self.result_tab = QWidget()
-        rt_layout = QVBoxLayout(self.result_tab)
-        self.result_table = QTableWidget()
-        self.result_table.setColumnCount(2)
-        self.result_table.setHorizontalHeaderLabels(["索引", "预测值"])
-        self.result_table.verticalHeader().setVisible(False)
-        self.result_table.setSortingEnabled(False)
-        rt_layout.addWidget(self.result_table)
-
-        # 导出按钮（可选）
-        export_row = QHBoxLayout()
-        self.btn_export_csv = QPushButton("导出结果为 CSV")
-        self.btn_export_csv.clicked.connect(self._export_predictions)
-        export_row.addWidget(self.btn_export_csv)
-        export_row.addStretch()
-        rt_layout.addLayout(export_row)
-
-        self.tabs.addTab(self.result_tab, "结果")
-
-        # --- 特征/信息 Tab ---
-        self.info_tab = QWidget()
-        it_layout = QVBoxLayout(self.info_tab)
-        self.info_label = QLabel("尚未加载模型。")
-        it_layout.addWidget(self.info_label)
-        self.tabs.addTab(self.info_tab, "特征/信息")
-
-        right_layout.addWidget(self.tabs)
-        splitter.addWidget(right_panel)
-
-        splitter.setStretchFactor(0, 3)  # 左右分配比例，交给样式表也可
-        splitter.setStretchFactor(1, 5)
-
-        # ====== 其他初始化 ======
-        self.records: List[Dict[str, Any]] = []
-        self._populate()
-
-        # 动态数据
-        self.features: List[str] = []  # features_union
-        self.feature_inputs: Dict[str, QLineEdit] = {}  # 单条输入控件
-        self.predictor: Optional[Callable[[pd.DataFrame], Any]] = None  # 弹性预测入口
-        self.last_predictions: Optional[pd.Series] = None
-
-        # 右键菜单（表格快速开/关）
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        act_all = QAction("全选", self.table)
-        act_all.triggered.connect(lambda: self._set_all_checks(Qt.CheckState.Checked))
-        self.table.addAction(act_all)
-        act_none = QAction("全不选", self.table)
-        act_none.triggered.connect(lambda: self._set_all_checks(Qt.CheckState.Unchecked))
-        self.table.addAction(act_none)
-        act_inv = QAction("反选", self.table)
-        act_inv.triggered.connect(self._invert_checks)
-        self.table.addAction(act_inv)
-
-    # ========================= 左侧：模型列表 =========================
-    def _populate(self) -> None:
-        self.records = list_models() or []
-        self.table.setRowCount(len(self.records))
-        for r, rec in enumerate(self.records):
-            # 勾选框
-            ck = QTableWidgetItem()
-            ck.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-            ck.setCheckState(Qt.CheckState.Unchecked)
-            self.table.setItem(r, 0, ck)
-
-            self.table.setItem(r, 1, QTableWidgetItem(rec.get("name", "")))
-            self.table.setItem(r, 2, QTableWidgetItem(rec.get("created_at", "")))
-            self.table.setItem(r, 3, QTableWidgetItem((rec.get("meta") or {}).get("model_type", "")))
-            self.table.setItem(r, 4, QTableWidgetItem(str((rec.get("meta") or {}).get("advanced", {}))))
-
-        self._apply_filter()
-        self.status_label.setText(f"已加载模型清单：{len(self.records)} 条")
-
-    def _apply_filter(self) -> None:
-        key = (self.search_edit.text() or "").strip().lower()
-        for r in range(self.table.rowCount()):
-            if not key:
-                self.table.setRowHidden(r, False)
-                continue
-            cells = []
-            for c in range(1, 5):
-                item = self.table.item(r, c)
-                cells.append(item.text().lower() if item else "")
-            self.table.setRowHidden(r, key not in " ".join(cells))
-
-    def _set_all_checks(self, state: Qt.CheckState) -> None:
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 0)
-            if item is not None:
-                item.setCheckState(state)
-
-    def _invert_checks(self) -> None:
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 0)
-            if item is not None:
-                item.setCheckState(
-                    Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked
-                )
-
-    # ========================= 模型加载与验证页 =========================
-    def on_load(self) -> None:
-        try:
-            paths = [
-                self.records[r]["path"]
-                for r in range(self.table.rowCount())
-                if self.table.item(r, 0) and self.table.item(r, 0).checkState() == Qt.CheckState.Checked
-            ]
-            if not paths:
-                QMessageBox.warning(self, "提示", "请先勾选至少一个模型。")
-                return
-            names = [
-                self.records[r]["name"]
-                for r in range(self.table.rowCount())
-                if self.table.item(r, 0) and self.table.item(r, 0).checkState() == Qt.CheckState.Checked
-            ]
-            self.selected_models = [{"name": n, "path": p} for n, p in zip(names, paths)]
-
-            method = "mean" if self.method_combo.currentText() == "平均" else "vote"
-            info = ML.load_many(paths, method=method)
-
-            # 先拿 features_union 再配置批量表格
-            feats = info.get("features_union") if isinstance(info, dict) else None
-            if not feats:
-                feats = []
-            self.features = list(feats)
-
-            meta = ML.get_meta() or {}
-            # 统一判定：multi_output 优先；否则 ensemble；否则 single
-            self.backend_meta = meta
-            self.is_ensemble = bool(meta.get("multi_output", False) or meta.get("ensemble", False))
-            # ↑ 仅作展示用途，实际预测路径依据 backend_meta 决定
-
-            # ✅ 现在再启用批量表格的外部模式（用正确的 features 初始化）
-            self.batch_editor.enable_external(self.features, self._predict_targets_for_df)
-
-            # 可选 predictor
-            self.predictor = None
-            if isinstance(info, dict):
-                cand = info.get("predict")
-                if callable(cand):
-                    self.predictor = cand
-
-            self._rebuild_single_form()
-            self.info_label.setText(
-                f"已加载 {len(paths)} 个模型，集成方式：{method}\n特征（{len(self.features)}）: {', '.join(self.features) if self.features else '(后端未提供)'}"
-            )
-            self.status_label.setText("已加载集成模型，准备预测。")
-            self.tabs.setCurrentWidget(self.single_tab)
-
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "错误", f"加载失败：\n{e}")
-
-    # ========================= 右侧：单条输入 =========================
-    def _rebuild_single_form(self) -> None:
-        # 清空旧的
-        for i in reversed(range(self.single_form_layout.count())):
-            item = self.single_form_layout.itemAt(i)
+    # ------------------------------------------------------------------
+    # 工具函数
+    # ------------------------------------------------------------------
+    def _rebuild_model_chips(self, layout: QHBoxLayout, ids: List[str], names: Dict[str, str], remove_cb) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
             w = item.widget()
             if w:
-                w.setParent(None)
-        self.feature_inputs.clear()
+                w.deleteLater()
+        for mid in ids:
+            w = QWidget()
+            l = QHBoxLayout(w)
+            l.setContentsMargins(2, 2, 2, 2)
+            l.addWidget(QLabel(names.get(mid, mid)))
+            btn = QPushButton("x")
+            btn.setFixedSize(16, 16)
+            btn.clicked.connect(lambda _, m=mid: remove_cb(m))
+            l.addWidget(btn)
+            layout.addWidget(w)
+        layout.addStretch(1)
 
-        # 无特征时给个说明
-        if not self.features:
-            lbl = QLabel("后端未提供特征列表，仍可在批量输入页导入 CSV 预测。")
-            self.single_form_layout.addRow(lbl)
-            return
+    def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
+        df = tbl.dataframe()
+        df_new = pd.DataFrame(columns=headers)
+        for c in df.columns:
+            if c in df_new.columns:
+                df_new[c] = df[c]
+        with tbl.no_record():
+            tbl.set_dataframe(df_new, record_state=False)
 
-        # 构建输入行
-        for f in self.features:
-            edit = QLineEdit()
-            edit.setPlaceholderText("数值/可解析为数值")
-            self.feature_inputs[f] = edit
-            self.single_form_layout.addRow(QLabel(f), edit)
+    def _required_ts_features(self) -> List[str]:
+        feats: set[str] = set()
+        for fs in self.ts_features.values():
+            feats.update(fs)
+        return sorted(feats)
 
-    def _clear_single_inputs(self) -> None:
-        for e in self.feature_inputs.values():
-            e.clear()
-        self.single_msg.setText("")
+    def _required_common_features(self) -> List[str]:
+        feats: set[str] = set()
+        for fs in self.ml_features.values():
+            feats.update(fs)
+        for fs in self.fault_features.values():
+            feats.update(fs)
+        return sorted(feats)
 
-    def _collect_single_row(self) -> pd.DataFrame:
-        # 将单条输入拼成 DataFrame（一个样本）
-        data = {}
-        for f, edit in self.feature_inputs.items():
-            txt = edit.text().strip()
-            if txt == "":
-                data[f] = None
-            else:
-                try:
-                    # 尝试数值化
-                    data[f] = float(txt)
-                except Exception:
-                    data[f] = txt  # 留给后端/预处理
-        if not self.features:
-            # 若无特征定义，就把 dict 的键作为列
-            cols = list(data.keys())
+    def _refresh_ts_models(self) -> None:
+        self._rebuild_model_chips(self.ts_model_layout, self.ts_model_ids, self.ts_names, self._remove_ts_model)
+        headers = self._required_ts_features()
+        if headers:
+            self._set_table_headers(self.tbl_ts, headers)
         else:
-            cols = self.features
-            # 补齐缺失
-            for f in cols:
-                data.setdefault(f, None)
+            self._set_table_headers(self.tbl_ts, [])
 
-        df = pd.DataFrame([data], columns=cols)
-        return df
+    def _refresh_ml_models(self) -> None:
+        self._rebuild_model_chips(self.ml_model_layout, self.ml_model_ids, self.ml_names, self._remove_ml_model)
+        self._update_common_headers()
 
+    def _refresh_fault_models(self) -> None:
+        ids = list(self.fault_models.keys())
+        self._rebuild_model_chips(self.fault_model_layout, ids, self.fault_names, self._remove_fault_model)
+        self._update_common_headers()
 
-    # --------- 辅助：标准化后端返回为 {target: labels_ndarray} ---------
-    def _normalize_backend_result(self, ret) -> Dict[str, Any]:
-        # MultiOutput: {t: {"labels": y, "scores": s}}
-        if isinstance(ret, dict) and all(isinstance(v, dict) and "labels" in v for v in ret.values()):
-            return {t: v.get("labels") for t, v in ret.items()}
-        # 单模型/旧式集合：{"target": name, "labels": y, "scores": s}
-        if isinstance(ret, dict) and "labels" in ret:
-            return {str(ret.get("target", "输出")): ret.get("labels")}
-        # 兼容极少数旧返回：(y, scores) 或 直接 y
-        if isinstance(ret, tuple) and len(ret) >= 1:
-            return {"输出": ret[0]}
-        return {"输出": ret}
+    def _update_common_headers(self) -> None:
+        headers = self._required_common_features()
+        self._set_table_headers(self.tbl_common, headers)
 
-    # ========================= 结果与导出 =========================
-    def _fill_result_table(self, y) -> None:
-        """
-        支持 y 是 ndarray/list/Series/DataFrame(单列)；
-        若后端返回 (y_pred, scores) 的元组，则会解包并在可行时增加“分数”列。
-        """
-        import numpy as np
-        import pandas as pd
+    # ------------------------------------------------------------------
+    # 左侧块构建
+    # ------------------------------------------------------------------
+    def _build_ts_block(self) -> QGroupBox:
+        g = QGroupBox("时间序列模型")
+        lay = QVBoxLayout(g)
+        self.chk_ts = QCheckBox("启用")
+        lay.addWidget(self.chk_ts)
 
-        scores = None
-        # 兼容 (y_pred, scores)
-        if isinstance(y, tuple) and len(y) >= 1:
-            scores = y[1] if len(y) > 1 else None
-            y = y[0]
+        self.ts_controls = QWidget()
+        row = QHBoxLayout(self.ts_controls)
+        self.btn_ts_load = QPushButton("加载模型…")
+        self.btn_ts_clear = QPushButton("清空")
+        row.addWidget(self.btn_ts_load)
+        row.addWidget(self.btn_ts_clear)
+        lay.addWidget(self.ts_controls)
 
-        # 统一成 Series
-        if isinstance(y, pd.DataFrame):
-            if y.shape[1] == 1:
-                s = y.iloc[:, 0]
-            else:
-                s = y.apply(lambda row: ",".join(map(str, row.tolist())), axis=1)
-        elif isinstance(y, pd.Series):
-            s = y
-        elif isinstance(y, (list, tuple)):
-            s = pd.Series(list(y))
-        elif "numpy" in str(type(y)):  # 简单识别 np.ndarray
-            s = pd.Series(np.asarray(y).ravel())
-        else:
-            s = pd.Series([y])
+        self.ts_model_wrap = QWidget()
+        self.ts_model_layout = QHBoxLayout(self.ts_model_wrap)
+        self.ts_model_layout.addStretch(1)
+        lay.addWidget(self.ts_model_wrap)
 
-        self.last_predictions = s
+        self.ts_controls.hide()
+        self.ts_model_wrap.hide()
 
-        # 是否可以展示 scores
-        add_scores = False
-        sc_series = None
-        if scores is not None:
+        self.btn_ts_load.clicked.connect(self._open_ts_dialog)
+        self.btn_ts_clear.clicked.connect(self._on_clear_ts)
+        return g
+
+    def _build_ml_block(self) -> QGroupBox:
+        g = QGroupBox("通用 ML 模型")
+        lay = QVBoxLayout(g)
+        self.chk_ml = QCheckBox("启用")
+        self.btn_ml_load = QPushButton("加载模型…")
+        self.btn_ml_clear = QPushButton("清空")
+        row = QHBoxLayout(); row.addWidget(self.chk_ml); row.addStretch(1)
+        lay.addLayout(row)
+        row2 = QHBoxLayout(); row2.addWidget(self.btn_ml_load); row2.addWidget(self.btn_ml_clear)
+        lay.addLayout(row2)
+        self.ml_model_wrap = QWidget()
+        self.ml_model_layout = QHBoxLayout(self.ml_model_wrap)
+        self.ml_model_layout.addStretch(1)
+        lay.addWidget(self.ml_model_wrap)
+
+        self.btn_ml_load.clicked.connect(self._open_ml_dialog)
+        self.btn_ml_clear.clicked.connect(self._on_clear_ml)
+        return g
+
+    def _build_fault_block(self) -> QGroupBox:
+        g = QGroupBox("故障等级模型")
+        lay = QVBoxLayout(g)
+        self.chk_fault = QCheckBox("启用")
+        self.btn_fault_load = QPushButton("加载模型…")
+        self.btn_fault_clear = QPushButton("清空")
+        row = QHBoxLayout(); row.addWidget(self.chk_fault); row.addStretch(1)
+        lay.addLayout(row)
+        row2 = QHBoxLayout(); row2.addWidget(self.btn_fault_load); row2.addWidget(self.btn_fault_clear)
+        lay.addLayout(row2)
+        self.fault_model_wrap = QWidget()
+        self.fault_model_layout = QHBoxLayout(self.fault_model_wrap)
+        self.fault_model_layout.addStretch(1)
+        lay.addWidget(self.fault_model_wrap)
+
+        self.btn_fault_load.clicked.connect(self._open_fault_dialog)
+        self.btn_fault_clear.clicked.connect(self._on_clear_fault)
+        return g
+
+    # ------------------------------------------------------------------
+    # 右侧动作
+    # ------------------------------------------------------------------
+    def _make_ts_actions(self) -> QWidget:
+        box = QWidget(); lay = QHBoxLayout(box)
+        self.btn_ts_to_down = QPushButton("生成预测 ➜ 下游")
+        self.btn_ts_to_down.clicked.connect(self._on_ts_generate)
+        lay.addStretch(1); lay.addWidget(self.btn_ts_to_down)
+        return box
+
+    def _make_final_actions(self) -> QWidget:
+        box = QWidget(); lay = QHBoxLayout(box)
+        self.btn_clear_results = QPushButton("清空结果列")
+        self.btn_run = QPushButton("推理")
+        self.btn_clear_results.clicked.connect(self._on_clear_results)
+        self.btn_run.clicked.connect(self._on_run)
+        lay.addStretch(1); lay.addWidget(self.btn_clear_results); lay.addWidget(self.btn_run)
+        return box
+
+    # ------------------------------------------------------------------
+    # 时间序列启用开关
+    # ------------------------------------------------------------------
+    def _on_ts_toggle(self, checked: bool) -> None:
+        self.ts_controls.setVisible(checked)
+        self.ts_model_wrap.setVisible(checked)
+        self.ts_input_wrap.setVisible(checked)
+
+    # ------------------------------------------------------------------
+    # 时间序列加载/清空
+    # ------------------------------------------------------------------
+    def _open_ts_dialog(self) -> None:
+        dlg = ModelManagerDialog(self.ts_manager, self)
+        dlg.model_loaded.connect(self._add_ts_model)
+        dlg.exec()
+
+    def _add_ts_model(self, model_id: str) -> None:
+        try:
+            self.ts_manager.load_model(model_id)
+            feats = self.ts_manager.current_feature_names() or []
+            name = self.ts_manager.models_registry.get(model_id, {}).get("name", model_id)
+            if model_id not in self.ts_model_ids:
+                self.ts_model_ids.append(model_id)
+            self.ts_features[model_id] = feats
+            self.ts_names[model_id] = name
+            self.chk_ts.setChecked(True)
+            self._refresh_ts_models()
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", str(e))
+
+    def _remove_ts_model(self, model_id: str) -> None:
+        if model_id in self.ts_model_ids:
+            self.ts_model_ids.remove(model_id)
+        self.ts_features.pop(model_id, None)
+        self.ts_names.pop(model_id, None)
+        self._refresh_ts_models()
+
+    def _on_clear_ts(self) -> None:
+        from backend.timeseries_interface import _RuntimeSingleton
+        _RuntimeSingleton.reset()
+        self.ts_manager = ModelManager()
+        self.ts_model_ids.clear()
+        self.ts_features.clear()
+        self.ts_names.clear()
+        self._refresh_ts_models()
+        self.chk_ts.setChecked(False)
+
+    # ------------------------------------------------------------------
+    # ML 加载/清空
+    # ------------------------------------------------------------------
+    def _open_ml_dialog(self) -> None:
+        dlg = ModelManagerDialog(self.ml_manager, self, multi_select=True)
+        dlg.models_loaded.connect(self._add_ml_models)
+        dlg.exec()
+
+    def _add_ml_models(self, model_ids: list[str]) -> None:
+        for mid in model_ids:
             try:
-                sc = np.asarray(scores).ravel()
-                if sc.shape[0] == len(s):
-                    sc_series = pd.Series(sc)
-                    add_scores = True
-            except Exception:
-                add_scores = False
+                meta = self.ml_manager.load_models([mid])
+                name = self.ml_manager.registry.get(mid, {}).get("name", mid)
+                feats = infer_input_features(meta.get("features", []), meta.get("calc_recipes", []))
+                tgt = meta.get("target", "ml_pred")
+                if mid not in self.ml_model_ids:
+                    self.ml_model_ids.append(mid)
+                self.ml_names[mid] = name
+                self.ml_features[mid] = feats
+                self.ml_targets[mid] = tgt
+            except Exception as e:
+                QMessageBox.warning(self, "加载失败", str(e))
+        ML.clear()
+        if self.ml_model_ids:
+            self.chk_ml.setChecked(True)
+        self._refresh_ml_models()
 
-        cols = 3 if add_scores else 2
-        self.result_table.setRowCount(len(s))
-        self.result_table.setColumnCount(cols)
-        headers = ["索引", "预测值"] + (["分数"] if add_scores else [])
-        self.result_table.setHorizontalHeaderLabels(headers)
-        self.result_table.verticalHeader().setVisible(False)
+    def _remove_ml_model(self, model_id: str) -> None:
+        if model_id in self.ml_model_ids:
+            self.ml_model_ids.remove(model_id)
+        self.ml_names.pop(model_id, None)
+        self.ml_features.pop(model_id, None)
+        self.ml_targets.pop(model_id, None)
+        self._refresh_ml_models()
 
-        for i, val in enumerate(s):
-            self.result_table.setItem(i, 0, QTableWidgetItem(str(i)))
-            self.result_table.setItem(i, 1, QTableWidgetItem("" if val is None else str(val)))
-            if add_scores and sc_series is not None:
-                v = sc_series.iloc[i]
-                self.result_table.setItem(i, 2, QTableWidgetItem("" if (pd.isna(v) if hasattr(pd, 'isna') else v is None) else str(v)))
-    def _export_predictions(self) -> None:
-        if self.last_predictions is None:
-            QMessageBox.information(self, "提示", "当前没有可导出的预测结果。")
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "保存为 CSV", "predictions.csv", "CSV 文件 (*.csv)")
-        if not path:
-            return
+    def _on_clear_ml(self) -> None:
         try:
-            self.last_predictions.to_csv(path, header=["pred"], index_label="index")
-            QMessageBox.information(self, "成功", f"已导出到：{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"导出失败：\n{e}")
-
-    def _resolve_target_name(self, member_meta: Dict[str, Any], fallback: str) -> str:
-        adv = dict(member_meta.get("advanced") or {})
-        for key in ["target", "y_name", "output", "label", "task_name", "target_name", "output_name"]:
-            if key in member_meta and member_meta[key]:
-                return str(member_meta[key])
-            if key in adv and adv[key]:
-                return str(adv[key])
-        return fallback or str(member_meta.get("model_type", "输出"))
-
-    def _predict_single(self) -> None:
-        try:
-            df = self._collect_single_row()
-            res_map = self._predict_targets_for_df(df)  # {目标: 数组}
-            parts = []
-            for k, v in res_map.items():
-                try:
-                    val = v[0] if hasattr(v, "__len__") else v
-                except Exception:
-                    val = v
-                parts.append(f"{k}: {val}")
-            self.single_msg.setText(" | ".join(parts))
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "错误", f"单条预测失败：\n{e}")
-
-    def _predict_targets_for_df(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        批量表格编辑器的回调：
-        - 直接调用后端 ML.predict（后端已完成“按目标分组与同目标集成”）
-        - 统一解析返回为 {目标名: 结果数组}，供 ValidationPage 动态生成列
-        """
-        import numpy as np
-        if df.shape[1] == 0:
-            return {"输出": np.array([])}
-
-        # 对齐到 features_union
-        if getattr(self, "features", None):
-            for f in self.features:
-                if f not in df.columns:
-                    df[f] = np.nan
-            df = df[self.features]
-        # 只保留“整行非 NaN”的样本做预测
-        mask = df.notna().all(axis=1).to_numpy()
-        valid_idx = np.flatnonzero(mask)
-        if valid_idx.size == 0:
-            return {}  # 本次没有完整行，直接返回空
-        df_valid = df.iloc[valid_idx].reset_index(drop=True)
-
-        # 按后端 meta 决定输入形态
-        meta = getattr(self, "backend_meta", {}) or {}
-        is_multi = bool(meta.get("multi_output", False))
-        is_ens = bool(meta.get("ensemble", False))
-
-        # 仅把完整行送去预测
-        try:
-            if is_multi or is_ens:
-                X_table = {c: df_valid[c].to_numpy() for c in df_valid.columns}
-                ret = ML.predict(X_table)
-            else:
-                ret = ML.predict(df_valid.to_numpy())
+            ML.clear()
         except Exception:
-            try:
-                ret = ML.predict({c: df_valid[c].to_numpy() for c in df_valid.columns})
-            except Exception:
-                ret = ML.predict(df_valid.to_numpy())
+            pass
+        self.ml_model_ids.clear()
+        self.ml_names.clear()
+        self.ml_features.clear()
+        self.ml_targets.clear()
+        self._refresh_ml_models()
+        self.chk_ml.setChecked(False)
 
-        # 归一化子结果，并回填到原长度（未参与预测的行为 NaN）
-        sub = self._normalize_backend_result(ret)  # {target: 1d}
-        out: Dict[str, Any] = {}
-        n = len(df)
-        for t, arr in sub.items():
+    # ------------------------------------------------------------------
+    # 故障等级加载/清空
+    # ------------------------------------------------------------------
+    def _open_fault_dialog(self) -> None:
+        dlg = ModelManagerDialog(self.fault_manager, self)
+        dlg.model_loaded.connect(self._add_fault_model)
+        dlg.exec()
+
+    def _add_fault_model(self, model_id: str) -> None:
+        try:
+            est, _, meta = self.fault_manager.load_model(model_id)
+            name = meta.get("name", model_id)
+            feats = list(est.feature_names)
+            self.fault_models[model_id] = est
+            self.fault_names[model_id] = name
+            self.fault_features[model_id] = feats
+            self.chk_fault.setChecked(True)
+            self._refresh_fault_models()
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", str(e))
+
+    def _remove_fault_model(self, model_id: str) -> None:
+        self.fault_models.pop(model_id, None)
+        self.fault_names.pop(model_id, None)
+        self.fault_features.pop(model_id, None)
+        self._refresh_fault_models()
+
+    def _on_clear_fault(self) -> None:
+        self.fault_models.clear()
+        self.fault_names.clear()
+        self.fault_features.clear()
+        self._refresh_fault_models()
+        self.chk_fault.setChecked(False)
+
+    # ------------------------------------------------------------------
+    # 时间序列预测追加到底表
+    # ------------------------------------------------------------------
+    def _on_ts_generate(self) -> None:
+        if not (self.chk_ts.isChecked() and self.ts_model_ids):
+            QMessageBox.information(self, "提示", "请先加载并启用时间序列模型。")
+            return
+        df_ts = self.tbl_ts.dataframe()
+        if df_ts.empty:
+            QMessageBox.information(self, "提示", "时间序列表为空。")
+            return
+        df_ts = df_ts.apply(pd.to_numeric, errors="coerce")
+        df_ts = df_ts.dropna()
+        if df_ts.empty:
+            QMessageBox.information(self, "提示", "时间序列表无有效数值行。")
+            return
+
+        pred_sum: Dict[str, np.ndarray] = {}
+        pred_count: Dict[str, int] = {}
+        for mid in self.ts_model_ids:
+            feats = self.ts_features.get(mid, [])
+            miss = [f for f in feats if f not in df_ts.columns]
+            if miss:
+                QMessageBox.warning(self, "特征缺失", f"模型 {self.ts_names.get(mid, mid)} 缺少列: {miss}")
+            df_use = df_ts.reindex(columns=feats).dropna()
+            if df_use.empty:
+                continue
+            try:
+                self.ts_manager.load_model(mid)
+                self.ts_manager.append_observations(df_use)
+                pred = self.ts_manager.predict(steps=1)[0]["table"].T
+                for c in pred.columns:
+                    arr = np.asarray(pred[c]).ravel()
+                    if c in pred_sum:
+                        pred_sum[c] += arr
+                        pred_count[c] += 1
+                    else:
+                        pred_sum[c] = arr
+                        pred_count[c] = 1
+            except Exception as e:
+                QMessageBox.warning(self, "预测失败", str(e))
+
+        if not pred_sum:
+            QMessageBox.information(self, "提示", "没有生成任何预测。")
+            return
+
+        pred_avg = {c: pred_sum[c] / pred_count[c] for c in pred_sum}
+        pred_df = pd.DataFrame(pred_avg)
+
+        # 追加到时间序列表
+        df_ts_orig = self.tbl_ts.dataframe()
+        new_row_ts = {
+            c: pred_df[c].iloc[0] if c in pred_df.columns else np.nan
+            for c in df_ts_orig.columns
+        }
+        df_ts_new = pd.concat([df_ts_orig, pd.DataFrame([new_row_ts])], ignore_index=True)
+        with self.tbl_ts.no_record():
+            self.tbl_ts.set_dataframe(df_ts_new, record_state=False)
+
+        # 根据共用表头追加行
+        headers = list(self.tbl_common.dataframe().columns)
+        df_common = self.tbl_common.dataframe()
+        if df_common.empty:
+            df_common = pd.DataFrame(columns=headers)
+        new_row_common = {
+            c: pred_df[c].iloc[0] if c in pred_df.columns else np.nan
+            for c in headers
+        }
+        df_common_new = pd.concat([df_common, pd.DataFrame([new_row_common])], ignore_index=True)
+        with self.tbl_common.no_record():
+            self.tbl_common.set_dataframe(df_common_new, record_state=False)
+        QMessageBox.information(self, "完成", "已追加预测结果")
+
+    # ------------------------------------------------------------------
+    # 最终推理
+    # ------------------------------------------------------------------
+    def _on_run(self) -> None:
+        df = self.tbl_common.dataframe()
+        if df.empty:
+            QMessageBox.information(self, "提示", "下游输入表为空。")
+            return
+        feats_required = self._required_common_features()
+        if not feats_required:
+            QMessageBox.information(self, "提示", "暂无可用特征。")
+            return
+        df_raw = df.reindex(columns=feats_required).replace("", np.nan)
+        valid = ~df_raw.isna().any(axis=1)
+        idx = np.where(valid.to_numpy())[0]
+        if idx.size == 0:
+            QMessageBox.information(self, "提示", "无完整输入行。")
+            return
+        X_valid_raw = df_raw.iloc[idx].reset_index(drop=True)
+        result_cols: Dict[str, np.ndarray] = {}
+
+        if self.chk_ml.isChecked() and self.ml_model_ids:
+            try:
+                self.ml_manager.load_models(self.ml_model_ids)
+                X_table = {
+                    f: X_valid_raw.get(f, pd.Series([np.nan] * len(X_valid_raw))).to_numpy()
+                    for f in X_valid_raw.columns
+                }
+                ret = ML.predict(X_table)
+                if isinstance(ret, dict) and "labels" in ret:
+                    target = ret.get("target", "ml_pred")
+                    result_cols[target] = np.asarray(ret.get("labels")).ravel()
+                elif isinstance(ret, dict):
+                    for tgt, info in ret.items():
+                        if isinstance(info, dict) and "labels" in info:
+                            result_cols[str(tgt)] = np.asarray(info["labels"]).ravel()
+            except Exception as e:
+                QMessageBox.warning(self, "ML 预测失败", str(e))
+
+        if self.chk_fault.isChecked() and self.fault_models:
+            try:
+                X_fault = X_valid_raw.apply(pd.to_numeric, errors="coerce")
+                y = self.fault_manager.predict_many(list(self.fault_models.values()), X_fault)
+                if y.size:
+                    result_cols["fault_pred"] = y
+            except Exception as e:
+                QMessageBox.warning(self, "故障等级预测失败", str(e))
+
+        if not result_cols:
+            QMessageBox.information(self, "提示", "没有生成任何结果。")
+            return
+        df_out = df.copy()
+        for name, arr in result_cols.items():
             arr = np.asarray(arr).ravel()
-            full = np.full((n,), np.nan)
-            full[valid_idx[: len(arr)]] = arr[: len(valid_idx)]
-            out[t] = full
-        return out
+            if arr.dtype.kind in {"U", "S", "O"}:
+                col = np.full(len(df_out), None, dtype=object)
+            else:
+                col = np.full(len(df_out), np.nan)
+            col[idx[: len(arr)]] = arr[: len(idx)]
+            df_out[name] = col
+        with self.tbl_common.no_record():
+            self.tbl_common.set_dataframe(df_out, record_state=False)
+        self.pred_cols.update(result_cols.keys())
+        QMessageBox.information(self, "完成", f"已写入结果列：{list(result_cols.keys())}")
+
+    def _on_clear_results(self) -> None:
+        df = self.tbl_common.dataframe()
+        drop = [c for c in df.columns if c in self.pred_cols]
+        if not drop:
+            return
+        df2 = df.drop(columns=drop)
+        with self.tbl_common.no_record():
+            self.tbl_common.set_dataframe(df2, record_state=False)
+        self.pred_cols.clear()

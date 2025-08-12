@@ -677,5 +677,15 @@ class ModelManager:
         }
         return presets.get(model_type, {})
 
+
     def get_all_model_name(self):
-        return MODEL_REGISTRY.keys()
+        MODEL_NAME_MAP = {
+            "gru": "GRU",
+            "tcn": "TCN",
+            "tsmixer": "TSMixer",
+            "rf": "随机森林",
+            "xgb": "XGBoost",
+            "timesnet": "TimesNet"
+        }
+        # 直接构造筛过的字典
+        return {k: v for k, v in MODEL_NAME_MAP.items() if k in MODEL_REGISTRY}
