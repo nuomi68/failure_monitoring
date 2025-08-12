@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QLabel,
     QGroupBox,
-    QCheckBox,
     QPushButton,
     QMessageBox,
 )
@@ -64,7 +63,7 @@ class EnsemblePage(QWidget):
         self.grp_ml = self._build_ml_block()
         self.grp_fault = self._build_fault_block()
 
-        # 时间序列输入表（初始隐藏）
+        # 时间序列输入表
         self.ts_input_wrap = QWidget()
         right_top = QVBoxLayout(self.ts_input_wrap)
         right_top.addWidget(QLabel("时间序列输入"))
@@ -73,7 +72,6 @@ class EnsemblePage(QWidget):
         self.tbl_ts = SmartTable(SmartTableConfig(default_headers=["feat1", "feat2"]))
         right_top.addWidget(self.tbl_ts)
         right_top.addWidget(self._make_ts_actions())
-        self.ts_input_wrap.hide()
 
         # 下游共用表（常驻）
         self.common_wrap = QWidget()
@@ -99,13 +97,10 @@ class EnsemblePage(QWidget):
         root.setColumnStretch(1, 1)
         root.setRowStretch(1, 1)
 
-        # 关联时间序列启用开关
-        self.chk_ts.toggled.connect(self._on_ts_toggle)
-
     # ------------------------------------------------------------------
     # 工具函数
     # ------------------------------------------------------------------
-    def _rebuild_model_chips(self, layout: QHBoxLayout, ids: List[str], names: Dict[str, str], remove_cb) -> None:
+    def _rebuild_model_chips(self, layout, ids: List[str], names: Dict[str, str], remove_cb) -> None:
         layout.setSpacing(6)
         while layout.count():
             item = layout.takeAt(0)
@@ -124,7 +119,6 @@ class EnsemblePage(QWidget):
             btn.clicked.connect(lambda _, m=mid: remove_cb(m))
             l.addWidget(btn)
             layout.addWidget(w)
-        layout.addStretch(1)
 
     def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
         df = tbl.dataframe()
@@ -182,8 +176,6 @@ class EnsemblePage(QWidget):
     def _build_ts_block(self) -> QGroupBox:
         g = QGroupBox("时间序列模型")
         lay = QVBoxLayout(g)
-        self.chk_ts = QCheckBox("启用")
-        lay.addWidget(self.chk_ts)
 
         self.ts_controls = QWidget()
         row = QHBoxLayout(self.ts_controls)
@@ -194,12 +186,8 @@ class EnsemblePage(QWidget):
         lay.addWidget(self.ts_controls)
 
         self.ts_model_wrap = QWidget()
-        self.ts_model_layout = QHBoxLayout(self.ts_model_wrap)
-        self.ts_model_layout.addStretch(1)
+        self.ts_model_layout = QVBoxLayout(self.ts_model_wrap)
         lay.addWidget(self.ts_model_wrap)
-
-        self.ts_controls.hide()
-        self.ts_model_wrap.hide()
 
         self.btn_ts_load.clicked.connect(self._open_ts_dialog)
         self.btn_ts_clear.clicked.connect(self._on_clear_ts)
@@ -208,16 +196,12 @@ class EnsemblePage(QWidget):
     def _build_ml_block(self) -> QGroupBox:
         g = QGroupBox("通用 ML 模型")
         lay = QVBoxLayout(g)
-        self.chk_ml = QCheckBox("启用")
         self.btn_ml_load = QPushButton("加载模型…")
         self.btn_ml_clear = QPushButton("清空")
-        row = QHBoxLayout(); row.addWidget(self.chk_ml); row.addStretch(1)
+        row = QHBoxLayout(); row.addWidget(self.btn_ml_load); row.addWidget(self.btn_ml_clear)
         lay.addLayout(row)
-        row2 = QHBoxLayout(); row2.addWidget(self.btn_ml_load); row2.addWidget(self.btn_ml_clear)
-        lay.addLayout(row2)
         self.ml_model_wrap = QWidget()
-        self.ml_model_layout = QHBoxLayout(self.ml_model_wrap)
-        self.ml_model_layout.addStretch(1)
+        self.ml_model_layout = QVBoxLayout(self.ml_model_wrap)
         lay.addWidget(self.ml_model_wrap)
 
         self.btn_ml_load.clicked.connect(self._open_ml_dialog)
@@ -227,16 +211,12 @@ class EnsemblePage(QWidget):
     def _build_fault_block(self) -> QGroupBox:
         g = QGroupBox("故障等级模型")
         lay = QVBoxLayout(g)
-        self.chk_fault = QCheckBox("启用")
         self.btn_fault_load = QPushButton("加载模型…")
         self.btn_fault_clear = QPushButton("清空")
-        row = QHBoxLayout(); row.addWidget(self.chk_fault); row.addStretch(1)
+        row = QHBoxLayout(); row.addWidget(self.btn_fault_load); row.addWidget(self.btn_fault_clear)
         lay.addLayout(row)
-        row2 = QHBoxLayout(); row2.addWidget(self.btn_fault_load); row2.addWidget(self.btn_fault_clear)
-        lay.addLayout(row2)
         self.fault_model_wrap = QWidget()
-        self.fault_model_layout = QHBoxLayout(self.fault_model_wrap)
-        self.fault_model_layout.addStretch(1)
+        self.fault_model_layout = QVBoxLayout(self.fault_model_wrap)
         lay.addWidget(self.fault_model_wrap)
 
         self.btn_fault_load.clicked.connect(self._open_fault_dialog)
@@ -249,9 +229,14 @@ class EnsemblePage(QWidget):
     def _make_ts_actions(self) -> QWidget:
         box = QWidget(); lay = QHBoxLayout(box)
         self.btn_ts_to_down = QPushButton("生成预测 ➜ 下游")
-        self.btn_ts_to_down.clicked.connect(self._on_ts_generate)
+        self.btn_ts_to_down.clicked.connect(self._on_ts_to_down_and_run)
         lay.addStretch(1); lay.addWidget(self.btn_ts_to_down)
         return box
+
+    def _on_ts_to_down_and_run(self) -> None:
+        self._on_ts_generate()
+        # 如果上一部没有因校验提前 return，则执行推理
+        self._on_run()
 
     def _make_final_actions(self) -> QWidget:
         box = QWidget(); lay = QHBoxLayout(box)
@@ -261,14 +246,6 @@ class EnsemblePage(QWidget):
         self.btn_run.clicked.connect(self._on_run)
         lay.addStretch(1); lay.addWidget(self.btn_clear_results); lay.addWidget(self.btn_run)
         return box
-
-    # ------------------------------------------------------------------
-    # 时间序列启用开关
-    # ------------------------------------------------------------------
-    def _on_ts_toggle(self, checked: bool) -> None:
-        self.ts_controls.setVisible(checked)
-        self.ts_model_wrap.setVisible(checked)
-        self.ts_input_wrap.setVisible(checked)
 
     # ------------------------------------------------------------------
     # 时间序列加载/清空
@@ -289,7 +266,6 @@ class EnsemblePage(QWidget):
             self.ts_features[model_id] = feats
             self.ts_names[model_id] = name
             self.ts_lookbacks[model_id] = lb
-            self.chk_ts.setChecked(True)
             self._refresh_ts_models()
         except Exception as e:
             QMessageBox.critical(self, "加载失败", str(e))
@@ -311,7 +287,6 @@ class EnsemblePage(QWidget):
         self.ts_names.clear()
         self.ts_lookbacks.clear()
         self._refresh_ts_models()
-        self.chk_ts.setChecked(False)
 
     # ------------------------------------------------------------------
     # ML 加载/清空
@@ -336,8 +311,6 @@ class EnsemblePage(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "加载失败", str(e))
         ML.clear()
-        if self.ml_model_ids:
-            self.chk_ml.setChecked(True)
         self._refresh_ml_models()
 
     def _remove_ml_model(self, model_id: str) -> None:
@@ -358,7 +331,6 @@ class EnsemblePage(QWidget):
         self.ml_features.clear()
         self.ml_targets.clear()
         self._refresh_ml_models()
-        self.chk_ml.setChecked(False)
 
     # ------------------------------------------------------------------
     # 故障等级加载/清空
@@ -376,7 +348,6 @@ class EnsemblePage(QWidget):
             self.fault_models[model_id] = est
             self.fault_names[model_id] = name
             self.fault_features[model_id] = feats
-            self.chk_fault.setChecked(True)
             self._refresh_fault_models()
         except Exception as e:
             QMessageBox.critical(self, "加载失败", str(e))
@@ -392,14 +363,13 @@ class EnsemblePage(QWidget):
         self.fault_names.clear()
         self.fault_features.clear()
         self._refresh_fault_models()
-        self.chk_fault.setChecked(False)
 
     # ------------------------------------------------------------------
     # 时间序列预测追加到底表
     # ------------------------------------------------------------------
     def _on_ts_generate(self) -> None:
-        if not (self.chk_ts.isChecked() and self.ts_model_ids):
-            QMessageBox.information(self, "提示", "请先加载并启用时间序列模型。")
+        if not self.ts_model_ids:
+            QMessageBox.information(self, "提示", "请先加载时间序列模型。")
             return
         df_ts = self.tbl_ts.dataframe()
         if df_ts.empty:
@@ -492,7 +462,7 @@ class EnsemblePage(QWidget):
         X_valid_raw = df_raw.iloc[idx].reset_index(drop=True)
         result_cols: Dict[str, np.ndarray] = {}
 
-        if self.chk_ml.isChecked() and self.ml_model_ids:
+        if self.ml_model_ids:
             try:
                 self.ml_manager.load_models(self.ml_model_ids)
                 X_table = {
@@ -510,7 +480,7 @@ class EnsemblePage(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "ML 预测失败", str(e))
 
-        if self.chk_fault.isChecked() and self.fault_models:
+        if self.fault_models:
             try:
                 X_fault = X_valid_raw.apply(pd.to_numeric, errors="coerce")
                 y = self.fault_manager.predict_many(list(self.fault_models.values()), X_fault)
