@@ -106,6 +106,7 @@ class EnsemblePage(QWidget):
     # 工具函数
     # ------------------------------------------------------------------
     def _rebuild_model_chips(self, layout: QHBoxLayout, ids: List[str], names: Dict[str, str], remove_cb) -> None:
+        layout.setSpacing(6)
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
@@ -114,10 +115,12 @@ class EnsemblePage(QWidget):
         for mid in ids:
             w = QWidget()
             l = QHBoxLayout(w)
-            l.setContentsMargins(2, 2, 2, 2)
+            l.setContentsMargins(4, 0, 4, 0)
+            l.setSpacing(4)
             l.addWidget(QLabel(names.get(mid, mid)))
             btn = QPushButton("x")
             btn.setFixedSize(16, 16)
+            btn.setStyleSheet("padding:0")
             btn.clicked.connect(lambda _, m=mid: remove_cb(m))
             l.addWidget(btn)
             layout.addWidget(w)
@@ -158,6 +161,7 @@ class EnsemblePage(QWidget):
             self.lbl_ts_hint.setText(f"最少输入行数：{lb}")
         else:
             self.lbl_ts_hint.clear()
+        self._update_common_headers()
 
     def _refresh_ml_models(self) -> None:
         self._rebuild_model_chips(self.ml_model_layout, self.ml_model_ids, self.ml_names, self._remove_ml_model)
