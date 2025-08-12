@@ -251,6 +251,10 @@ class ModelManager:
 
         :returns: 更新后的模型元数据列表。
         """
+        # 每次调用都从磁盘重新读取注册表，以获取外部新增的模型
+        self.datasets_registry = self._load_json(self.datasets_registry_file) or {}
+        self.models_registry = self._load_json(self.models_registry_file) or {}
+
         # 先刷新数据集，移除磁盘上不存在的文件
         removed_datasets: List[str] = []
         for did, meta in list(self.datasets_registry.items()):

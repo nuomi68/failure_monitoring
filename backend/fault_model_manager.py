@@ -94,6 +94,9 @@ class FaultModelManager:
     def load_model(self, model_id: str) -> Tuple[FaultLevelEstimator, pd.DataFrame | None, Dict[str, Any]]:
         """Load estimator and associated dataset."""
 
+        # Refresh registry to include models saved by other processes
+        self.refresh_models()
+
         meta = self.registry.data.get(model_id)
         if not meta:
             raise KeyError(f"model_id '{model_id}' not found")
