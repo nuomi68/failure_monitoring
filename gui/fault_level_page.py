@@ -63,7 +63,7 @@ class FaultLevelPage(QWidget):
 
         upper = QWidget()
         up_lay = QVBoxLayout(upper)
-        up_lay.addWidget(QLabel("破口大小样本表"))
+        up_lay.addWidget(QLabel("损伤评估样本表"))
         self.tbl_labelled = SmartTable(
             SmartTableConfig(
                 show_label_selector=True,
@@ -74,7 +74,7 @@ class FaultLevelPage(QWidget):
 
         lower = QWidget()
         lo_lay = QVBoxLayout(lower)
-        lo_lay.addWidget(QLabel("待预测样本表"))
+        lo_lay.addWidget(QLabel("损伤评估输入表"))
         self.tbl_unlabelled = SmartTable(SmartTableConfig())
         lo_lay.addWidget(self.tbl_unlabelled)
 
@@ -126,10 +126,10 @@ class FaultLevelPage(QWidget):
 
         df_lab = self.tbl_labelled.dataframe()
         if df_lab.empty:
-            QMessageBox.warning(self, "提示", "破口大小样本表为空。")
+            QMessageBox.warning(self, "提示", "损伤评估样本表为空。")
             return
         if label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", f"破口大小列“{label_col}”不在样本表中。")
+            QMessageBox.warning(self, "提示", f"破口大小列“{label_col}”不在损伤评估样本表中。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
@@ -140,7 +140,7 @@ class FaultLevelPage(QWidget):
             QMessageBox.information(
                 self,
                 "数据清洗",
-                f"样本表中有 {len(nan_rows_lab)} 行包含非数值特征，已自动剔除：\n{[int(i) for i in nan_rows_lab]}"
+                f"损伤评估样本表中有 {len(nan_rows_lab)} 行包含非数值特征，已自动剔除：\n{[int(i) for i in nan_rows_lab]}"
             )
         keep_lab = ~X_lab.isna().any(axis=1)
         X_lab = X_lab[keep_lab].to_numpy(dtype=float)
@@ -152,7 +152,7 @@ class FaultLevelPage(QWidget):
 
         df_un = self.tbl_unlabelled.dataframe()
         if df_un.empty:
-            QMessageBox.warning(self, "提示", "待预测样本表为空，请先填写。")
+            QMessageBox.warning(self, "提示", "损伤评估输入表为空，请先填写。")
             return
 
         # 优先使用保存/加载的特征顺序
@@ -161,7 +161,7 @@ class FaultLevelPage(QWidget):
             feat_for_predict = list(self._estimator.feature_names)
         use_cols = [c for c in feat_for_predict if c in df_un.columns]
         if not use_cols:
-            QMessageBox.critical(self, "列不匹配", "待预测表与样本表的特征列不匹配。")
+            QMessageBox.critical(self, "列不匹配", "损伤评估输入表与损伤评估样本表的特征列不匹配。")
             return
 
         X_un = df_un[use_cols].apply(pd.to_numeric, errors="coerce")
@@ -170,7 +170,7 @@ class FaultLevelPage(QWidget):
             QMessageBox.information(
                 self,
                 "数据清洗",
-                f"待预测表中有 {len(nan_rows_un)} 行包含非数值或缺失，已自动剔除：\n{[int(i) for i in nan_rows_un]}"
+                f"损伤评估输入表中有 {len(nan_rows_un)} 行包含非数值或缺失，已自动剔除：\n{[int(i) for i in nan_rows_un]}"
             )
         keep_un = ~X_un.isna().any(axis=1)
         X_un_valid = X_un[keep_un].to_numpy(dtype=float)
@@ -185,7 +185,7 @@ class FaultLevelPage(QWidget):
         )
 
         if X_un_valid.shape[0] == 0:
-            QMessageBox.warning(self, "提示", "清洗后待预测表无有效行。")
+            QMessageBox.warning(self, "提示", "清洗后损伤评估输入表无有效行。")
             return
 
         preds = self._estimator.predict(X_un_valid)
@@ -208,7 +208,7 @@ class FaultLevelPage(QWidget):
         df_lab = self.tbl_labelled.dataframe()
         label_col = self.tbl_labelled.label_column()
         if df_lab.empty or not label_col or label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", "请先准备好样本表并指定破口大小列，再保存模型。")
+            QMessageBox.warning(self, "提示", "请先准备好损伤评估样本表并指定破口大小列，再保存模型。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
@@ -275,14 +275,14 @@ class FaultLevelPage(QWidget):
         self._scaler_code = s_specs[idx]
         self.btn_save.setEnabled(True)
 
-        # 载入训练样本表并同步特征列
+        # 载入损伤评估样本表并同步特征列
         if df is not None:
             with self.tbl_labelled.no_record():
                 self.tbl_labelled.set_dataframe(df, record_state=False)
                 lbl = meta.get("label_col")
                 if lbl and lbl in df.columns:
                     self.tbl_labelled.set_label_column(lbl)
-            # 清空待预测表但保留特征列
+            # 清空损伤评估输入表但保留特征列
             cols = est.feature_names or list(df.columns)
             self.tbl_unlabelled.set_dataframe(pd.DataFrame(columns=cols), record_state=False)
         else:
