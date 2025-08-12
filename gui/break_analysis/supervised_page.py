@@ -40,26 +40,27 @@ class PlotCanvas(FigureCanvas):
         tau = v / 1000.0
         self.lbl_tau.setText(f"阈值 τ = {tau:.3f}")
         self.threshold_changed.emit(tau)
-    def clear(self):
-        self.ax.clear()
+    def _clear_cbar(self):
         if self.cbar:
-            self.cbar.remove()
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
             self.cbar = None
+    def clear(self):
+        self._clear_cbar()
+        self.ax.clear()
         self.draw()
     def show_text(self, text: str):
+        self._clear_cbar()
         self.ax.clear()
-        if self.cbar:
-            self.cbar.remove()
-            self.cbar = None
         self.ax.text(0.5, 0.5, text, ha="center", va="center")
         self.ax.set_axis_off()
         self.fig.tight_layout()
         self.draw()
     def plot_pca(self, X: np.ndarray, labels: np.ndarray):
+        self._clear_cbar()
         self.ax.clear()
-        if self.cbar:
-            self.cbar.remove()
-            self.cbar = None
         XY = PCA(n_components=2, random_state=0).fit_transform(X)
         classes = np.unique(labels)
         for cls in classes:
@@ -76,6 +77,7 @@ class PlotCanvas(FigureCanvas):
         if labels is None:
             labels = np.unique(list(y_true) + list(y_pred))
         cm = confusion_matrix(y_true, y_pred, labels=labels)
+        self._clear_cbar()
         self.ax.clear()
         im = self.ax.imshow(cm, cmap="Blues")
         for i in range(cm.shape[0]):
@@ -88,8 +90,6 @@ class PlotCanvas(FigureCanvas):
         self.ax.set_xlabel("预测")
         self.ax.set_ylabel("真实")
         self.ax.set_title("混淆矩阵")
-        if self.cbar:
-            self.cbar.remove()
         self.cbar = self.fig.colorbar(im, ax=self.ax)
         self.fig.tight_layout()
         self.draw()
@@ -101,10 +101,8 @@ class PlotCanvas(FigureCanvas):
         p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, labels=labels, zero_division=0)
         x = np.arange(len(labels))
         w = 0.25
+        self._clear_cbar()
         self.ax.clear()
-        if self.cbar:
-            self.cbar.remove()
-            self.cbar = None
         self.ax.bar(x - w, p, w, label="精确率")
         self.ax.bar(x, r, w, label="召回率")
         self.ax.bar(x + w, f1, w, label="F1")
@@ -347,6 +345,7 @@ class SupervisedPage(QWidget):
 
         self.metrics_label = QLabel("")
         self.metrics_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.metrics_label.setVisible(False)
         right_v.addWidget(self.metrics_label)
 
         splitter.addWidget(right_panel)
@@ -490,44 +489,17 @@ class SupervisedPage(QWidget):
     def _compute_metrics(self):
         if self.y_true is None: return
         if self.is_clf:
-            from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-            import numpy as np
-            auc = None
-            classes = list(self.meta.get("classes_", []))
-            mapping = {c: i for i, c in enumerate(classes)} if classes else None
-            if self.binary and self.test_scores is not None and mapping is not None:
-                try:
-                    y_true_num = np.vectorize(mapping.get)(self.y_true)
-                    auc = roc_auc_score(y_true_num, self.test_scores)
-                except Exception:
-                    auc = None
-            acc = accuracy_score(self.y_true, self.y_pred)
-            avg = "binary" if self.binary else "macro"
-            if self.binary and classes:
-                pos_label = classes[1] if len(classes) > 1 else classes[0]
-                prec = precision_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
-                rec = recall_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
-                f1 = f1_score(self.y_true, self.y_pred, average=avg, pos_label=pos_label, zero_division=0)
-            else:
-                prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-                rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-                f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            parts = [
-                f"准确率={acc:.3f}",
-                f"精确率={prec:.3f}",
-                f"召回率={rec:.3f}",
-                f"F1值={f1:.3f}",
-            ]
-            if auc is not None:
-                parts.append(f"AUC={auc:.3f}")
-            self.metrics_text = " | ".join(parts)
+            self.metrics_text = ""
+            self.metrics_label.clear()
+            self.metrics_label.setVisible(False)
         else:
             from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
             mae = mean_absolute_error(self.y_true, self.y_pred)
             mse = mean_squared_error(self.y_true, self.y_pred)
             r2 = r2_score(self.y_true, self.y_pred)
             self.metrics_text = f"MAE={mae:.3f} | MSE={mse:.3f} | R2={r2:.3f}"
-        self.metrics_label.setText(self.metrics_text)
+            self.metrics_label.setText(self.metrics_text)
+            self.metrics_label.setVisible(True)
 
     def _reset_viz_mode(self):
         self.canvas.slider.setVisible(self.is_clf and self.binary)
@@ -540,6 +512,7 @@ class SupervisedPage(QWidget):
         else:
             self.viz_combo.addItems(["预测 vs 真实", "残差直方图", "残差散点", "PCA 彩色散点"])
         self.viz_combo.blockSignals(False)
+        self.metrics_label.setVisible(not self.is_clf)
 
     def _plot(self):
         if self.y_true is None: return
@@ -558,6 +531,7 @@ class SupervisedPage(QWidget):
                 ax.plot([lo, hi], [lo, hi], "--", color="gray", lw=1)
                 ax.set_xlabel("真实值")
                 ax.set_ylabel("预测值")
+                ax.set_title("预测值 vs 真实值")
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "残差直方图":
@@ -567,6 +541,7 @@ class SupervisedPage(QWidget):
                 ax.hist(res, bins=30, alpha=0.75)
                 ax.set_xlabel("残差")
                 ax.set_ylabel("频数")
+                ax.set_title("残差直方图")
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "残差散点":
@@ -577,6 +552,7 @@ class SupervisedPage(QWidget):
                 ax.axhline(0, color="gray", ls="--")
                 ax.set_xlabel("预测值")
                 ax.set_ylabel("残差")
+                ax.set_title("残差散点图")
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
             elif choice == "PCA 彩色散点":
@@ -588,6 +564,7 @@ class SupervisedPage(QWidget):
                 self.canvas.cbar = self.canvas.fig.colorbar(sc, ax=ax, label="|残差|")
                 ax.set_xlabel("PC1")
                 ax.set_ylabel("PC2")
+                ax.set_title("PCA 彩色散点")
                 self.canvas.fig.tight_layout()
                 self.canvas.draw()
 
