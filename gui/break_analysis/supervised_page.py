@@ -61,18 +61,6 @@ class PlotCanvas(FigureCanvas):
         self.ax.legend(title="类别")
         self.fig.tight_layout()
         self.draw()
-    def plot_roc(self, y_true, y_score):
-        from sklearn.metrics import roc_curve, auc
-        fpr, tpr, _ = roc_curve(y_true, y_score)
-        self.ax.clear()
-        self.ax.plot(fpr, tpr, lw=2, label=f"AUC={auc(fpr,tpr):.3f}")
-        self.ax.plot([0,1],[0,1],"--",color="gray",lw=1)
-        self.ax.set_xlabel("FPR")
-        self.ax.set_ylabel("TPR")
-        self.ax.set_title("ROC 曲线")
-        self.ax.legend()
-        self.fig.tight_layout()
-        self.draw()
     def plot_confmat(self, y_true, y_pred, labels=None):
         from sklearn.metrics import confusion_matrix
         if labels is None:
@@ -94,6 +82,26 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
+    def plot_scores(self, y_true, y_pred, labels=None):
+        from sklearn.metrics import precision_recall_fscore_support
+        if labels is None:
+            labels = np.unique(list(y_true) + list(y_pred))
+        p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, labels=labels, zero_division=0)
+        x = np.arange(len(labels))
+        w = 0.25
+        self.ax.clear()
+        self.ax.bar(x - w, p, w, label="精确率")
+        self.ax.bar(x, r, w, label="召回率")
+        self.ax.bar(x + w, f1, w, label="F1")
+        self.ax.set_xticks(x)
+        self.ax.set_xticklabels(labels, rotation=45, ha="right")
+        self.ax.set_ylim(0, 1)
+        self.ax.set_ylabel("得分")
+        self.ax.set_title("各类别指标")
+        self.ax.legend()
+        self.fig.tight_layout()
+        self.draw()
+
 
 # ============== 高级参数对话框 ==============
 class AdvParamsDlg(QDialog):
@@ -107,33 +115,38 @@ class AdvParamsDlg(QDialog):
 
         if "knn" in code:
             self.cb_w = QComboBox()
-            self.cb_w.addItems(["uniform","distance"])
-            self.cb_w.setCurrentText(params.get("weights","uniform"))
+            self.cb_w.addItems(["uniform", "distance"])
+            self.cb_w.setCurrentText(params.get("weights", "uniform"))
             form.addRow("weights", self.cb_w)
+
             self.cb_alg = QComboBox()
-            self.cb_alg.addItems(["auto","ball_tree","kd_tree","brute"])
-            self.cb_alg.setCurrentText(params.get("algorithm","auto"))
+            self.cb_alg.addItems(["auto", "ball_tree", "kd_tree", "brute"])
+            self.cb_alg.setCurrentText(params.get("algorithm", "auto"))
             form.addRow("algorithm", self.cb_alg)
+
             self.sp_leaf = QSpinBox()
-            self.sp_leaf.setRange(1,1000)
-            self.sp_leaf.setValue(int(params.get("leaf_size",30)))
+            self.sp_leaf.setRange(1, 1000)
+            self.sp_leaf.setValue(int(params.get("leaf_size", 30)))
             form.addRow("leaf_size", self.sp_leaf)
+
             self.cb_metric = QComboBox()
-            self.cb_metric.addItems(["minkowski","euclidean","manhattan","chebyshev"])
-            self.cb_metric.setCurrentText(params.get("metric","minkowski"))
+            self.cb_metric.addItems(["minkowski", "euclidean", "manhattan", "chebyshev"])
+            self.cb_metric.setCurrentText(params.get("metric", "minkowski"))
             form.addRow("metric", self.cb_metric)
+
             self.p_row = QWidget()
             p_layout = QHBoxLayout(self.p_row)
-            p_layout.setContentsMargins(0,0,0,0)
+            p_layout.setContentsMargins(0, 0, 0, 0)
             self.sp_p = QSpinBox()
-
             self.sp_p.setRange(1, 10)
             self.sp_p.setValue(int(params.get("p", 2)))
             p_layout.addWidget(QLabel("p:"))
             p_layout.addWidget(self.sp_p)
             form.addRow(self.p_row)
+
             self.cb_metric.currentTextChanged.connect(self._toggle_p_row)
             self._toggle_p_row(self.cb_metric.currentText())
+
             self.sp_jobs = QSpinBox()
             self.sp_jobs.setRange(-1, 64)
             self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
@@ -141,30 +154,36 @@ class AdvParamsDlg(QDialog):
 
         else:
             self.cb_criterion = QComboBox()
-        if self.is_clf:
-            self.cb_criterion.addItems(["gini", "entropy", "log_loss"])
-        else:
-            self.cb_criterion.addItems(["squared_error", "absolute_error", "friedman_mse", "poisson"])
+            if self.is_clf:
+                self.cb_criterion.addItems(["gini", "entropy", "log_loss"])
+            else:
+                self.cb_criterion.addItems(["squared_error", "absolute_error", "friedman_mse", "poisson"])
             self.cb_criterion.setCurrentText(params.get("criterion", self.cb_criterion.itemText(0)))
             form.addRow("criterion", self.cb_criterion)
+
             self.sp_depth = QSpinBox()
             self.sp_depth.setRange(0, 1000)
             depth_val = params.get("max_depth", None)
             self.sp_depth.setValue(0 if depth_val in (None, 0) else int(depth_val))
             form.addRow("max_depth(0=∞)", self.sp_depth)
+
             self.sp_mss = QSpinBox()
             self.sp_mss.setRange(2, 1000)
             self.sp_mss.setValue(int(params.get("min_samples_split", 2)))
             form.addRow("min_samples_split", self.sp_mss)
+
             self.sp_msl = QSpinBox()
             self.sp_msl.setRange(1, 1000)
             self.sp_msl.setValue(int(params.get("min_samples_leaf", 1)))
             form.addRow("min_samples_leaf", self.sp_msl)
+
             self.le_mf = QLineEdit(str(params.get("max_features", "sqrt")))
             form.addRow("max_features", self.le_mf)
+
             self.ck_boot = QCheckBox()
             self.ck_boot.setChecked(params.get("bootstrap", True))
             form.addRow("bootstrap", self.ck_boot)
+
             self.sp_jobs = QSpinBox()
             self.sp_jobs.setRange(-1, 64)
             self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
@@ -478,8 +497,14 @@ class SupervisedPage(QWidget):
                 prec = precision_score(self.y_true, self.y_pred, average=avg, zero_division=0)
                 rec = recall_score(self.y_true, self.y_pred, average=avg, zero_division=0)
                 f1 = f1_score(self.y_true, self.y_pred, average=avg, zero_division=0)
-            parts = [f"Accuracy={acc:.3f}", f"Precision={prec:.3f}", f"Recall={rec:.3f}", f"F1={f1:.3f}"]
-            if auc is not None: parts.append(f"AUC={auc:.3f}")
+            parts = [
+                f"准确率={acc:.3f}",
+                f"精确率={prec:.3f}",
+                f"召回率={rec:.3f}",
+                f"F1值={f1:.3f}",
+            ]
+            if auc is not None:
+                parts.append(f"AUC={auc:.3f}")
             self.metrics_text = " | ".join(parts)
         else:
             from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -496,10 +521,7 @@ class SupervisedPage(QWidget):
         self.viz_combo.clear()
 
         if self.is_clf:
-            base = ["混淆矩阵", "指标汇总", "PCA 彩色散点"]
-            if self.binary:
-                base.insert(0, "ROC 曲线")
-            self.viz_combo.addItems(base)
+            self.viz_combo.addItems(["混淆矩阵", "得分条形图"])
         else:
             self.viz_combo.addItems(["预测 vs 真实", "残差直方图", "残差散点", "PCA 彩色散点"])
         self.viz_combo.blockSignals(False)
@@ -508,19 +530,10 @@ class SupervisedPage(QWidget):
         if self.y_true is None: return
         choice = self.viz_combo.currentText()
         if self.is_clf:
-            if choice == "ROC 曲线" and self.binary and self.test_scores is not None:
-                classes = list(self.meta.get("classes_", []))
-                mapping = {c: i for i, c in enumerate(classes)} if classes else None
-                y_true_num = (
-                    np.vectorize(mapping.get)(self.y_true) if mapping is not None else self.y_true
-                )
-                self.canvas.plot_roc(y_true_num, self.test_scores)
-            elif choice == "混淆矩阵":
+            if choice == "混淆矩阵":
                 self.canvas.plot_confmat(self.y_true, self.y_pred, self.meta.get("classes_", None))
-            elif choice == "指标汇总":
-                self.canvas.show_text(self.metrics_text)
-            elif choice == "PCA 彩色散点":
-                self.canvas.plot_pca(self.X_test, self.y_true)
+            else:
+                self.canvas.plot_scores(self.y_true, self.y_pred, self.meta.get("classes_", None))
         else:
             if choice == "预测 vs 真实":
                 ax = self.canvas.ax
