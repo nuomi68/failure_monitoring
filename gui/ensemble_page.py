@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QGridLayout,
     QLabel,
-    QGroupBox,
     QPushButton,
     QMessageBox,
 )
@@ -28,9 +27,9 @@ from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
 class EnsemblePage(QWidget):
     """模型流水线页面：
 
-    - 支持按块启用时间序列、通用 ML 与故障等级模型
+    - 管理时间序列、通用 ML 与故障等级模型的加载与推理
     - 仅做模型加载与推理，不涉及训练
-    - 若启用了时间序列模块，预测结果会自动追加到底部共用表
+    - 时间序列预测结果会自动追加到底部共用表
     - 下游表可再喂给 ML 或故障等级模块进行最终推理
     """
 
@@ -101,7 +100,7 @@ class EnsemblePage(QWidget):
     # 工具函数
     # ------------------------------------------------------------------
     def _rebuild_model_chips(self, layout, ids: List[str], names: Dict[str, str], remove_cb) -> None:
-        layout.setSpacing(6)
+        layout.setSpacing(4)
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
@@ -110,12 +109,14 @@ class EnsemblePage(QWidget):
         for mid in ids:
             w = QWidget()
             l = QHBoxLayout(w)
-            l.setContentsMargins(4, 0, 4, 0)
-            l.setSpacing(4)
-            l.addWidget(QLabel(names.get(mid, mid)))
+            l.setContentsMargins(2, 0, 2, 0)
+            l.setSpacing(2)
+            lbl = QLabel(names.get(mid, mid))
+            lbl.setStyleSheet("padding:0 2px")
+            l.addWidget(lbl)
             btn = QPushButton("x")
-            btn.setFixedSize(16, 16)
-            btn.setStyleSheet("padding:0")
+            btn.setFixedSize(14, 14)
+            btn.setStyleSheet("border:none;padding:0")
             btn.clicked.connect(lambda _, m=mid: remove_cb(m))
             l.addWidget(btn)
             layout.addWidget(w)
@@ -173,12 +174,17 @@ class EnsemblePage(QWidget):
     # ------------------------------------------------------------------
     # 左侧块构建
     # ------------------------------------------------------------------
-    def _build_ts_block(self) -> QGroupBox:
-        g = QGroupBox("时间序列模型")
-        lay = QVBoxLayout(g)
+    def _build_ts_block(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("时间序列模型")
+        title.setStyleSheet("font-weight:bold")
+        lay.addWidget(title)
 
         self.ts_controls = QWidget()
         row = QHBoxLayout(self.ts_controls)
+        row.setContentsMargins(0, 0, 0, 0)
         self.btn_ts_load = QPushButton("加载模型…")
         self.btn_ts_clear = QPushButton("清空")
         row.addWidget(self.btn_ts_load)
@@ -187,41 +193,58 @@ class EnsemblePage(QWidget):
 
         self.ts_model_wrap = QWidget()
         self.ts_model_layout = QVBoxLayout(self.ts_model_wrap)
+        self.ts_model_layout.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.ts_model_wrap)
 
         self.btn_ts_load.clicked.connect(self._open_ts_dialog)
         self.btn_ts_clear.clicked.connect(self._on_clear_ts)
-        return g
+        return w
 
-    def _build_ml_block(self) -> QGroupBox:
-        g = QGroupBox("通用 ML 模型")
-        lay = QVBoxLayout(g)
+    def _build_ml_block(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("通用 ML 模型")
+        title.setStyleSheet("font-weight:bold")
+        lay.addWidget(title)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         self.btn_ml_load = QPushButton("加载模型…")
         self.btn_ml_clear = QPushButton("清空")
-        row = QHBoxLayout(); row.addWidget(self.btn_ml_load); row.addWidget(self.btn_ml_clear)
+        row.addWidget(self.btn_ml_load)
+        row.addWidget(self.btn_ml_clear)
         lay.addLayout(row)
         self.ml_model_wrap = QWidget()
         self.ml_model_layout = QVBoxLayout(self.ml_model_wrap)
+        self.ml_model_layout.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.ml_model_wrap)
 
         self.btn_ml_load.clicked.connect(self._open_ml_dialog)
         self.btn_ml_clear.clicked.connect(self._on_clear_ml)
-        return g
+        return w
 
-    def _build_fault_block(self) -> QGroupBox:
-        g = QGroupBox("故障等级模型")
-        lay = QVBoxLayout(g)
+    def _build_fault_block(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("故障等级模型")
+        title.setStyleSheet("font-weight:bold")
+        lay.addWidget(title)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         self.btn_fault_load = QPushButton("加载模型…")
         self.btn_fault_clear = QPushButton("清空")
-        row = QHBoxLayout(); row.addWidget(self.btn_fault_load); row.addWidget(self.btn_fault_clear)
+        row.addWidget(self.btn_fault_load)
+        row.addWidget(self.btn_fault_clear)
         lay.addLayout(row)
         self.fault_model_wrap = QWidget()
         self.fault_model_layout = QVBoxLayout(self.fault_model_wrap)
+        self.fault_model_layout.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.fault_model_wrap)
 
         self.btn_fault_load.clicked.connect(self._open_fault_dialog)
         self.btn_fault_clear.clicked.connect(self._on_clear_fault)
-        return g
+        return w
 
     # ------------------------------------------------------------------
     # 右侧动作
