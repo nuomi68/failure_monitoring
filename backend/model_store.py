@@ -65,3 +65,23 @@ class JsonRegistry:
             self.write()
         return items
 
+    # ------------------------------------------------------------------
+    def get(self, key: str, default: Any = None) -> Any:
+        """Return a registry record by *key*.
+
+        The method reloads the underlying JSON file before every access so
+        that concurrent manager instances see up-to-date information.
+        """
+        self.reload()
+        return self.data.get(key, default)
+
+    # ------------------------------------------------------------------
+    def __contains__(self, key: str) -> bool:  # pragma: no cover - trivial
+        self.reload()
+        return key in self.data
+
+    # ------------------------------------------------------------------
+    def __getitem__(self, key: str) -> Dict[str, Any]:  # pragma: no cover
+        self.reload()
+        return self.data[key]
+
