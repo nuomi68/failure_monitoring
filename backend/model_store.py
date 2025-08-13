@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-"""Utility helpers for storing models and their JSON registries.
+"""用于存储模型及其 JSON 注册表的实用工具。
 
-This module centralizes the logic for creating model directories under the
-project's ``models_saved`` folder and for reading/writing simple JSON-based
-registries.  Several model manager implementations previously carried their own
-boilerplate for these tasks; consolidating them here keeps the managers
-consistent and easier to maintain."""
+该模块集中管理在项目的 ``models_saved`` 文件夹下创建模型目录以及读写
+简单 JSON 注册表的逻辑。此前多个模型管理器各自携带这些样板代码；将它们
+整合在此可以保持管理器一致并更易维护。"""
 
 from pathlib import Path
 import json
@@ -14,17 +12,16 @@ from typing import Any, Dict, List
 
 
 def ensure_root(kind: str) -> Path:
-    """Return the directory for a given model *kind* and ensure it exists."""
+    """返回指定模型 *kind* 的目录并确保其存在。"""
     root = Path(__file__).resolve().parents[1] / "models_saved" / kind
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
 class JsonRegistry:
-    """Small helper around a ``registry.json`` file.
+    """围绕 ``registry.json`` 文件的轻量辅助类。
 
-    The class reloads from disk before each refresh so multiple manager
-    instances can cooperate safely.
+    该类在每次刷新前都会从磁盘重新加载，以便多个管理器实例能够安全协作。
     """
 
     def __init__(self, root: Path, filename: str = "registry.json") -> None:
@@ -51,7 +48,7 @@ class JsonRegistry:
 
     # ------------------------------------------------------------------
     def refresh(self) -> List[Dict[str, Any]]:
-        """Return existing items and drop records with missing files."""
+        """返回已存在的项目，并删除缺失文件的记录。"""
         self.reload()
         changed = False
         items: List[Dict[str, Any]] = []
@@ -67,10 +64,10 @@ class JsonRegistry:
 
     # ------------------------------------------------------------------
     def get(self, key: str, default: Any = None) -> Any:
-        """Return a registry record by *key*.
+        """根据 *key* 返回注册表记录。
 
-        The method reloads the underlying JSON file before every access so
-        that concurrent manager instances see up-to-date information.
+        该方法在每次访问前都会重新加载底层 JSON 文件，以便并发的管理器实例
+        能看到最新信息。
         """
         self.reload()
         return self.data.get(key, default)
