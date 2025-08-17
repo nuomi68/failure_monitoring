@@ -27,7 +27,8 @@ import os
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
+import logging
 from sklearn.model_selection import train_test_split
 
 
@@ -362,8 +363,6 @@ class ModelManager:
         dataset_id: str,
         model_type: str,
         params: Dict[str, Any],
-        log_callback: Optional[Callable[[str], None]] = None,
-        use_color: bool = False,
     ) -> Dict[str, Any]:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
@@ -410,9 +409,7 @@ class ModelManager:
             raise KeyError(f"未知的模型类型: {model_type}")
         train_fn = MODEL_REGISTRY[model_type]["train"]
         if model_type in {"rf", "xgb"}:
-            result = train_fn(
-                X_tr, y_tr, X_val, y_val, log_callback=log_callback, **train_params
-            )
+            result = train_fn(X_tr, y_tr, X_val, y_val, **train_params)
         else:
             result = train_fn(
                 X_tr,
@@ -421,7 +418,6 @@ class ModelManager:
                 y_val,
                 batch_size=batch_size,
                 epochs=epochs,
-                log_callback=log_callback,
                 **train_params,
             )
 
@@ -436,12 +432,10 @@ class ModelManager:
         test_preds = np.array([predict_fn(model_obj, seq) for seq in X_val])
         train_mae = mean_absolute_error(y_tr, train_preds)
         test_mae = mean_absolute_error(y_val, test_preds)
-        if log_callback:
-            msg = (
-                f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
-                f"测试集误差={test_mae:.4f}"
-            )
-            log_callback(msg)
+        logger = logging.getLogger("failure_monitoring")
+        logger.info(
+            f"[{model_type.upper()}] 训练集误差={train_mae:.4f} 测试集误差={test_mae:.4f}"
+        )
         metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）

@@ -23,7 +23,6 @@ if not logger.handlers:
 
 
 class TrainWorker(QThread):
-    log_sig  = pyqtSignal(str)           # 实时日志
     done_sig = pyqtSignal(dict)          # 训练返回值或异常
 
     def __init__(self, mgr, ds_id, m_type, params, parent=None):
@@ -31,12 +30,8 @@ class TrainWorker(QThread):
         self.mgr, self.ds_id, self.m_type, self.params = mgr, ds_id, m_type, params
 
     def run(self):
-        def _log(msg: str):              # 供后端回调
-            self.log_sig.emit(msg)
         try:
-            res = self.mgr.train(
-                self.ds_id, self.m_type, self.params, log_callback=_log, use_color=False
-            )
+            res = self.mgr.train(self.ds_id, self.m_type, self.params)
             self.done_sig.emit({"ok": True, "res": res})
         except Exception as e:
             self.done_sig.emit({"ok": False, "err": str(e)})

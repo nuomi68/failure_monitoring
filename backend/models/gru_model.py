@@ -1,9 +1,12 @@
 import math
-from typing import Callable, Optional, Tuple
+import logging
+from typing import Tuple
 
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
+
+logger = logging.getLogger("failure_monitoring")
 
 
 def _to_tensor(arr, device):
@@ -45,7 +48,6 @@ def train_gru(
     hidden_size: int = 32,
     num_layers: int = 2,
     dropout: float = 0.3,
-    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[nn.Module, float]:
     """Train a GRU forecasting model and return the model and validation MAE."""
     dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
@@ -79,10 +81,9 @@ def train_gru(
         vloss /= len(dval.dataset)
         best = min(best, vloss)
 
-        if log_callback:
-            log_callback(
-                f"[GRU] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
-            )
+        logger.info(
+            f"[GRU] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
+        )
 
     return model, best
 

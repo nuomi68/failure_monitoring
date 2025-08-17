@@ -378,7 +378,6 @@ class TimeSeriesPage(QWidget):
             params,
             self
         )
-        w.log_sig.connect(lambda m: logger.info(m))  # 日志滚动
         w.done_sig.connect(self._on_train_finished)  # 收尾
         w.start()
         self._worker = w  # 防 GC
