@@ -41,6 +41,10 @@ from backend.models import (
     timesnet_model
 )
 
+import logging
+
+logger = logging.getLogger("failure_monitoring")
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # 把所有模型的 train 和 predict 函数映射到同一个结构
 MODEL_REGISTRY = {
@@ -378,6 +382,7 @@ class ModelManager:
         else:
             raise KeyError(f"未找到数据集 {dataset_id}")
 
+
         # 只用数值特征（去掉时间列），并按需筛选特征列
         feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
         feature_cols = params.pop("feature_cols", None)
@@ -438,11 +443,11 @@ class ModelManager:
         test_mae = mean_absolute_error(y_val, test_preds)
         if log_callback:
             msg = (
-                f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
-                f"测试集误差={test_mae:.4f}"
+                f"[{model_type.upper()}] 训练集MAE误差={train_mae:.4f} "
+                f"测试集MAE误差={test_mae:.4f}"
             )
             log_callback(msg)
-        metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
+        metrics = {"训练集MAE误差": float(train_mae), "测试集MAE误差": float(test_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
         _RuntimeSingleton.reset()
@@ -624,6 +629,7 @@ class ModelManager:
         :returns: 包含 ``model`` 和 ``meta`` 的字典；其中 ``model`` 是保存的模型对象，``meta`` 是注册表中的元数据。
         :raises KeyError: 如果模型 ID 不存在。
         """
+
         # 首先刷新注册表，清除可能已被删除的模型文件
         self.refresh_models()
         if model_id not in self.models_registry:
@@ -681,6 +687,7 @@ class ModelManager:
         rt.feature_names = feature_names
         rt.data_scaled = data_scaled
         rt.dataset_id = dataset_id
+
 
         return {"model": model_obj, "meta": meta}
 

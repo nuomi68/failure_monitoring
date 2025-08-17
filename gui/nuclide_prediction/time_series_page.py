@@ -33,7 +33,7 @@ from backend.timeseries_interface import ModelManager
 from gui.tools import logger,TrainWorker
 
 from  gui.data_load_dialog import DataLoadDialog, DataFrameModel
-from .model_manager_dialog import ModelManagerDialog
+from gui.model_manager_dialog import ModelManagerDialog
 from .param_panel import ParamPanel
 from ..feature_selector_widget import FeatureSelectorWidget
 
@@ -335,8 +335,7 @@ class TimeSeriesPage(QWidget):
         self.param_panel.set_params(params)
 
         metrics = meta.get("metrics", {})
-        for line in [f"{k}: {v}" for k, v in metrics.items()]:
-            logger.info(line)
+
         self.status_label.setText(f"已加载模型 {model_id}")
         self._model_id = model_id
 
@@ -363,6 +362,7 @@ class TimeSeriesPage(QWidget):
         if not self._dataset_id:
             QMessageBox.warning(self, "提示", "先加载数据集")
             return
+        logger.info("开始训练模型")
         self.status_label.setText("训练中…")
         self.btn_train.setEnabled(False)
         self.btn_save.setEnabled(False)
@@ -388,13 +388,21 @@ class TimeSeriesPage(QWidget):
         self.btn_save.setEnabled(True)
         self.btn_stop_train.setVisible(False)
         if not payload["ok"]:
-            QMessageBox.critical(self, "错误", f"训练失败：{payload['err']}")
+            err = payload['err']
+            logger.error(f"训练失败：{err}")
+            QMessageBox.critical(self, "错误", f"训练失败：{err}")
             self.status_label.setText("训练失败")
             self.btn_predict.setEnabled(self._trained_model is not None)
             return
+
         result = payload["res"]
         self._trained_model = result["model"]
+        metrics = result.get("metrics", {})
+        for key, value in metrics.items():
+            logger.info(f"{key}: {float(value):.4f}")
+        self._trained_model = result["model"]
         self._trained_metrics = result["metrics"]
+        self._trained_metrics = metrics
         self._trained_params = self.param_panel.params()
         self._trained_model_type = self.model_type_combo.currentData()
         self._look_back = int(result.get("extra", {}).get("look_back", self._look_back))

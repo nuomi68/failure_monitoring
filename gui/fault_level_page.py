@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 
 from backend.fault_level_estimator import FaultLevelEstimator
 from backend.fault_model_manager import FaultModelManager
-from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
+from gui.model_manager_dialog import ModelManagerDialog
 
 from gui.smart_table import SmartTable, SmartTableConfig
 

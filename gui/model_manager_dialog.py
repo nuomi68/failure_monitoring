@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
 )
-
+from gui.tools import logger
 
 class ModelManagerDialog(QDialog):
     """通用模型管理对话框，支持可选多选模式。"""
@@ -111,6 +111,20 @@ class ModelManagerDialog(QDialog):
                 metrics_text = str(metrics or "")
             self.table.setItem(r, 5, QTableWidgetItem(metrics_text))
 
+    def _cell_text(self, row: int, col: int) -> str:
+        item = self.table.item(row, col)
+        return item.text().strip() if item else ""
+
+    def _row_meta(self, r: int) -> dict:
+        return {
+            "name": self._cell_text(r, 0),
+            "model_id": self._cell_text(r, 1),
+            "model_type": self._cell_text(r, 2),
+            "dataset_id": self._cell_text(r, 3),
+            "created_at": self._cell_text(r, 4),
+            "remarks": self._cell_text(r, 5),  # 你现在第5列填的是“备注/指标”的文本
+        }
+
     # ---------- actions ----------
     def _load_clicked(self):
         if self._multi:
@@ -123,7 +137,16 @@ class ModelManagerDialog(QDialog):
             self.accept()
             return
 
+        # ---- 单选 ----
+        r = self.table.currentRow()
         mid = self._selected_model_id()
+        m = self._row_meta(r)
+        remark = (m["remarks"][:100] + "…") if len(m["remarks"]) > 100 else m["remarks"]
+        logger.info(
+            "加载模型：%s (ID:%s, 类型:%s, 数据集:%s, 创建时间:%s%s)",
+            m["name"], m["model_id"], m["model_type"], m["dataset_id"], m["created_at"],
+            (", 备注=" + remark) if remark else ""
+        )
         if not mid:
             QMessageBox.information(self, "提示", "请先选中一个模型。")
             return
