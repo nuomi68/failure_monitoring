@@ -23,6 +23,8 @@ import torch
 import numpy as np
 import pandas as pd
 import joblib
+import os
+import sys
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass
@@ -362,6 +364,7 @@ class ModelManager:
         model_type: str,
         params: Dict[str, Any],
         log_callback: Optional[Callable[[str], None]] = None,
+        use_color: bool = True,
     ) -> Dict[str, Any]:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
@@ -435,11 +438,10 @@ class ModelManager:
         train_mae = mean_absolute_error(y_tr, train_preds)
         val_mae = mean_absolute_error(y_val, val_preds)
         if log_callback:
-            green = "\033[92m"
-            reset = "\033[0m"
-            log_callback(
-                f"{green}[{model_type.upper()}] train_mae={train_mae:.4f} val_mae={val_mae:.4f}{reset}"
-            )
+            msg = f"[{model_type.upper()}] train_mae={train_mae:.4f} val_mae={val_mae:.4f}"
+            if use_color and sys.stdout.isatty():
+                msg = f"\033[92m{msg}\033[0m"
+            log_callback(msg)
         metrics = {"train_mae": float(train_mae), "val_mae": float(val_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
