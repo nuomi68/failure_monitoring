@@ -21,6 +21,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from sklearn.decomposition import PCA
 
 from backend.ml_interface import ML
+from gui.tools import logger
 
 # ============== 画布 ==============
 class UnCanvas(FigureCanvas):
@@ -372,6 +373,8 @@ class UnsupervisedPage(QWidget):
             it = QListWidgetItem(col)
             it.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
             self.column_list.addItem(it)
+        # [LOG]
+        self._log_data_overview(self.selected_columns())
 
     def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
@@ -400,8 +403,12 @@ class UnsupervisedPage(QWidget):
             self.k_spin.setValue(int(self.ae_params.get("epochs", 50)))
             self.contam_label.hide()
             self.contam_spin.hide()
+        # [LOG]
+        logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
     # ---------------- 打开高级参数对话框 ----------------
     def open_advanced_dialog(self):
+        # [LOG]
+        logger.info("打开高级参数：算法=%s", self.alg_combo.currentText())
         alg = self.alg_combo.currentData()
         params = (
             self.knn_params if alg == "knn"
@@ -439,6 +446,8 @@ class UnsupervisedPage(QWidget):
             # 解析 max_samples
             max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(X))
             params["max_samples"] = max_samples
+        # [LOG] 训练前信息
+        self._log_train_start(X)
 
         rep = ML.train(
             alg=alg,
@@ -448,13 +457,20 @@ class UnsupervisedPage(QWidget):
             feature_names=cols,
         )
         self.meta = ML.get_meta()                    # meta["tau"] 是 0~1
+        # [LOG] 训练完成后的 meta 概览
+        self._log_meta_after_train()
         self.scores = rep.scores                     # 已经是 0~1
         self.X_scaled = ML.transform(X)
+        # [LOG] 打分完成
+        self._log_scores_ready()
         tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
         self.canvas.slider.setValue(int(tau * 1000))
+        logger.info("启用阈值：τ=%.3f", tau)  # [LOG]
         self.refresh_plot()
 
     def on_tau_changed(self, tau: float):
+        # [LOG]
+        self._log_tau_changed(tau)
         self.meta["tau"] = tau
         try:
             from backend.ml_interface import ML
@@ -464,6 +480,8 @@ class UnsupervisedPage(QWidget):
         self.refresh_plot()
 
     def refresh_plot(self):
+        # [LOG]
+        self._log_viz()
         if self.scores is None:
             return
         tau = float(self.meta.get("tau", 0.5))
@@ -512,3 +530,32 @@ class UnsupervisedPage(QWidget):
         except Exception:
             pass
         return "auto"
+
+    # ============== logging helpers ==============
+    def _log_data_overview(self, cols):
+        total = self.df.shape[1] if self.df is not None else 0
+        logger.info("数据集就绪：特征已选=%d/%d", len(cols), total)
+
+    def _log_train_start(self, X):
+        logger.info("开始训练：算法=%s，规范化器=%s，样本数=%d，特征数=%d",
+                    self.alg_combo.currentText(), self.scaler_combo.currentText(),
+                    X.shape[0], X.shape[1])
+
+    def _log_meta_after_train(self):
+        if not self.meta: return
+        model = self.meta.get("model_type", "")
+        scaler = self.meta.get("scaler", "")
+        tau = self.meta.get("tau", None)
+        pieces = [f"模型={model}", f"规范化器={scaler}"]
+        if tau is not None: pieces.append(f"阈值τ={tau:.3f}")
+        logger.info("训练完成：%s", "，".join(pieces))
+
+    def _log_scores_ready(self):
+        if self.scores is None: return
+        logger.info("打分完成：样本数=%d（scores 已就绪）", len(self.scores))
+
+    def _log_tau_changed(self, tau: float):
+        logger.info("阈值 τ 更新为 %.3f", tau)
+
+    def _log_viz(self):
+        logger.info("切换可视化：%s", self.viz_combo.currentText())
