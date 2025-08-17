@@ -363,7 +363,7 @@ class ModelManager:
         model_type: str,
         params: Dict[str, Any],
         log_callback: Optional[Callable[[str], None]] = None,
-        use_color: bool = True,
+        use_color: bool = False,
     ) -> Dict[str, Any]:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。

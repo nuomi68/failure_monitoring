@@ -35,7 +35,7 @@ class TrainWorker(QThread):
             self.log_sig.emit(msg)
         try:
             res = self.mgr.train(
-                self.ds_id, self.m_type, self.params, log_callback=_log, use_color=True
+                self.ds_id, self.m_type, self.params, log_callback=_log, use_color=False
             )
             self.done_sig.emit({"ok": True, "res": res})
         except Exception as e:

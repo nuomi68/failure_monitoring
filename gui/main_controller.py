@@ -1,5 +1,6 @@
 import sys
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRegularExpression
+from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 import logging
+import re
 
 from gui.tools import logger
 
@@ -26,9 +28,42 @@ class QtLogHandler(logging.Handler):
             logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
         )
 
+    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
+        msg = self.ansi_re.sub("", msg)
         self.widget.appendPlainText(msg)
+
+
+class LogHighlighter(QSyntaxHighlighter):
+    """Highlight INFO/WARN/ERROR keywords in the log view."""
+
+    def __init__(self, doc) -> None:
+        super().__init__(doc)
+        self.rules = []
+
+        f_ok = QTextCharFormat()
+        f_ok.setForeground(QColor("#16a34a"))
+        f_warn = QTextCharFormat()
+        f_warn.setForeground(QColor("#f59e0b"))
+        f_err = QTextCharFormat()
+        f_err.setForeground(QColor("#ef4444"))
+
+        self.rules += [
+            (QRegularExpression(r"\bINFO\b|\bOK\b"), f_ok),
+            (QRegularExpression(r"\bWARN(ING)?\b"), f_warn),
+            (QRegularExpression(r"\bERR(OR)?\b|异常"), f_err),
+        ]
+
+    def highlightBlock(self, text: str) -> None:
+        for pattern, fmt in self.rules:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                match = it.next()
+                start = match.capturedStart()
+                length = match.capturedLength()
+                self.setFormat(start, length, fmt)
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage
@@ -131,6 +166,7 @@ class MainController(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumHeight(150)
+        self.highlighter = LogHighlighter(self.log_view.document())
 
         right_layout.addWidget(self.stack)
         right_layout.addWidget(self.log_view)
