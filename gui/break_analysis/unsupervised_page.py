@@ -447,17 +447,20 @@ class UnsupervisedPage(QWidget):
             scaler=scaler_spec,
             feature_names=cols,
         )
-        self.meta = ML.get_meta()
-        self.scores = rep.scores
+        self.meta = ML.get_meta()                    # meta["tau"] 是 0~1
+        self.scores = rep.scores                     # 已经是 0~1
         self.X_scaled = ML.transform(X)
-
-        default_tau = np.quantile(self.scores, 1 - self.contam_spin.value())
-        tau = float(self.meta.get("tau", default_tau))
+        tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
         self.canvas.slider.setValue(int(tau * 1000))
         self.refresh_plot()
 
     def on_tau_changed(self, tau: float):
         self.meta["tau"] = tau
+        try:
+            from backend.ml_interface import ML
+            ML.set_tau(tau, normalized=True)     # ★ 回写给后端
+        except Exception:
+            pass
         self.refresh_plot()
 
     def refresh_plot(self):
