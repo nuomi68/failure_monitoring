@@ -1,5 +1,6 @@
 import sys
 from PyQt6.QtCore import Qt, QRegularExpression
+from PyQt6 import QtCore
 from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -18,22 +19,34 @@ import re
 
 from gui.tools import logger
 
-class QtLogHandler(logging.Handler):
-    """Simple logging handler that appends logs to a QPlainTextEdit."""
+
+class QtLogHandler(QtCore.QObject, logging.Handler):
+    """Thread-safe logging handler that appends logs to a QPlainTextEdit."""
+
+    sig_append = QtCore.pyqtSignal(str)
+    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
 
     def __init__(self, widget: QPlainTextEdit):
-        super().__init__()
+        QtCore.QObject.__init__(self)
+        logging.Handler.__init__(self)
         self.widget = widget
         self.setFormatter(
             logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
         )
+        self.sig_append.connect(self._append)
 
-    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+    @QtCore.pyqtSlot(str)
+    def _append(self, msg: str):
+        self.widget.appendPlainText(msg)
 
     def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
+        try:
+            msg = self.format(record)
+        except Exception:
+            self.handleError(record)
+            return
         msg = self.ansi_re.sub("", msg)
-        self.widget.appendPlainText(msg)
+        self.sig_append.emit(msg)
 
 
 class LogHighlighter(QSyntaxHighlighter):
