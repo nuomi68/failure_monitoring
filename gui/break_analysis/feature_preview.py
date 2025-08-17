@@ -129,6 +129,13 @@ class FeaturePreviewWidget(QWidget):
         self._refresh_axis_comboboxes(cols)
         self._update_plot()
 
+    def index_column(self) -> str | None:
+        """Return the currently selected sample name column, if any."""
+        idx_choice = self.cmb_idx.currentText()
+        if idx_choice != "递增数列(默认)" and idx_choice in self._df.columns:
+            return idx_choice
+        return None
+
     # ======= 内部工具 ======================================================
     def _refresh_axis_comboboxes(self, cols: list[str]):
         """

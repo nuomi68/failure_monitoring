@@ -204,6 +204,34 @@ def _encode_X(X: np.ndarray, feature_names: list[str], encoders: Dict[str, Label
     return X_work.astype(float)
 
 
+# ---------------------------- 工具：分数归一化 ----------------------------
+def _build_score_normalizer(scores: np.ndarray, bins: int = 256) -> dict:
+    """用训练集 scores 建立 ECDF 标定器，保存若干分位点，便于正反查表。"""
+    s = np.asarray(scores, dtype=float)
+    s = s[np.isfinite(s)]
+    q = np.linspace(0.0, 1.0, bins)
+    v = np.quantile(s, q)
+    return {"method": "ecdf", "q": q.tolist(), "v": v.tolist()}
+
+
+def _score_to_q(x: np.ndarray | float, norm: dict | None) -> np.ndarray | float:
+    """原始分数 -> [0,1]。"""
+    if not norm:
+        return x
+    q = np.asarray(norm["q"], dtype=float)
+    v = np.asarray(norm["v"], dtype=float)
+    return np.interp(x, v, q)
+
+
+def _q_to_score(qv: np.ndarray | float, norm: dict | None) -> np.ndarray | float:
+    """[0,1] -> 原始分数阈值。"""
+    if not norm:
+        return qv
+    q = np.asarray(norm["q"], dtype=float)
+    v = np.asarray(norm["v"], dtype=float)
+    return np.interp(qv, q, v)
+
+
 # ---------------------------- 工具：公式依赖 ----------------------------
 
 _EXPR_FUNC_TOKENS = {"np", "sqrt", "log", "log10", "abs"}
@@ -388,14 +416,23 @@ def _train_impl(
     Xs, scaler_obj = _fit_transform_unsupervised(X_enc, scaler_spec=scaler)
     model = adapter.build(**params)
     model = adapter.fit(model, Xs, None)
-    scores = adapter.scores(model, Xs)
-    tau = adapter.default_tau(scores)
+
+    scores_raw = adapter.scores(model, Xs)                   # 原始分数
+    norm = _build_score_normalizer(scores_raw)              # 保存分布标定器
+    scores = _score_to_q(scores_raw, norm)                  # 统一到 [0,1]
+
+    tau_raw = adapter.default_tau(scores_raw)               # 模型给出的原始阈值
+    tau = float(_score_to_q(float(tau_raw), norm))          # 统一到 [0,1]
+
     recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
     le = LabelEncoder()
     le.fit(["否", "是"])
+
     meta = {
         "model_type": adapter.meta_model_type(),
         "tau": tau,
+        "tau_is_normalized": True,
+        "score_norm": norm,
         "advanced": params,
         "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
         "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
@@ -428,18 +465,26 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     adapter = get_adapter(alg)
 
     if adapter.kind == "unsupervised":
-        scores = adapter.scores(artifact.model, Xs)
-        tau = artifact.meta.get("tau")
-        if scores is None:
+        scores_raw = adapter.scores(artifact.model, Xs)      # 原始分数
+        norm = artifact.meta.get("score_norm")
+        scores = _score_to_q(scores_raw, norm)               # 返回给前端的 0~1 分数
+
+        tau_meta = artifact.meta.get("tau")
+        if scores_raw is None:
             return np.array([]), None
         try:
-            t = float(tau) if tau is not None else None
+            t_meta = float(tau_meta) if tau_meta is not None else None
         except Exception:
-            t = None
-        if t is None:
-            labels = np.zeros_like(scores, dtype=int)
+            t_meta = None
+
+        if t_meta is None:
+            labels = np.zeros_like(scores_raw, dtype=int)
         else:
-            labels = (scores >= t).astype(int)
+            if artifact.meta.get("tau_is_normalized", False) and norm:
+                t_raw = float(_q_to_score(t_meta, norm))     # 0~1 -> 原始阈值
+            else:
+                t_raw = t_meta
+            labels = (scores_raw >= t_raw).astype(int)       # 一律用原始分数比较
         return labels, scores
 
     y_pred = adapter.predict(artifact.model, Xs)
@@ -679,6 +724,13 @@ class ML:
                 "groups": {t: [m.meta for m in arts] for t, arts in cur.groups.items()},
             }
         return dict(cur.meta)
+
+    @classmethod
+    def set_tau(cls, tau: float, *, normalized: bool = True) -> None:
+        if STATE.current is None:
+            raise RuntimeError("没有可更新的模型。")
+        STATE.current.meta["tau"] = float(tau)
+        STATE.current.meta["tau_is_normalized"] = bool(normalized)
 
     # ★ 新增：在训练前后、或任意时机注入/覆盖“计算器公式”
     @classmethod
