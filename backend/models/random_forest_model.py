@@ -18,8 +18,6 @@ def train_rf(
     model.fit(X_train.reshape(len(X_train), -1), y_train)
     preds = model.predict(X_val.reshape(len(X_val), -1))
     mae = mean_absolute_error(y_val, preds)
-    if log_callback:
-        log_callback(f"[RF] val_mae={mae:.4f}")
     return model, mae
 
 

@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 import joblib
 import os
-import sys
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass
@@ -434,15 +433,18 @@ class ModelManager:
 
         predict_fn = MODEL_REGISTRY[model_type]["predict"]
         train_preds = np.array([predict_fn(model_obj, seq) for seq in X_tr])
-        val_preds = np.array([predict_fn(model_obj, seq) for seq in X_val])
+        test_preds = np.array([predict_fn(model_obj, seq) for seq in X_val])
         train_mae = mean_absolute_error(y_tr, train_preds)
-        val_mae = mean_absolute_error(y_val, val_preds)
+        test_mae = mean_absolute_error(y_val, test_preds)
         if log_callback:
-            msg = f"[{model_type.upper()}] train_mae={train_mae:.4f} val_mae={val_mae:.4f}"
-            if use_color and sys.stdout.isatty():
+            msg = (
+                f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
+                f"测试集误差={test_mae:.4f}"
+            )
+            if use_color:
                 msg = f"\033[92m{msg}\033[0m"
             log_callback(msg)
-        metrics = {"train_mae": float(train_mae), "val_mae": float(val_mae)}
+        metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
         _RuntimeSingleton.reset()

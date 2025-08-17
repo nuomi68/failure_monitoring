@@ -398,8 +398,6 @@ class TimeSeriesPage(QWidget):
         self._trained_params = self.param_panel.params()
         self._trained_model_type = self.model_type_combo.currentData()
         self._look_back = int(result.get("extra", {}).get("look_back", self._look_back))
-        for k, v in self._trained_metrics.items():
-            logger.info(f"{k}: {v}")
         self.status_label.setText("训练完成（未保存）")
         # 训练使用的是选择后的 df，但 _base_df 保持完整
         self._rebuild_work_df()
