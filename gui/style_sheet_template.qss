@@ -155,21 +155,21 @@ QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
 
 /* -----箭头----- */
 QComboBox::down-arrow{
-    image:url("icons/down_arrow.png");
+    image:url("gui/icons/down_arrow.png");
 }
 
 QSpinBox::up-arrow{
-    image:url("icons/left_arrow.png");
+    image:url("gui/icons/right_arrow.png");
 }
 QSpinBox::down-arrow{
-    image:url("icons/right_arrow.png");
+    image:url("gui/icons/left_arrow.png");
 }
 
 QDoubleSpinBox::up-arrow{
-    image:url("icons/left_arrow.png");
+    image:url("gui/icons/right_arrow.png");
 }
 QDoubleSpinBox::down-arrow{
-    image:url("icons/right_arrow.png");
+    image:url("gui/icons/left_arrow.png");
 }
 
 QComboBox:hover { border-color: $primary; }

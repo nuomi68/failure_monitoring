@@ -234,8 +234,6 @@ class ModelManager:
         """获取某一模型的元数据，如果不存在则返回 ``None``。"""
         return self.models_registry.get(model_id)
 
-
-
     def current_feature_names(self):
         """返回运行时中模型训练用的特征列（若尚未训练则为 None）"""
         try:

@@ -102,26 +102,61 @@ class PlotCanvas(FigureCanvas):
         self.draw()
 
     def plot_scores(self, y_true, y_pred, labels=None):
+        """
+        仅按“真实标签 y_true 中出现过的类”计算并绘制每类的
+        精确率/召回率/F1 柱状图；不绘制平均。
+        兼容 y_true/y_pred 为数字编码而 labels 为字符串标签的情况。
+        """
+        import numpy as np
         from sklearn.metrics import precision_recall_fscore_support
-        if labels is not None and np.issubdtype(np.asarray(y_true).dtype, np.number):
-            score_labels = list(range(len(labels)))
-            tick_labels = labels
-        else:
-            score_labels = np.unique(list(y_true) + list(y_pred)) if labels is None else labels
-            tick_labels = score_labels
-        p, r, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, labels=score_labels, zero_division=0
-        )
-        x = np.arange(len(score_labels))
-        w = 0.25
+
         self._clear_cbar()
         self.ax.clear()
+
+        yt = np.asarray(y_true)
+        yp = np.asarray(y_pred)
+
+        # 1) 真实标签中出现过的类（顺序：按出现顺序去重；若想排序可换成 np.unique）
+        #   用 dict.fromkeys 保持首次出现顺序
+        classes_true = np.array(list(dict.fromkeys(yt.tolist())))
+
+        # 2) 对齐“编码/原始标签”
+        #   - y_true 是数字编码 & labels 是字符串：计算时用编码，显示用原始字符串
+        #   - y_true 是字符串：直接按字符串类名计算与显示
+        #   - 其余情况：直接用 classes_true 作为计算与显示标签
+        if np.issubdtype(yt.dtype, np.number) and labels is not None and len(labels) > 0 and not np.issubdtype(
+                np.asarray(labels).dtype, np.number):
+            score_labels = classes_true.astype(int).tolist()
+            tick_labels = [str(labels[i]) for i in score_labels]  # 只取真实里出现过的类名
+        else:
+            score_labels = classes_true.tolist()
+            tick_labels = [str(x) for x in score_labels]
+
+        # 3) 逐类计算（缺失/无预测用 0 兜底）
+        p, r, f1, _ = precision_recall_fscore_support(
+            yt, yp, labels=score_labels, zero_division=0
+        )
+
+        # 4) 绘图（每类三根柱）
+        x = np.arange(len(score_labels))
+        w = 0.25
         self.ax.bar(x - w, p, w, label="精确率")
         self.ax.bar(x, r, w, label="召回率")
         self.ax.bar(x + w, f1, w, label="F1")
+
+        # 数值标注（可选，清晰一些）
+        def _annot(vals, xoff):
+            for i, v in enumerate(vals):
+                self.ax.text(i + xoff, float(v) + 0.02, f"{v:.2f}",
+                             ha="center", va="bottom", fontsize=8)
+
+        _annot(p, -w)
+        _annot(r, 0)
+        _annot(f1, +w)
+
         self.ax.set_xticks(x)
         self.ax.set_xticklabels(tick_labels, rotation=45, ha="right")
-        self.ax.set_ylim(0, 1)
+        self.ax.set_ylim(0, 1.05)
         self.ax.set_ylabel("得分")
         self.ax.set_title("各类别指标")
         self.ax.legend()
