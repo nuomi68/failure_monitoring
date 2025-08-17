@@ -274,6 +274,7 @@ class TimeSeriesPage(QWidget):
         dlg.exec()
 
     def _load_model_by_id(self, model_id: str):
+        logger.info(f"开始加载模型 {model_id}")
         try:
             load_ret = self.manager.load_model(model_id)
             meta = load_ret["meta"]
@@ -339,6 +340,7 @@ class TimeSeriesPage(QWidget):
             logger.info(line)
         self.status_label.setText(f"已加载模型 {model_id}")
         self._model_id = model_id
+        logger.info(f"模型 {model_id} 加载完成")
 
         self._look_back = int(meta.get("params", {}).get("look_back", self._look_back))
         # 记录该模型的训练列（优先用 meta["feature_names"]，退化用 params["feature_cols"]）
@@ -363,6 +365,7 @@ class TimeSeriesPage(QWidget):
         if not self._dataset_id:
             QMessageBox.warning(self, "提示", "先加载数据集")
             return
+        logger.info("开始训练模型")
         self.status_label.setText("训练中…")
         self.btn_train.setEnabled(False)
         self.btn_save.setEnabled(False)
@@ -388,10 +391,13 @@ class TimeSeriesPage(QWidget):
         self.btn_save.setEnabled(True)
         self.btn_stop_train.setVisible(False)
         if not payload["ok"]:
-            QMessageBox.critical(self, "错误", f"训练失败：{payload['err']}")
+            err = payload['err']
+            logger.error(f"训练失败：{err}")
+            QMessageBox.critical(self, "错误", f"训练失败：{err}")
             self.status_label.setText("训练失败")
             self.btn_predict.setEnabled(self._trained_model is not None)
             return
+        logger.info("训练结束")
         result = payload["res"]
         self._trained_model = result["model"]
         self._trained_metrics = result["metrics"]
