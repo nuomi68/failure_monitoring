@@ -18,7 +18,8 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
-import  torch
+from sklearn.metrics import mean_absolute_error
+import torch
 import numpy as np
 import pandas as pd
 import joblib
@@ -422,13 +423,24 @@ class ModelManager:
                 **train_params,
             )
 
-        # controller 的返回有两种：直接模型 或 (模型, metric) 元组
+        # 统一评估训练/验证误差
         if isinstance(result, tuple):
-            model_obj, metric = result
-            metrics = {"val_metric": float(metric)}
+            model_obj = result[0]
         else:
             model_obj = result
-            metrics = {}
+
+        predict_fn = MODEL_REGISTRY[model_type]["predict"]
+        train_preds = np.array([predict_fn(model_obj, seq) for seq in X_tr])
+        val_preds = np.array([predict_fn(model_obj, seq) for seq in X_val])
+        train_mae = mean_absolute_error(y_tr, train_preds)
+        val_mae = mean_absolute_error(y_val, val_preds)
+        if log_callback:
+            green = "\033[92m"
+            reset = "\033[0m"
+            log_callback(
+                f"{green}[{model_type.upper()}] train_mae={train_mae:.4f} val_mae={val_mae:.4f}{reset}"
+            )
+        metrics = {"train_mae": float(train_mae), "val_mae": float(val_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
         _RuntimeSingleton.reset()
