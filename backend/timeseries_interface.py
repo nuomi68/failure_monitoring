@@ -18,10 +18,12 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
-import  torch
+from sklearn.metrics import mean_absolute_error
+import torch
 import numpy as np
 import pandas as pd
 import joblib
+import os
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass
@@ -361,6 +363,7 @@ class ModelManager:
         model_type: str,
         params: Dict[str, Any],
         log_callback: Optional[Callable[[str], None]] = None,
+        use_color: bool = False,
     ) -> Dict[str, Any]:
         """
         使用 controller 中真实模型对指定数据集进行训练，并把模型放入单例 RuntimeStore。
@@ -422,13 +425,24 @@ class ModelManager:
                 **train_params,
             )
 
-        # controller 的返回有两种：直接模型 或 (模型, metric) 元组
+        # 统一评估训练/验证误差
         if isinstance(result, tuple):
-            model_obj, metric = result
-            metrics = {"val_metric": float(metric)}
+            model_obj = result[0]
         else:
             model_obj = result
-            metrics = {}
+
+        predict_fn = MODEL_REGISTRY[model_type]["predict"]
+        train_preds = np.array([predict_fn(model_obj, seq) for seq in X_tr])
+        test_preds = np.array([predict_fn(model_obj, seq) for seq in X_val])
+        train_mae = mean_absolute_error(y_tr, train_preds)
+        test_mae = mean_absolute_error(y_val, test_preds)
+        if log_callback:
+            msg = (
+                f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
+                f"测试集误差={test_mae:.4f}"
+            )
+            log_callback(msg)
+        metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
         _RuntimeSingleton.reset()

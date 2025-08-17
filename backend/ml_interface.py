@@ -288,143 +288,169 @@ def _fit_transform_unsupervised(X: np.ndarray, scaler_spec: Any):
     return Xs, scaler
 
 
-# ---------------------------- 训练与预测实现 ----------------------------
-def _train_impl(
-        alg: str,
-        X: np.ndarray,
-        y: Optional[np.ndarray] = None,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-        scaler: Any = None,
-        test_size: float = 0.2,
-        random_state: int = 0,
-        stratify: Optional[np.ndarray] = None,
-        feature_names: Optional[list[str]] = None,
-        calc_recipes: Optional[list[dict]] = None,
+def _train_supervised_impl(
+    adapter,                          # 直接传 adapter，避免重复 get_adapter
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    scaler: Any = None,
+    test_size: float = 0.2,
+    random_state: int = 0,
+    stratify: Optional[np.ndarray] = None,
+    feature_names: Optional[list[str]] = None,
+    calc_recipes: Optional[list[dict]] = None,
+    target_name: Optional[str] = None,
 ) -> Tuple[ModelArtifact, TrainReport]:
-    # 统一：保存预测目标名称（监督：真实列名；无监督：默认“是否破损”）
-    params = dict(params or {})
-    target_name = None
-    if "target_name" in params and params.get("target_name"):
-        target_name = str(params.pop("target_name"))
+    if y is None:
+        raise ValueError("监督学习需要提供 y")
 
-    adapter = get_adapter(alg)
+    # 编码特征
+    feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
+    X_enc, x_encoders = _fit_encode_X(X, feature_names)
 
-    if adapter.kind.startswith("supervised"):
-        if y is None:
-            raise ValueError("监督学习需要提供 y")
-        feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
-        X_enc, x_encoders = _fit_encode_X(X, feature_names)
-        label_encoder: Optional[LabelEncoder] = None
-        y_work = y
-        if adapter.kind == "supervised_clf" and not np.issubdtype(np.asarray(y).dtype, np.number):
-            label_encoder = LabelEncoder()
-            y_work = label_encoder.fit_transform(y)
-        strat = y_work if (adapter.kind == "supervised_clf" and stratify is None and len(np.unique(y_work)) > 1) else stratify
-        if strat is not None:
-            try:
-                _, cnts = np.unique(strat, return_counts=True)
-                if cnts.min() < 2:
-                    strat = None
-            except Exception:
-                strat = None
-        X_tr, X_te, y_tr, y_te, scaler_obj = _fit_transform_supervised(
-            X_enc, y_work, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
-        )
-        n_classes = int(len(np.unique(y_work))) if adapter.kind == "supervised_clf" else None
-        is_binary = (adapter.kind == "supervised_clf" and n_classes == 2)
-        model = adapter.build(**params)
-        model = adapter.fit(model, X_tr, y_tr)
+    # 可能需要对 y 进行 label 编码（仅分类且 y 不是数值）
+    label_encoder: Optional[LabelEncoder] = None
+    y_work = y
+    if adapter.kind == "supervised_clf" and not np.issubdtype(np.asarray(y).dtype, np.number):
+        label_encoder = LabelEncoder()
+        y_work = label_encoder.fit_transform(y)
 
-        y_pred = adapter.predict(model, X_te)
+    # 处理 stratify：默认对二分类/多分类进行分层，且保证每类至少 2 个样本
+    strat = y_work if (adapter.kind == "supervised_clf" and stratify is None and len(np.unique(y_work)) > 1) else stratify
+    if strat is not None:
         try:
-            scores = adapter.scores(model, X_te, classes_=getattr(model, "classes_", None))
+            _, cnts = np.unique(strat, return_counts=True)
+            if cnts.min() < 2:
+                strat = None
         except Exception:
-            scores = None
-        if adapter.kind == "supervised_clf" and not is_binary:
-            scores = None
+            strat = None
 
-        metrics_text = ""
-        if adapter.kind == "supervised_clf":
-            parts = []
-            if is_binary and scores is not None:
-                try:
-                    auc = roc_auc_score(y_te, scores)
-                    parts.append(f"AUC={auc:.3f}")
-                except Exception:
-                    pass
+    # 划分与缩放
+    X_tr, X_te, y_tr, y_te, scaler_obj = _fit_transform_supervised(
+        X_enc, y_work, scaler_spec=scaler, test_size=test_size, random_state=random_state, stratify=strat
+    )
+
+    # 训练模型
+    model = adapter.build(**(params or {}))
+    model = adapter.fit(model, X_tr, y_tr)
+
+    # 预测与分数
+    y_pred = adapter.predict(model, X_te)
+    try:
+        scores = adapter.scores(model, X_te, classes_=getattr(model, "classes_", None))
+    except Exception:
+        scores = None
+
+    # 分类/回归指标
+    n_classes = int(len(np.unique(y_work))) if adapter.kind == "supervised_clf" else None
+    is_binary = (adapter.kind == "supervised_clf" and n_classes == 2)
+    if adapter.kind == "supervised_clf" and not is_binary:
+        scores = None  # 多分类暂不返回 scores（与原实现一致）
+
+    metrics_text = ""
+    if adapter.kind == "supervised_clf":
+        parts = []
+        if is_binary and scores is not None:
             try:
-                acc = accuracy_score(y_te, y_pred)
-                parts.append(f"Accuracy={acc:.3f}")
-                avg = "binary" if is_binary else "macro"
-                prec = precision_score(y_te, y_pred, average=avg, zero_division=0)
-                parts.append(f"Precision={prec:.3f}")
-                rec = recall_score(y_te, y_pred, average=avg, zero_division=0)
-                parts.append(f"Recall={rec:.3f}")
-                f1 = f1_score(y_te, y_pred, average=avg, zero_division=0)
-                parts.append(f"F1={f1:.3f}")
+                auc = roc_auc_score(y_te, scores)
+                parts.append(f"AUC={auc:.3f}")
             except Exception:
                 pass
-            metrics_text = " | ".join(parts)
-        else:
-            try:
-                mae = mean_absolute_error(y_te, y_pred)
-                mse = mean_squared_error(y_te, y_pred)
-                r2 = r2_score(y_te, y_pred)
-                metrics_text = f"MAE={mae:.3f} | MSE={mse:.3f} | R2={r2:.3f}"
-            except Exception:
-                pass
+        try:
+            acc = accuracy_score(y_te, y_pred)
+            parts.append(f"Accuracy={acc:.3f}")
+            avg = "binary" if is_binary else "macro"
+            prec = precision_score(y_te, y_pred, average=avg, zero_division=0)
+            parts.append(f"Precision={prec:.3f}")
+            rec = recall_score(y_te, y_pred, average=avg, zero_division=0)
+            parts.append(f"Recall={rec:.3f}")
+            f1 = f1_score(y_te, y_pred, average=avg, zero_division=0)
+            parts.append(f"F1={f1:.3f}")
+        except Exception:
+            pass
+        metrics_text = " | ".join(parts)
+    else:
+        try:
+            mae = mean_absolute_error(y_te, y_pred)
+            mse = mean_squared_error(y_te, y_pred)
+            r2 = r2_score(y_te, y_pred)
+            metrics_text = f"MAE={mae:.3f} | MSE={mse:.3f} | R2={r2:.3f}"
+        except Exception:
+            pass
 
-        tau = adapter.default_tau(None) if is_binary else None
+    # 二分类才有 tau
+    tau = adapter.default_tau(None) if is_binary else None
 
-        # ★ 合并公式：优先用调用方传入的 calc_recipes；否则回退到 _PENDING
-        recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
+    # ★ 合并公式：优先用调用方传入的 calc_recipes；否则回退到 _PENDING
+    recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
 
-        classes_meta = (
-            list(label_encoder.classes_) if label_encoder is not None
-            else getattr(model, "classes_", None)
-        )
+    classes_meta = (
+        list(label_encoder.classes_) if label_encoder is not None
+        else getattr(model, "classes_", None)
+    )
 
-        meta = {
-            "model_type": adapter.meta_model_type(),
-            "tau": tau,
-            "advanced": params,
-            "classes_": classes_meta,
-            "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
-            "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
-            "task": adapter.kind,                      # "supervised_clf" | "supervised_reg"
-            "n_classes": n_classes if adapter.kind == "supervised_clf" else 1,
-            "is_binary": bool(is_binary) if adapter.kind == "supervised_clf" else False,
-            "target": (target_name if target_name else "目标"),
-            "calc_recipes": recipes_final,            # ★ 保存“计算器公式”
-        }
-        y_te_out = label_encoder.inverse_transform(y_te) if label_encoder is not None else y_te
-        y_pred_out = label_encoder.inverse_transform(y_pred) if label_encoder is not None else y_pred
-        art = ModelArtifact(
-            model=model,
-            scaler=scaler_obj,
-            meta=meta,
-            label_encoder=label_encoder,
-            x_encoders=x_encoders or None,
-        )
-        rep = TrainReport(y_true=y_te_out, y_pred=y_pred_out, scores=scores, metrics_text=metrics_text)
-        return art, rep
+    meta = {
+        "model_type": adapter.meta_model_type(),
+        "tau": tau,
+        "advanced": (params or {}),
+        "classes_": classes_meta,
+        "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
+        "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
+        "task": adapter.kind,                      # "supervised_clf" | "supervised_reg"
+        "n_classes": n_classes if adapter.kind == "supervised_clf" else 1,
+        "is_binary": bool(is_binary) if adapter.kind == "supervised_clf" else False,
+        "target": (target_name if target_name else "目标"),
+        "calc_recipes": recipes_final,             # ★ 保存“计算器公式”
+    }
 
-    # 无监督
+    # 输出恢复原标签（若编码过）
+    y_te_out = label_encoder.inverse_transform(y_te) if label_encoder is not None else y_te
+    y_pred_out = label_encoder.inverse_transform(y_pred) if label_encoder is not None else y_pred
+
+    art = ModelArtifact(
+        model=model,
+        scaler=scaler_obj,
+        meta=meta,
+        label_encoder=label_encoder,
+        x_encoders=x_encoders or None,
+    )
+    rep = TrainReport(y_true=y_te_out, y_pred=y_pred_out, scores=scores, metrics_text=metrics_text)
+    return art, rep
+
+
+def _train_unsupervised_impl(
+    adapter,                          # 直接传 adapter，避免重复 get_adapter
+    X: np.ndarray,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    scaler: Any = None,
+    feature_names: Optional[list[str]] = None,
+    calc_recipes: Optional[list[dict]] = None,
+    target_name: Optional[str] = None,
+) -> Tuple[ModelArtifact, TrainReport]:
+    # 特征编码与缩放
     feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
     X_enc, x_encoders = _fit_encode_X(X, feature_names)
     Xs, scaler_obj = _fit_transform_unsupervised(X_enc, scaler_spec=scaler)
-    model = adapter.build(**params)
+
+    # 训练
+    model = adapter.build(**(params or {}))
     model = adapter.fit(model, Xs, None)
 
+    # 原始分数 -> 归一分数
     scores_raw = adapter.scores(model, Xs)                   # 原始分数
-    norm = _build_score_normalizer(scores_raw)              # 保存分布标定器
-    scores = _score_to_q(scores_raw, norm)                  # 统一到 [0,1]
+    norm = _build_score_normalizer(scores_raw)               # 保存分布标定器
+    scores = _score_to_q(scores_raw, norm)                   # 统一到 [0,1]
 
-    tau_raw = adapter.default_tau(scores_raw)               # 模型给出的原始阈值
-    tau = float(_score_to_q(float(tau_raw), norm))          # 统一到 [0,1]
+    # 阈值统一到 [0,1]
+    tau_raw = adapter.default_tau(scores_raw)                # 模型给出的原始阈值
+    tau = float(_score_to_q(float(tau_raw), norm))           # 统一到 [0,1]
 
+    # ★ 合并公式同监督分支
     recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
+
+    # 无监督的标签编码固定为 ["否","是"]
     le = LabelEncoder()
     le.fit(["否", "是"])
 
@@ -433,7 +459,7 @@ def _train_impl(
         "tau": tau,
         "tau_is_normalized": True,
         "score_norm": norm,
-        "advanced": params,
+        "advanced": (params or {}),
         "scaler": type(scaler_obj).__name__ if scaler_obj is not None else "None",
         "features": list(feature_names) if feature_names else [f"X{i}" for i in range(X.shape[1])],
         "task": adapter.kind,                         # "unsupervised"
@@ -442,6 +468,7 @@ def _train_impl(
         "target": (target_name if target_name else "是否破损"),
         "calc_recipes": recipes_final,
     }
+
     art = ModelArtifact(
         model=model,
         scaler=scaler_obj,
@@ -451,6 +478,61 @@ def _train_impl(
     )
     rep = TrainReport(scores=scores)
     return art, rep
+
+
+def _train_impl(
+    alg: str,
+    X: np.ndarray,
+    y: Optional[np.ndarray] = None,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    scaler: Any = None,
+    test_size: float = 0.2,
+    random_state: int = 0,
+    stratify: Optional[np.ndarray] = None,
+    feature_names: Optional[list[str]] = None,
+    calc_recipes: Optional[list[dict]] = None,
+) -> Tuple[ModelArtifact, TrainReport]:
+    """
+    分发入口：根据 adapter.kind 调用监督或无监督实现。
+    - 监督：'supervised_clf' / 'supervised_reg'
+    - 无监督：其他（例如 'unsupervised'）
+    """
+    params = dict(params or {})
+
+    # 统一处理 target_name（监督用真实列名；无监督默认“是否破损”）
+    target_name = None
+    if "target_name" in params and params.get("target_name"):
+        target_name = str(params.pop("target_name"))
+
+    adapter = get_adapter(alg)
+
+    if adapter.kind.startswith("supervised"):
+        if y is None:
+            raise ValueError("监督学习需要提供 y")
+        return _train_supervised_impl(
+            adapter,
+            X,
+            y,
+            params=params,
+            scaler=scaler,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=stratify,
+            feature_names=feature_names,
+            calc_recipes=calc_recipes,
+            target_name=target_name,
+        )
+    else:
+        return _train_unsupervised_impl(
+            adapter,
+            X,
+            params=params,
+            scaler=scaler,
+            feature_names=feature_names,
+            calc_recipes=calc_recipes,
+            target_name=target_name,
+        )
 
 
 def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
@@ -657,7 +739,6 @@ class ML:
             grouped = _predict_grouped(cur, X)
             return {t: {"labels": ys, "scores": sc} for t, (ys, sc) in grouped.items()}
 
-        # 旧式集合（同目标）
         if isinstance(cur, EnsembleArtifact):
             assert isinstance(X, dict)
             recipes: list[dict] = []

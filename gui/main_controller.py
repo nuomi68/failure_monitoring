@@ -1,5 +1,6 @@
 import sys
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRegularExpression
+from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 import logging
+import re
 
 from gui.tools import logger
 
@@ -26,9 +28,59 @@ class QtLogHandler(logging.Handler):
             logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
         )
 
+    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
+        msg = self.ansi_re.sub("", msg)
         self.widget.appendPlainText(msg)
+
+
+class LogHighlighter(QSyntaxHighlighter):
+    def __init__(self, doc) -> None:
+        super().__init__(doc)
+
+        # 通用格式
+        self.f_info = QTextCharFormat(); self.f_info.setForeground(QColor("#16a34a"))
+        self.f_warn = QTextCharFormat(); self.f_warn.setForeground(QColor("#f59e0b"))
+        self.f_err  = QTextCharFormat(); self.f_err.setForeground(QColor("#ef4444"))
+        self.f_num  = QTextCharFormat(); self.f_num.setForeground(QColor("#16a34a"))  # 数值用绿
+        self.f_key  = QTextCharFormat(); self.f_key.setForeground(QColor("#2563eb"))  # 关键字段蓝
+
+        # 仅匹配 token 本身
+        self.re_info = QRegularExpression(r"\bINFO\b")
+        self.re_warn = QRegularExpression(r"\bWARN(?:ING)?\b")
+        self.re_err  = QRegularExpression(r"\bERR(?:OR)?\b|异常")
+
+        # 精确匹配 “训练集误差=xx” / “测试集误差=xx” 中的 等号后的数值
+        # 捕获组1是 key，组2是数值（含小数/科学计数）
+        self.re_metric = QRegularExpression(
+            r"(训练集误差|测试集误差)\s*=\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+        )
+
+    def _apply_all(self, regex: QRegularExpression, text: str, fmt: QTextCharFormat, group: int = 0):
+        it = regex.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            start = m.capturedStart(group)
+            length = m.capturedLength(group)
+            if start >= 0 and length > 0:
+                self.setFormat(start, length, fmt)
+
+    def highlightBlock(self, text: str) -> None:
+        # 1) 等级 token：只给单词上色（不会影响整行）
+        self._apply_all(self.re_info, text, self.f_info)
+        self._apply_all(self.re_warn, text, self.f_warn)
+        self._apply_all(self.re_err,  text, self.f_err)
+
+        # 2) 指标行：只给 key 和 “等号后的数值” 上色
+        it = self.re_metric.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            key_start, key_len = m.capturedStart(1), m.capturedLength(1)
+            val_start, val_len = m.capturedStart(2), m.capturedLength(2)
+            if key_start >= 0: self.setFormat(key_start, key_len, self.f_key)   # 关键字段蓝
+            if val_start >= 0: self.setFormat(val_start, val_len, self.f_num)   # 数值绿
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage
@@ -131,6 +183,7 @@ class MainController(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumHeight(150)
+        self.highlighter = LogHighlighter(self.log_view.document())
 
         right_layout.addWidget(self.stack)
         right_layout.addWidget(self.log_view)
