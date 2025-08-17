@@ -470,7 +470,6 @@ class UnsupervisedPage(QWidget):
 
     def on_tau_changed(self, tau: float):
         # [LOG]
-        self._log_tau_changed(tau)
         self.meta["tau"] = tau
         try:
             from backend.ml_interface import ML
@@ -480,8 +479,6 @@ class UnsupervisedPage(QWidget):
         self.refresh_plot()
 
     def refresh_plot(self):
-        # [LOG]
-        self._log_viz()
         if self.scores is None:
             return
         tau = float(self.meta.get("tau", 0.5))
@@ -552,10 +549,5 @@ class UnsupervisedPage(QWidget):
 
     def _log_scores_ready(self):
         if self.scores is None: return
-        logger.info("打分完成：样本数=%d（scores 已就绪）", len(self.scores))
+        logger.info("打分完成：样本数=%d", len(self.scores))
 
-    def _log_tau_changed(self, tau: float):
-        logger.info("阈值 τ 更新为 %.3f", tau)
-
-    def _log_viz(self):
-        logger.info("切换可视化：%s", self.viz_combo.currentText())

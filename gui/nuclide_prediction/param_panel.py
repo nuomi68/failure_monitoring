@@ -103,7 +103,7 @@ class ParamPanel(QWidget):
         if combo is None or not combo.currentText().strip():
             QMessageBox.warning(self, "提示", "请先选择模型类型")
             return
-        model_type = combo.currentText().strip()
+        model_type = combo.currentData()
 
         # ❶ 后端拉取高级参数模版（需在 ModelManager 实现 get_advanced_params）
         try:

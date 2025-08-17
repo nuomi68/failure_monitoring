@@ -44,15 +44,14 @@ class ValidationPage(QWidget):
         layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
-        self.predict_btn = QPushButton("计算")
-        self.predict_btn.clicked.connect(self.on_predict)
-        btn_row.addWidget(self.predict_btn)
-        self.clear_btn = QPushButton("清空全部")
-        self.clear_btn.clicked.connect(self._clear_all)
-        btn_row.addWidget(self.clear_btn)
+
+
         self.result_lbl = QLabel("结果: ")
         btn_row.addWidget(self.result_lbl)
         btn_row.addStretch(1)
+        self.predict_btn = QPushButton("计算")
+        self.predict_btn.clicked.connect(self.on_predict)
+        btn_row.addWidget(self.predict_btn)
         self.save_btn = QPushButton("保存模型")
         self.save_btn.clicked.connect(self.save_model)
         btn_row.addWidget(self.save_btn)
@@ -75,13 +74,6 @@ class ValidationPage(QWidget):
         self._external_cb = predict_cb
         self.configure(features)
 
-    # ------------------------------------------------------------------
-    # 按钮逻辑
-    # ------------------------------------------------------------------
-    def _clear_all(self):
-        self.table.set_dataframe(pd.DataFrame(columns=self.features))
-        self.table.clear_history()
-        self.result_lbl.setText("结果: ")
 
     def on_predict(self):
         df = self.table.dataframe()

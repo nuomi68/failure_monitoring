@@ -33,6 +33,9 @@ class FaultLevelPage(QWidget):
 
         # ---------------- Top Controls ----------------
         top = QHBoxLayout()
+        self.btn_load = QPushButton("加载模型…")
+        self.btn_load.clicked.connect(self._open_model_manager)
+        top.addWidget(self.btn_load)
         top.addStretch()
 
         top.addWidget(QLabel("算法方法："))
@@ -88,14 +91,13 @@ class FaultLevelPage(QWidget):
         self.btn_save = QPushButton("保存模型…")
         self.btn_save.clicked.connect(self._on_save_model)
         self.btn_save.setEnabled(False)
-        self.btn_load = QPushButton("加载模型…")
-        self.btn_load.clicked.connect(self._open_model_manager)
+
 
         bottom.addStretch()
         bottom.addWidget(self.btn_predict)
         bottom.addSpacing(12)
         bottom.addWidget(self.btn_save)
-        bottom.addWidget(self.btn_load)
+
 
         # ---------------- Root Layout ----------------
         root = QVBoxLayout(self)
@@ -289,8 +291,3 @@ class FaultLevelPage(QWidget):
             self.tbl_unlabelled.set_headers(est.feature_names or [])
 
         fnames = est.feature_names or []
-        QMessageBox.information(
-            self,
-            "已加载",
-            f"已加载模型：{model_id}\n方法：{est.method}\n特征列：{fnames if fnames else '（未记录）'}",
-        )
