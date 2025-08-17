@@ -22,7 +22,7 @@ from sklearn.utils.multiclass import type_of_target
 from sklearn.model_selection import train_test_split
 
 from backend.ml_interface import ML
-
+from gui.tools import logger
 # ============== 画布 ==============
 class PlotCanvas(FigureCanvas):
     threshold_changed = pyqtSignal(float)
@@ -472,9 +472,16 @@ class SupervisedPage(QWidget):
             params.pop("random_state", None)
         else:
             params["n_estimators"] = n_main
-
+        logger.info(
+            "开始训练：算法=%s，规范化器=%s，特征数=%d，测试集比例=%.2f，随机种子=%d",
+            self.alg_combo.currentText(),
+            self.scaler_combo.currentText(),
+            len(cols),
+            test_size,
+            rs,
+        )
           # 训练（后端会记录 task/n_classes/is_binary/tau 等 meta）
-        _ = ML.train(
+        rep = ML.train(
             alg=code,
             X=X,
             y=y,

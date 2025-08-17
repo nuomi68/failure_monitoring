@@ -37,38 +37,50 @@ class QtLogHandler(logging.Handler):
 
 
 class LogHighlighter(QSyntaxHighlighter):
-    """Highlight INFO/WARN/ERROR keywords in the log view."""
-
     def __init__(self, doc) -> None:
         super().__init__(doc)
-        self.rules = []
 
-        f_ok = QTextCharFormat()
-        f_ok.setForeground(QColor("#16a34a"))
-        f_warn = QTextCharFormat()
-        f_warn.setForeground(QColor("#f59e0b"))
-        f_err = QTextCharFormat()
-        f_err.setForeground(QColor("#ef4444"))
+        # 通用格式
+        self.f_info = QTextCharFormat(); self.f_info.setForeground(QColor("#16a34a"))
+        self.f_warn = QTextCharFormat(); self.f_warn.setForeground(QColor("#f59e0b"))
+        self.f_err  = QTextCharFormat(); self.f_err.setForeground(QColor("#ef4444"))
+        self.f_num  = QTextCharFormat(); self.f_num.setForeground(QColor("#16a34a"))  # 数值用绿
+        self.f_key  = QTextCharFormat(); self.f_key.setForeground(QColor("#2563eb"))  # 关键字段蓝
 
-        self.ok_fmt = f_ok
+        # 仅匹配 token 本身
+        self.re_info = QRegularExpression(r"\bINFO\b")
+        self.re_warn = QRegularExpression(r"\bWARN(?:ING)?\b")
+        self.re_err  = QRegularExpression(r"\bERR(?:OR)?\b|异常")
 
-        self.rules += [
-            (QRegularExpression(r"\bINFO\b|\bOK\b"), f_ok),
-            (QRegularExpression(r"\bWARN(ING)?\b"), f_warn),
-            (QRegularExpression(r"\bERR(OR)?\b|异常"), f_err),
-        ]
+        # 精确匹配 “训练集误差=xx” / “测试集误差=xx” 中的 等号后的数值
+        # 捕获组1是 key，组2是数值（含小数/科学计数）
+        self.re_metric = QRegularExpression(
+            r"(训练集误差|测试集误差)\s*=\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+        )
 
-    def highlightBlock(self, text: str) -> None:
-        for pattern, fmt in self.rules:
-            it = pattern.globalMatch(text)
-            while it.hasNext():
-                match = it.next()
-                start = match.capturedStart()
-                length = match.capturedLength()
+    def _apply_all(self, regex: QRegularExpression, text: str, fmt: QTextCharFormat, group: int = 0):
+        it = regex.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            start = m.capturedStart(group)
+            length = m.capturedLength(group)
+            if start >= 0 and length > 0:
                 self.setFormat(start, length, fmt)
 
-        if "训练集误差" in text or "测试集误差" in text:
-            self.setFormat(0, len(text), self.ok_fmt)
+    def highlightBlock(self, text: str) -> None:
+        # 1) 等级 token：只给单词上色（不会影响整行）
+        self._apply_all(self.re_info, text, self.f_info)
+        self._apply_all(self.re_warn, text, self.f_warn)
+        self._apply_all(self.re_err,  text, self.f_err)
+
+        # 2) 指标行：只给 key 和 “等号后的数值” 上色
+        it = self.re_metric.globalMatch(text)
+        while it.hasNext():
+            m = it.next()
+            key_start, key_len = m.capturedStart(1), m.capturedLength(1)
+            val_start, val_len = m.capturedStart(2), m.capturedLength(2)
+            if key_start >= 0: self.setFormat(key_start, key_len, self.f_key)   # 关键字段蓝
+            if val_start >= 0: self.setFormat(val_start, val_len, self.f_num)   # 数值绿
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage

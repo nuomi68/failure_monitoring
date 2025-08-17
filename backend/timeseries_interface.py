@@ -441,8 +441,6 @@ class ModelManager:
                 f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
                 f"测试集误差={test_mae:.4f}"
             )
-            if use_color:
-                msg = f"\033[92m{msg}\033[0m"
             log_callback(msg)
         metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
 
