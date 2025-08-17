@@ -1,5 +1,4 @@
 import numpy as np
-from typing import Callable, Optional
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.metrics import mean_absolute_error
 from xgboost import XGBRegressor
@@ -10,7 +9,6 @@ def train_xgb(
     y_train,
     X_val,
     y_val,
-    log_callback: Optional[Callable[[str], None]] = None,
     **params,
 ):
     """Train an XGBoost model and return it with validation MAE."""

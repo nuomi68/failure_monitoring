@@ -1,13 +1,13 @@
 import math
+import logging
 from typing import Tuple
-
-import math
-from typing import Callable, Optional, Tuple
 
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchtsmixer import TSMixer
+
+logger = logging.getLogger("failure_monitoring")
 
 
 def _to_tensor(arr, device):
@@ -51,7 +51,6 @@ def train_tsmixer(
     num_blocks: int = 4,
     ff_dim: int = 128,
     dropout: float = 0.1,
-    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[TSMixer, float]:
     dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
     dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
@@ -86,10 +85,9 @@ def train_tsmixer(
         vloss /= len(dval.dataset)
         best = min(best, vloss)
 
-        if log_callback:
-            log_callback(
-                f"[TSMixer] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
-            )
+        logger.info(
+            f"[TSMixer] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
+        )
 
     return model, best
 

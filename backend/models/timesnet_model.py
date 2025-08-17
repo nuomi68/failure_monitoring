@@ -1,10 +1,13 @@
 import math
-from typing import Callable, List, Optional, Tuple
+import logging
+from typing import List, Tuple
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
+
+logger = logging.getLogger("failure_monitoring")
 
 
 # ------- 工具 ---------
@@ -96,7 +99,6 @@ def train_timesnet(
     batch_size: int = 16,
     d_model: int = 32,
     num_blocks: int = 3,
-    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[nn.Module, float]:
     """TimesNet 训练，返回模型与验证集 MSE。"""
     train_loader = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
@@ -128,10 +130,9 @@ def train_timesnet(
         vloss /= len(val_loader.dataset)
         best = min(best, vloss)
 
-        if log_callback:
-            log_callback(
-                f"[TimesNet] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
-            )
+        logger.info(
+            f"[TimesNet] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
+        )
 
     return model, best
 
