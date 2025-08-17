@@ -118,6 +118,8 @@ class SmartTable(QWidget):
         super().__init__()
         self.cfg = cfg
         self._restoring = False
+        # 记录最近一次导入数据的源文件路径，用于后续保存时保留原始文件名
+        self._source_path: str | None = None
         self._record_enabled = True
         self._edit_dirty = False
         self._undo_stack: list[list[list[str]]] = []
@@ -212,6 +214,8 @@ class SmartTable(QWidget):
             Whether to push an undo snapshot after filling.
         """
 
+        # 每次手动设置数据后清除记录的源文件路径
+        self._source_path = None
         self._restoring = True
         try:
             headers = [str(c) for c in df.columns]
@@ -236,6 +240,17 @@ class SmartTable(QWidget):
             inferred = self._infer_label_column(df)
             if inferred:
                 self.set_label_column(inferred)
+        
+    def source_prefix(self) -> Optional[str]:
+        """返回最近一次导入文件的文件名前缀（已清理非法字符）。"""
+        if not self._source_path:
+            return None
+        from pathlib import Path
+        import re
+
+        name = Path(self._source_path).stem
+        # 替换文件名中不允许的字符，保留中文
+        return re.sub(r'[\\/:*?"<>|]', '_', name)
 
     def dataframe(self) -> pd.DataFrame:
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
@@ -291,6 +306,7 @@ class SmartTable(QWidget):
             df = dlg.loaded_dataframe()
             if df is None:
                 return
+            src_path = dlg.file_path()
         else:
             path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -315,6 +331,7 @@ class SmartTable(QWidget):
 
                 QMessageBox.critical(self, "读取失败", f"无法读取：\n{path}\n\n{e}")
                 return
+            src_path = path
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
         default_headers = self.cfg.default_headers or []
         if any(h.strip() for h in headers):
@@ -322,6 +339,8 @@ class SmartTable(QWidget):
             if headers != default_headers:
                 df = df.reindex(columns=headers)
         self.set_dataframe(df)
+        # 记录导入的数据来源路径
+        self._source_path = src_path
         if self.cfg.show_label_selector:
             inferred = self._infer_label_column(df)
             if inferred:

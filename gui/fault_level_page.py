@@ -244,6 +244,7 @@ class FaultLevelPage(QWidget):
                 name.strip(),
                 label_col=label_col,
                 df=df_clean,
+                data_prefix=self.tbl_labelled.source_prefix(),
             )
             QMessageBox.information(self, "已保存", f"模型已保存：{mid}")
         except Exception as e:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -44,6 +45,7 @@ class FaultModelManager:
         *,
         label_col: str | None = None,
         df: pd.DataFrame | None = None,
+        data_prefix: str | None = None,
     ) -> str:
         """Persist estimator along with its training data.
 
@@ -65,7 +67,9 @@ class FaultModelManager:
 
         data_path = ""
         if df is not None:
-            data_path = str(self.models_dir / f"{model_id}.csv")
+            prefix = re.sub(r'[\\/:*?"<>|]', '_', data_prefix or "")
+            fname = f"{prefix}_{model_id}.csv" if prefix else f"{model_id}.csv"
+            data_path = str(self.models_dir / fname)
             try:
                 df.to_csv(data_path, index=False)
             except Exception:
