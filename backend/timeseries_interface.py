@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 import hashlib
+import re
 from pathlib import Path
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
@@ -189,11 +190,20 @@ class ModelManager:
     # ------------------------------------------------------------------
     # 数据集管理
     # ------------------------------------------------------------------
-    def register_dataset(self, df: pd.DataFrame, time_col: str, time_format: str) -> Dict[str, Any]:
+    def register_dataset(
+        self,
+        df: pd.DataFrame,
+        time_col: str,
+        time_format: str,
+        source_name: str | None = None,
+    ) -> Dict[str, Any]:
         """注册数据集（仅缓存，不立即持久化）。"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         uid = uuid.uuid4().hex[:8]
-        dataset_id = f"{timestamp}-DATA-{uid}"
+        prefix = ""
+        if source_name:
+            prefix = re.sub(r'[\\/:*?"<>|]', '_', Path(source_name).stem)
+        dataset_id = f"{prefix}_{timestamp}-DATA-{uid}" if prefix else f"{timestamp}-DATA-{uid}"
 
         self.datasets_cache[dataset_id] = {
             "df": df.copy(),
@@ -208,6 +218,8 @@ class ModelManager:
             "n_rows": len(df),
             "n_cols": len(df.columns),
         }
+        if prefix:
+            manifest["source_name"] = prefix
         return manifest
 
     def load_dataset(self, dataset_id: str) -> pd.DataFrame:

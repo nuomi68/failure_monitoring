@@ -240,7 +240,13 @@ class TimeSeriesPage(QWidget):
                     break
         # 通过 ModelManager 注册数据集，拿到 dataset_id
         try:
-            manifest = self.manager.register_dataset(self._base_df, self._time_col or "", self._time_fmt or "")
+            from pathlib import Path
+
+            src_path = dlg.file_path()
+            prefix = Path(src_path).stem if src_path else None
+            manifest = self.manager.register_dataset(
+                self._base_df, self._time_col or "", self._time_fmt or "", prefix
+            )
         except Exception as exc:
             QMessageBox.critical(self, "错误", f"注册数据集失败：{exc}")
             return
