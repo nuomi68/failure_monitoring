@@ -352,7 +352,7 @@ class UnsupervisedPage(QWidget):
         right_v.addWidget(self.canvas.slider)
 
         self.tbl_abn = QTableWidget(0, 2)
-        self.tbl_abn.setHorizontalHeaderLabels(["索引", "分数"])
+        self.tbl_abn.setHorizontalHeaderLabels(["样本", "分数"])
         self.tbl_abn.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         right_v.addWidget(QLabel("异常样本："))
         right_v.addWidget(self.tbl_abn)
@@ -490,7 +490,11 @@ class UnsupervisedPage(QWidget):
         idxs = idxs[order]
         self.tbl_abn.setRowCount(len(idxs))
         for row, idx in enumerate(idxs):
-            self.tbl_abn.setItem(row, 0, QTableWidgetItem(str(int(idx))))
+            if self.df is not None and len(self.df.index) > int(idx):
+                name = str(self.df.index[int(idx)])
+            else:
+                name = str(int(idx))
+            self.tbl_abn.setItem(row, 0, QTableWidgetItem(name))
             self.tbl_abn.setItem(row, 1, QTableWidgetItem(f"{self.scores[idx]:.3f}"))
 
     def _parse_max_samples(self,val, n_samples: int):
