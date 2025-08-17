@@ -382,11 +382,6 @@ class ModelManager:
         else:
             raise KeyError(f"未找到数据集 {dataset_id}")
 
-        start_msg = f"开始训练模型 {model_type}"
-        if log_callback:
-            log_callback(start_msg)
-        else:
-            logger.info(start_msg)
 
         # 只用数值特征（去掉时间列），并按需筛选特征列
         feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
@@ -448,11 +443,11 @@ class ModelManager:
         test_mae = mean_absolute_error(y_val, test_preds)
         if log_callback:
             msg = (
-                f"[{model_type.upper()}] 训练集误差={train_mae:.4f} "
-                f"测试集误差={test_mae:.4f}"
+                f"[{model_type.upper()}] 训练集MAE误差={train_mae:.4f} "
+                f"测试集MAE误差={test_mae:.4f}"
             )
             log_callback(msg)
-        metrics = {"train_mae": float(train_mae), "test_mae": float(test_mae)}
+        metrics = {"训练集MAE误差": float(train_mae), "测试集MAE误差": float(test_mae)}
 
         # 6) 写入运行时单例（保持单模型状态）
         _RuntimeSingleton.reset()
@@ -464,12 +459,6 @@ class ModelManager:
         rt.feature_names = feature_names
         rt.data_scaled = data_scaled
         rt.dataset_id = dataset_id
-
-        end_msg = "训练结束"
-        if log_callback:
-            log_callback(end_msg)
-        else:
-            logger.info(end_msg)
 
         # 7) 返回训练摘要（无需持久化时，可不调用 save_model；如需保存，可按你的序列化策略扩展）
         return {
@@ -640,7 +629,6 @@ class ModelManager:
         :returns: 包含 ``model`` 和 ``meta`` 的字典；其中 ``model`` 是保存的模型对象，``meta`` 是注册表中的元数据。
         :raises KeyError: 如果模型 ID 不存在。
         """
-        logger.info(f"加载模型 {model_id}")
 
         # 首先刷新注册表，清除可能已被删除的模型文件
         self.refresh_models()
@@ -700,7 +688,6 @@ class ModelManager:
         rt.data_scaled = data_scaled
         rt.dataset_id = dataset_id
 
-        logger.info(f"模型 {model_id} 加载完成")
 
         return {"model": model_obj, "meta": meta}
 

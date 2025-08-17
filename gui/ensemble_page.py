@@ -21,7 +21,7 @@ from backend.fault_model_manager import FaultModelManager
 from backend.timeseries_interface import ModelManager
 
 from gui.smart_table import SmartTable, SmartTableConfig
-from gui.nuclide_prediction.model_manager_dialog import ModelManagerDialog
+from gui.model_manager_dialog import ModelManagerDialog
 
 
 class EnsemblePage(QWidget):
