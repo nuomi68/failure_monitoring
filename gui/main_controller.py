@@ -50,6 +50,8 @@ class LogHighlighter(QSyntaxHighlighter):
         f_err = QTextCharFormat()
         f_err.setForeground(QColor("#ef4444"))
 
+        self.ok_fmt = f_ok
+
         self.rules += [
             (QRegularExpression(r"\bINFO\b|\bOK\b"), f_ok),
             (QRegularExpression(r"\bWARN(ING)?\b"), f_warn),
@@ -64,6 +66,9 @@ class LogHighlighter(QSyntaxHighlighter):
                 start = match.capturedStart()
                 length = match.capturedLength()
                 self.setFormat(start, length, fmt)
+
+        if "训练集误差" in text or "测试集误差" in text:
+            self.setFormat(0, len(text), self.ok_fmt)
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage
