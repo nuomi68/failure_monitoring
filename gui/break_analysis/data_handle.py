@@ -288,6 +288,13 @@ class DataHandlePage(QWidget):
         """返回已选择的特征名称列表"""
         return self.feature_selector.selected()
 
+    def dataframe_with_index(self) -> pd.DataFrame:
+        """Return dataframe with sample name column (if selected) as index."""
+        col = self.preview.index_column()
+        if col and col in self.df.columns:
+            return self.df.set_index(col, drop=False)
+        return self.df
+
     def has_target(self) -> bool:
         """是否启用监督学习"""
         return self.chk.isChecked()

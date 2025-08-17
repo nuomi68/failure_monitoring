@@ -70,8 +70,9 @@ class OutlierDetectionPage(QWidget):
         if self._step == 0:
             if self.data_page.has_target():
                 if not self._sup_inited:
+                    df_idx = self.data_page.dataframe_with_index()
                     self.sup_page.set_data(
-                        self.data_page.df,
+                        df_idx,
                         self.data_page.selected_columns(),
                         target=self.data_page.target_column(),
                     )
@@ -79,8 +80,9 @@ class OutlierDetectionPage(QWidget):
                 self._step = 2
             else:
                 if not self._unsup_inited:
+                    df_idx = self.data_page.dataframe_with_index()
                     self.unsup_page.set_data(
-                        self.data_page.df,
+                        df_idx,
                         self.data_page.selected_columns(),
                     )
                     self._unsup_inited = True
