@@ -422,11 +422,15 @@ class SupervisedPage(QWidget):
             it.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
             self.column_list.addItem(it)
         self._reset_viz_mode()
+        # [LOG]
+        self._log_data_overview(self.selected_columns())
 
     def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
 
     def open_adv_dialog(self):
+        # [LOG]
+        logger.info("打开高级参数：算法=%s", self.alg_combo.currentText())
         code = self.alg_combo.currentData()
         params = self.knn_params if "knn" in code else self.rf_params
         dlg = AdvParamsDlg(self, code, params, self.is_clf)
@@ -472,15 +476,9 @@ class SupervisedPage(QWidget):
             params.pop("random_state", None)
         else:
             params["n_estimators"] = n_main
-        logger.info(
-            "开始训练：算法=%s，规范化器=%s，特征数=%d，测试集比例=%.2f，随机种子=%d",
-            self.alg_combo.currentText(),
-            self.scaler_combo.currentText(),
-            len(cols),
-            test_size,
-            rs,
-        )
-          # 训练（后端会记录 task/n_classes/is_binary/tau 等 meta）
+        # [LOG] 训练前信息与切分策略
+        self._log_split(X, y, test_size, rs, stratify)
+        # 训练（后端会记录 task/n_classes/is_binary/tau 等 meta）
         rep = ML.train(
             alg=code,
             X=X,
@@ -498,10 +496,14 @@ class SupervisedPage(QWidget):
         self.y_true = y_te
         pre =  ML.predict(X_te_raw)
         self.y_pred, self.test_scores = pre["labels"], pre["scores"]
+        # [LOG] 预测完成
+        self._log_predict_done()
 
-          # 读取后端 meta，决定任务类型
+        # 读取后端 meta，决定任务类型
         self.meta = ML.get_meta()
-          # 如果后端给出了任务/类别数，按它；否则回退到本地判断
+        # [LOG] 训练完成后的 meta 概览
+        self._log_meta_after_train()
+        # 如果后端给出了任务/类别数，按它；否则回退到本地判断
         task = self.meta.get("task")
         self.is_clf = (task == "supervised_clf") if task is not None else self.is_clf
         self.n_classes = int(self.meta.get("n_classes", 0) or len(np.unique(y)))
@@ -514,10 +516,12 @@ class SupervisedPage(QWidget):
             tau = float(tau_meta)
             self.canvas.slider.setValue(int(tau * 1000))
             self._update_pred_by_threshold()
+            logger.info("启用阈值：二分类，τ=%.3f", float(tau))  # [LOG]
         else:
-          # 多分类/回归：隐藏阈值相关控件
+            # 多分类/回归：隐藏阈值相关控件
             self.canvas.slider.setVisible(False)
             self.canvas.lbl_tau.setVisible(False)
+            logger.info("关闭阈值：%s", "回归或多分类")           # [LOG]
 
         self._compute_metrics()
         self._reset_viz_mode()
@@ -535,6 +539,8 @@ class SupervisedPage(QWidget):
         self.y_pred = np.where(self.test_scores >= tau, pos_label, neg_label)
 
     def _on_tau_change(self, tau: float):
+        # [LOG]
+        self._log_tau_changed(tau)
         if self.is_clf and self.binary:
             self.meta["tau"] = tau
             self._update_pred_by_threshold()
@@ -547,6 +553,8 @@ class SupervisedPage(QWidget):
             self.metrics_text = ""
             self.metrics_label.clear()
             self.metrics_label.setVisible(False)
+            # [LOG] 分类指标
+            self._log_metrics_cls(self.y_true, self.y_pred)
         else:
             from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
             mae = mean_absolute_error(self.y_true, self.y_pred)
@@ -555,7 +563,8 @@ class SupervisedPage(QWidget):
             self.metrics_text = f"MAE={mae:.3f} | MSE={mse:.3f} | R2={r2:.3f}"
             self.metrics_label.setText(self.metrics_text)
             self.metrics_label.setVisible(True)
-
+            # [LOG] 回归指标
+            logger.info("测试集指标：MAE=%.3f | MSE=%.3f | R2=%.3f", mae, mse, r2)
     def _reset_viz_mode(self):
         self.canvas.slider.setVisible(self.is_clf and self.binary)
         self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
@@ -568,8 +577,12 @@ class SupervisedPage(QWidget):
             self.viz_combo.addItems(["预测 vs 真实", "残差直方图", "残差散点", "PCA 彩色散点"])
         self.viz_combo.blockSignals(False)
         self.metrics_label.setVisible(not self.is_clf)
+        # [LOG]
+        self._log_viz()
 
     def _plot(self):
+        # [LOG]
+        self._log_viz()
         if self.y_true is None: return
         choice = self.viz_combo.currentText()
         if self.is_clf:
@@ -632,4 +645,52 @@ class SupervisedPage(QWidget):
             self.k_label.setText("树数：")
             self.k_spin.setValue(int(self.rf_params.get("n_estimators", 100)))
         self._reset_viz_mode()
+        # [LOG]
+        logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
+
+    # ============== logging helpers ==============
+    def _log_data_overview(self, cols):
+        total = self.df.shape[1] if self.df is not None else 0
+        logger.info("数据集就绪：目标=%s，任务=%s，特征已选=%d/%d",
+                    self.target_col, "分类" if self.is_clf else "回归",
+                    len(cols), total)
+
+    def _log_split(self, X, y, test_size, rs, stratify):
+        logger.info("开始训练：算法=%s，规范化器=%s，样本数=%d，特征数=%d，测试集比例=%.2f，随机种子=%d，分层=%s",
+                    self.alg_combo.currentText(), self.scaler_combo.currentText(),
+                    X.shape[0], X.shape[1], test_size, rs,
+                    "是" if stratify is not None else "否")
+
+    def _log_meta_after_train(self):
+        if not self.meta: return
+        task = self.meta.get("task", "")
+        model = self.meta.get("model_type", "")
+        scaler = self.meta.get("scaler", "")
+        n_classes = self.meta.get("n_classes", "")
+        classes = self.meta.get("classes_", [])
+        tau = self.meta.get("tau", None)
+        pieces = [f"任务={task}", f"模型={model}", f"规范化器={scaler}"]
+        if n_classes: pieces.append(f"类别数={n_classes}")
+        if classes:   pieces.append(f"类名预览={list(classes)[:5]}")
+        if tau is not None: pieces.append(f"阈值τ={tau:.3f}")
+        logger.info("训练完成：%s", "，".join(pieces))
+
+    def _log_predict_done(self):
+        if self.y_true is None or self.y_pred is None: return
+        logger.info("预测完成：测试集大小=%d（y_true/y_pred 已就绪）", len(self.y_true))
+
+    def _log_tau_changed(self, tau: float):
+        logger.info("阈值 τ 更新为 %.3f（仅二分类生效）", tau)
+
+    def _log_viz(self):
+        logger.info("切换可视化：%s", self.viz_combo.currentText())
+
+    def _log_metrics_cls(self, y_true, y_pred):
+        try:
+            from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+            acc = accuracy_score(y_true, y_pred)
+            p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="macro", zero_division=0)
+            logger.info("测试集指标：准确率=%.3f | 精确率=%.3f | 召回率=%.3f | F1=%.3f", acc, p, r, f1)
+        except Exception as e:
+            logger.warning("分类指标计算失败：%s", e)
 
