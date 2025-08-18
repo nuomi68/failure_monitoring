@@ -468,8 +468,7 @@ class TimeSeriesPage(QWidget):
         result = payload["res"]
         self._trained_model = result["model"]
         metrics = result.get("metrics", {})
-        for key, value in metrics.items():
-            logger.info(f"{key}: {float(value):.4f}")
+
         self._trained_model = result["model"]
         self._trained_metrics = result["metrics"]
         self._trained_metrics = metrics

@@ -455,8 +455,8 @@ class ModelManager:
         test_mae = mean_absolute_error(y_val, test_preds)
         if log_callback:
             msg = (
-                f"[{model_type.upper()}] 训练集MAE误差={train_mae:.4f} "
-                f"测试集MAE误差={test_mae:.4f}"
+                f"[{model_type.upper()}] 训练集MAE误差:{train_mae:.4f} "
+                f"测试集MAE误差:{test_mae:.4f}"
             )
             log_callback(msg)
         metrics = {"训练集MAE误差": float(train_mae), "测试集MAE误差": float(test_mae)}

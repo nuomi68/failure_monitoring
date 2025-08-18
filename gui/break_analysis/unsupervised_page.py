@@ -408,7 +408,7 @@ class UnsupervisedPage(QWidget):
     # ---------------- 打开高级参数对话框 ----------------
     def open_advanced_dialog(self):
         # [LOG]
-        logger.info("打开高级参数：算法=%s", self.alg_combo.currentText())
+        logger.info("打开高级参数：算法:%s", self.alg_combo.currentText())
         alg = self.alg_combo.currentData()
         params = (
             self.knn_params if alg == "knn"
@@ -465,7 +465,7 @@ class UnsupervisedPage(QWidget):
         self._log_scores_ready()
         tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
         self.canvas.slider.setValue(int(tau * 1000))
-        logger.info("启用阈值：τ=%.3f", tau)  # [LOG]
+        logger.info("启用阈值：τ:%.3f", tau)  # [LOG]
         self.refresh_plot()
 
     def on_tau_changed(self, tau: float):
@@ -531,10 +531,10 @@ class UnsupervisedPage(QWidget):
     # ============== logging helpers ==============
     def _log_data_overview(self, cols):
         total = self.df.shape[1] if self.df is not None else 0
-        logger.info("数据集就绪：特征已选=%d/%d", len(cols), total)
+        logger.info("数据集就绪：特征已选:%d/%d", len(cols), total)
 
     def _log_train_start(self, X):
-        logger.info("开始训练：算法=%s，规范化器=%s，样本数=%d，特征数=%d",
+        logger.info("开始训练：算法:%s，规范化器:%s，样本数:%d，特征数:%d",
                     self.alg_combo.currentText(), self.scaler_combo.currentText(),
                     X.shape[0], X.shape[1])
 
@@ -544,10 +544,10 @@ class UnsupervisedPage(QWidget):
         scaler = self.meta.get("scaler", "")
         tau = self.meta.get("tau", None)
         pieces = [f"模型={model}", f"规范化器={scaler}"]
-        if tau is not None: pieces.append(f"阈值τ={tau:.3f}")
+        if tau is not None: pieces.append(f"阈值τ:{tau:.3f}")
         logger.info("训练完成：%s", "，".join(pieces))
 
     def _log_scores_ready(self):
         if self.scores is None: return
-        logger.info("打分完成：样本数=%d", len(self.scores))
+        logger.info("打分完成：样本数: %d", len(self.scores))
 

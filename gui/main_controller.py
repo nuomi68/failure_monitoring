@@ -52,10 +52,11 @@ class LogHighlighter(QSyntaxHighlighter):
         self.re_warn = QRegularExpression(r"\bWARN(?:ING)?\b")
         self.re_err  = QRegularExpression(r"\bERR(?:OR)?\b|异常")
 
-        # 精确匹配 “训练集误差=xx” / “测试集误差=xx” 中的 等号后的数值
+        # 精确匹配 “训练集误差:xx” / “测试集误差:xx” 中的 等号后的数值
         # 捕获组1是 key，组2是数值（含小数/科学计数）
         self.re_metric = QRegularExpression(
-            r"(训练集误差|测试集误差)\s*=\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+            r"(((?:训练|测试)集)\s*(?:[A-Za-z0-9][A-Za-z0-9_\-/]*)?\s*误差)\s*[:：]\s*"
+            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
         )
 
     def _apply_all(self, regex: QRegularExpression, text: str, fmt: QTextCharFormat, group: int = 0):
@@ -68,19 +69,17 @@ class LogHighlighter(QSyntaxHighlighter):
                 self.setFormat(start, length, fmt)
 
     def highlightBlock(self, text: str) -> None:
-        # 1) 等级 token：只给单词上色（不会影响整行）
         self._apply_all(self.re_info, text, self.f_info)
         self._apply_all(self.re_warn, text, self.f_warn)
-        self._apply_all(self.re_err,  text, self.f_err)
+        self._apply_all(self.re_err, text, self.f_err)
 
-        # 2) 指标行：只给 key 和 “等号后的数值” 上色
         it = self.re_metric.globalMatch(text)
         while it.hasNext():
             m = it.next()
-            key_start, key_len = m.capturedStart(1), m.capturedLength(1)
-            val_start, val_len = m.capturedStart(2), m.capturedLength(2)
-            if key_start >= 0: self.setFormat(key_start, key_len, self.f_key)   # 关键字段蓝
-            if val_start >= 0: self.setFormat(val_start, val_len, self.f_num)   # 数值绿
+            key_start, key_len = m.capturedStart(1), m.capturedLength(1)  # 组1：整段key（蓝色）
+            val_start, val_len = m.capturedStart(3), m.capturedLength(3)  # 组3：数值（绿色）
+            if key_start >= 0: self.setFormat(key_start, key_len, self.f_key)
+            if val_start >= 0: self.setFormat(val_start, val_len, self.f_num)
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage
