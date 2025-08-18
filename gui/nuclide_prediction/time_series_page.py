@@ -23,9 +23,24 @@ import pandas as pd
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
-    QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QMessageBox, QInputDialog, QStyledItemDelegate
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableView,
+    QFormLayout,
+    QGroupBox,
+    QGridLayout,
+    QSizePolicy,
+    QSpacerItem,
+    QHeaderView,
+    QComboBox,
+    QMessageBox,
+    QInputDialog,
+    QStyledItemDelegate,
+    QLineEdit,
+    QAbstractSpinBox,
 )
 
 # —— 后端 ——
@@ -43,12 +58,60 @@ BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
 PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
 
 #让背景色整块铺满，不留白边
-class SolidColorDelegate(QStyledItemDelegate):
-   def paint(self, painter, option, index):
-       bg = index.data(Qt.ItemDataRole.BackgroundRole)
-       if bg:
-           painter.fillRect(option.rect, bg)
-       super().paint(painter, option, index)
+
+
+class PlainEditorDelegate(QStyledItemDelegate):
+    """用 ID 选择器强制保持表格内编辑器的默认样式。"""
+
+    def createEditor(self, parent, option, index):
+        ed = super().createEditor(parent, option, index)
+        if isinstance(ed, (QLineEdit, QAbstractSpinBox)):
+            ed.setObjectName("plain_table_editor")
+            ed.setFrame(True)
+            ed.setStyleSheet(
+                "QLineEdit#plain_table_editor, QAbstractSpinBox#plain_table_editor {"
+                "  border: 1px solid palette(Mid);"
+                "  border-radius: 0px;"
+                "  padding: 2px;"
+                "  background: palette(Base);"
+                "  selection-background-color: palette(Highlight);"
+                "  selection-color: palette(HighlightedText);"
+                "}"
+            )
+        return ed
+
+    def setEditorData(self, editor, index):
+        """将原值写入编辑器并在显示后全选。"""
+        value = index.model().data(index, Qt.ItemDataRole.EditRole)
+        if value in (None, ""):
+            value = index.model().data(index, Qt.ItemDataRole.DisplayRole)
+
+        if isinstance(editor, QLineEdit):
+            editor.setText("" if value is None else str(value))
+            QTimer.singleShot(0, editor.selectAll)
+        elif isinstance(editor, QAbstractSpinBox):
+            try:
+                num = float(value) if value not in (None, "") else 0
+                if hasattr(editor, "setValue"):
+                    editor.setValue(num)
+            except Exception:
+                if hasattr(editor, "lineEdit") and editor.lineEdit():
+                    editor.lineEdit().setText("" if value is None else str(value))
+                    QTimer.singleShot(0, editor.lineEdit().selectAll)
+        else:
+            try:
+                editor.setText("" if value is None else str(value))
+                QTimer.singleShot(0, editor.selectAll)
+            except Exception:
+                pass
+
+
+class SolidColorDelegate(PlainEditorDelegate):
+    def paint(self, painter, option, index):
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        if bg:
+            painter.fillRect(option.rect, bg)
+        super().paint(painter, option, index)
 
 
 class TimeSeriesPage(QWidget):
@@ -85,6 +148,7 @@ class TimeSeriesPage(QWidget):
 
         # ================= 左侧：数据表格 =================
         self.table = QTableView()
+        self.table.setItemDelegate(SolidColorDelegate(self.table))
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
@@ -484,8 +548,8 @@ class TimeSeriesPage(QWidget):
         mdl = DataFrameModel(df)
         mdl.row_filled_sig.connect(self._on_row_filled)
         self.table.setModel(mdl)
-          # 让颜色铺满
-        self.table.setItemDelegate(SolidColorDelegate(self.table))
+        # 让颜色铺满
+        self.table.setStyleSheet("")
         self._apply_row_colors()
 
     # --------- 颜色相关状态 --------- #

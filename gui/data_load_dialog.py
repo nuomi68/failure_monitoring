@@ -23,15 +23,81 @@ from typing import Optional, Any, Dict, Set
 
 import pandas as pd
 
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
+from PyQt6.QtCore import (
+    Qt,
+    QAbstractTableModel,
+    QModelIndex,
+    QVariant,
+    pyqtSignal,
+    QSortFilterProxyModel,
+    QTimer,
+)
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QFileDialog,  QLineEdit, QTableView,
-    QHeaderView, QComboBox, QDialog, QDialogButtonBox, QMessageBox,
-    QCheckBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QPushButton,
+    QLabel,
+    QFileDialog,
+    QLineEdit,
+    QTableView,
+    QHeaderView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QMessageBox,
+    QCheckBox,
+    QStyledItemDelegate,
+    QAbstractSpinBox,
 )
-from PyQt6.QtCore import QSortFilterProxyModel
+
+
+class PlainEditorDelegate(QStyledItemDelegate):
+    """用 ID 选择器强制保持表格内编辑器的默认样式。"""
+
+    def createEditor(self, parent, option, index):
+        ed = super().createEditor(parent, option, index)
+        if isinstance(ed, (QLineEdit, QAbstractSpinBox)):
+            ed.setObjectName("plain_table_editor")
+            ed.setFrame(True)
+            ed.setStyleSheet(
+                "QLineEdit#plain_table_editor, QAbstractSpinBox#plain_table_editor {"
+                "  border: 1px solid palette(Mid);"
+                "  border-radius: 0px;"
+                "  padding: 2px;"
+                "  background: palette(Base);"
+                "  selection-background-color: palette(Highlight);"
+                "  selection-color: palette(HighlightedText);"
+                "}"
+            )
+        return ed
+
+    def setEditorData(self, editor, index):
+        """将单元格原值写入编辑器并在显示后全选。"""
+        value = index.model().data(index, Qt.ItemDataRole.EditRole)
+        if value in (None, ""):
+            value = index.model().data(index, Qt.ItemDataRole.DisplayRole)
+
+        if isinstance(editor, QLineEdit):
+            editor.setText("" if value is None else str(value))
+            QTimer.singleShot(0, editor.selectAll)
+        elif isinstance(editor, QAbstractSpinBox):
+            try:
+                num = float(value) if value not in (None, "") else 0
+                if hasattr(editor, "setValue"):
+                    editor.setValue(num)
+            except Exception:
+                if hasattr(editor, "lineEdit") and editor.lineEdit():
+                    editor.lineEdit().setText("" if value is None else str(value))
+                    QTimer.singleShot(0, editor.lineEdit().selectAll)
+        else:
+            try:
+                editor.setText("" if value is None else str(value))
+                QTimer.singleShot(0, editor.selectAll)
+            except Exception:
+                pass
 
 # ========================= 工具函数与模型 =========================
 
@@ -306,6 +372,7 @@ class DataLoadDialog(QDialog):
         self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setAlternatingRowColors(True)
+        self.preview.setItemDelegate(PlainEditorDelegate(self.preview))
 
         # 底层模型 + 只显示“缺失行±1”的代理模型
         self._base_model: Optional[DataFrameModel] = None
@@ -383,6 +450,21 @@ class DataLoadDialog(QDialog):
         main.addWidget(self.parsed_label)
         main.addWidget(self.remaining_label)
         main.addWidget(self.btns)
+
+    def _is_clean_and_ready(self) -> bool:
+        """数据无缺失/非法，且（如需）已选择时间列，则可直接视作 OK。"""
+        if self._work_df is None:
+            return False
+        bad_cells = (
+            self._bad_mask.any().any()
+            if self._bad_mask is not None
+            else self._work_df.map(is_bad_str).any().any()
+        )
+        if self._work_df.isna().any().any() or bad_cells:
+            return False
+        if self._require_time_column and not self.time_column():
+            return False
+        return True
 
     # ---------- 槽函数 ----------
 
@@ -871,6 +953,9 @@ class DataLoadDialog(QDialog):
         dlg = cls(parent, default_time_fmt=default_time_fmt, require_time_column=require_time_column)
         dlg.path_edit.setText(path)
         dlg._read_preview(path)
+        if dlg._is_clean_and_ready():
+            dlg.accept()
+            return dlg
         if dlg.exec() == QDialog.DialogCode.Accepted:
             return dlg
         return None
