@@ -23,27 +23,55 @@ from typing import Optional, Any, Dict, Set
 
 import pandas as pd
 
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant, pyqtSignal
+from PyQt6.QtCore import (
+    Qt,
+    QAbstractTableModel,
+    QModelIndex,
+    QVariant,
+    pyqtSignal,
+    QSortFilterProxyModel,
+)
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QFileDialog,  QLineEdit, QTableView,
-    QHeaderView, QComboBox, QDialog, QDialogButtonBox, QMessageBox,
-    QCheckBox, QStyledItemDelegate
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QPushButton,
+    QLabel,
+    QFileDialog,
+    QLineEdit,
+    QTableView,
+    QHeaderView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QMessageBox,
+    QCheckBox,
+    QStyledItemDelegate,
+    QAbstractSpinBox,
 )
 
 
-class DefaultEditorDelegate(QStyledItemDelegate):
-    """确保进入单元格编辑时使用默认外观，不受全局/表格样式表影响。"""
+class PlainEditorDelegate(QStyledItemDelegate):
+    """用 ID 选择器强制保持表格内编辑器的默认样式。"""
 
     def createEditor(self, parent, option, index):
-        editor = super().createEditor(parent, option, index)
-        try:
-            editor.setStyleSheet("")
-        except Exception:
-            pass
-        return editor
-from PyQt6.QtCore import QSortFilterProxyModel
+        ed = super().createEditor(parent, option, index)
+        if isinstance(ed, (QLineEdit, QAbstractSpinBox)):
+            ed.setObjectName("plain_table_editor")
+            ed.setFrame(True)
+            ed.setStyleSheet(
+                "QLineEdit#plain_table_editor, QAbstractSpinBox#plain_table_editor {"
+                "  border: 1px solid palette(Mid);"
+                "  border-radius: 0px;"
+                "  padding: 2px;"
+                "  background: palette(Base);"
+                "  selection-background-color: palette(Highlight);"
+                "  selection-color: palette(HighlightedText);"
+                "}"
+            )
+        return ed
 
 # ========================= 工具函数与模型 =========================
 
@@ -318,7 +346,7 @@ class DataLoadDialog(QDialog):
         self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setAlternatingRowColors(True)
-        self.preview.setItemDelegate(DefaultEditorDelegate(self.preview))
+        self.preview.setItemDelegate(PlainEditorDelegate(self.preview))
 
         # 底层模型 + 只显示“缺失行±1”的代理模型
         self._base_model: Optional[DataFrameModel] = None

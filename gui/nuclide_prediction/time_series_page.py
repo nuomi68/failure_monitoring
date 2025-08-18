@@ -23,9 +23,24 @@ import pandas as pd
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableView, QFormLayout,
-    QGroupBox, QGridLayout, QSizePolicy, QSpacerItem,
-    QHeaderView, QComboBox, QMessageBox, QInputDialog, QStyledItemDelegate
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableView,
+    QFormLayout,
+    QGroupBox,
+    QGridLayout,
+    QSizePolicy,
+    QSpacerItem,
+    QHeaderView,
+    QComboBox,
+    QMessageBox,
+    QInputDialog,
+    QStyledItemDelegate,
+    QLineEdit,
+    QAbstractSpinBox,
 )
 
 # —— 后端 ——
@@ -43,20 +58,35 @@ BLUE = QColor(Qt.GlobalColor.blue).lighter(160)
 PEND = QColor(Qt.GlobalColor.lightGray).lighter(170)
 
 #让背景色整块铺满，不留白边
-class SolidColorDelegate(QStyledItemDelegate):
-   def paint(self, painter, option, index):
-       bg = index.data(Qt.ItemDataRole.BackgroundRole)
-       if bg:
-           painter.fillRect(option.rect, bg)
-       super().paint(painter, option, index)
 
-   def createEditor(self, parent, option, index):
-       editor = super().createEditor(parent, option, index)
-       try:
-           editor.setStyleSheet("")
-       except Exception:
-           pass
-       return editor
+
+class PlainEditorDelegate(QStyledItemDelegate):
+    """用 ID 选择器强制保持表格内编辑器的默认样式。"""
+
+    def createEditor(self, parent, option, index):
+        ed = super().createEditor(parent, option, index)
+        if isinstance(ed, (QLineEdit, QAbstractSpinBox)):
+            ed.setObjectName("plain_table_editor")
+            ed.setFrame(True)
+            ed.setStyleSheet(
+                "QLineEdit#plain_table_editor, QAbstractSpinBox#plain_table_editor {"
+                "  border: 1px solid palette(Mid);"
+                "  border-radius: 0px;"
+                "  padding: 2px;"
+                "  background: palette(Base);"
+                "  selection-background-color: palette(Highlight);"
+                "  selection-color: palette(HighlightedText);"
+                "}"
+            )
+        return ed
+
+
+class SolidColorDelegate(PlainEditorDelegate):
+    def paint(self, painter, option, index):
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        if bg:
+            painter.fillRect(option.rect, bg)
+        super().paint(painter, option, index)
 
 
 class TimeSeriesPage(QWidget):
@@ -93,6 +123,7 @@ class TimeSeriesPage(QWidget):
 
         # ================= 左侧：数据表格 =================
         self.table = QTableView()
+        self.table.setItemDelegate(SolidColorDelegate(self.table))
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
@@ -493,7 +524,6 @@ class TimeSeriesPage(QWidget):
         mdl.row_filled_sig.connect(self._on_row_filled)
         self.table.setModel(mdl)
         # 让颜色铺满
-        self.table.setItemDelegate(SolidColorDelegate(self.table))
         self.table.setStyleSheet("")
         self._apply_row_colors()
 
