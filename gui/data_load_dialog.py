@@ -29,8 +29,20 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFileDialog,  QLineEdit, QTableView,
     QHeaderView, QComboBox, QDialog, QDialogButtonBox, QMessageBox,
-    QCheckBox
+    QCheckBox, QStyledItemDelegate
 )
+
+
+class DefaultEditorDelegate(QStyledItemDelegate):
+    """确保进入单元格编辑时使用默认外观，不受全局/表格样式表影响。"""
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        try:
+            editor.setStyleSheet("")
+        except Exception:
+            pass
+        return editor
 from PyQt6.QtCore import QSortFilterProxyModel
 
 # ========================= 工具函数与模型 =========================
@@ -306,6 +318,7 @@ class DataLoadDialog(QDialog):
         self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview.setAlternatingRowColors(True)
+        self.preview.setItemDelegate(DefaultEditorDelegate(self.preview))
 
         # 底层模型 + 只显示“缺失行±1”的代理模型
         self._base_model: Optional[DataFrameModel] = None
@@ -383,6 +396,21 @@ class DataLoadDialog(QDialog):
         main.addWidget(self.parsed_label)
         main.addWidget(self.remaining_label)
         main.addWidget(self.btns)
+
+    def _is_clean_and_ready(self) -> bool:
+        """数据无缺失/非法，且（如需）已选择时间列，则可直接视作 OK。"""
+        if self._work_df is None:
+            return False
+        bad_cells = (
+            self._bad_mask.any().any()
+            if self._bad_mask is not None
+            else self._work_df.map(is_bad_str).any().any()
+        )
+        if self._work_df.isna().any().any() or bad_cells:
+            return False
+        if self._require_time_column and not self.time_column():
+            return False
+        return True
 
     # ---------- 槽函数 ----------
 
@@ -871,6 +899,9 @@ class DataLoadDialog(QDialog):
         dlg = cls(parent, default_time_fmt=default_time_fmt, require_time_column=require_time_column)
         dlg.path_edit.setText(path)
         dlg._read_preview(path)
+        if dlg._is_clean_and_ready():
+            dlg.accept()
+            return dlg
         if dlg.exec() == QDialog.DialogCode.Accepted:
             return dlg
         return None

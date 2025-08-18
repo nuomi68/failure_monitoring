@@ -50,6 +50,14 @@ class SolidColorDelegate(QStyledItemDelegate):
            painter.fillRect(option.rect, bg)
        super().paint(painter, option, index)
 
+   def createEditor(self, parent, option, index):
+       editor = super().createEditor(parent, option, index)
+       try:
+           editor.setStyleSheet("")
+       except Exception:
+           pass
+       return editor
+
 
 class TimeSeriesPage(QWidget):
     """主页面：左侧数据表 + 右侧模型控制（单模型工作流）。"""
@@ -484,8 +492,9 @@ class TimeSeriesPage(QWidget):
         mdl = DataFrameModel(df)
         mdl.row_filled_sig.connect(self._on_row_filled)
         self.table.setModel(mdl)
-          # 让颜色铺满
+        # 让颜色铺满
         self.table.setItemDelegate(SolidColorDelegate(self.table))
+        self.table.setStyleSheet("")
         self._apply_row_colors()
 
     # --------- 颜色相关状态 --------- #
