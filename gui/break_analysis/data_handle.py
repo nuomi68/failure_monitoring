@@ -105,35 +105,21 @@ class DataHandlePage(QWidget):
         bottom_split = QSplitter(Qt.Orientation.Horizontal)
         main.addWidget(bottom_split, stretch=1)
 
-        # ===== 字段选择 =====
+        # ===== 左：字段选择 + 监督学习（上下）=====
         left_panel = QWidget()
         left_v = QVBoxLayout(left_panel)
+        left_v.setContentsMargins(0, 0, 0, 0)
+        left_v.setSpacing(8)
+
+        # 顶部：字段选择
         self.feature_selector = FeatureSelectorWidget()
         left_v.addWidget(self.feature_selector)
-        bottom_split.addWidget(left_panel)
 
-        # === 中：图形预览 ===
-        self.preview = FeaturePreviewWidget()
-        bottom_split.addWidget(self.preview)
-        self.feature_selector.selectionChanged.connect(self.preview.set_selected_columns)
-
-        # ===== 计算器 ======
-        right_panel = QWidget()
-        right_v = QVBoxLayout(right_panel)
-        bottom_bar = QHBoxLayout()
-        bottom_bar.addStretch()
-        self.btn_reset = QPushButton("清空表格")
-        self.btn_reset.clicked.connect(self.reset_ui)
-        bottom_bar.addWidget(self.btn_reset)
-        right_v.addLayout(bottom_bar)
-
-        self.calc = CalculatorWidget()
-        right_v.addWidget(self.calc)
-        # ★ 监听“新公式”并同步到后端
-        self.calc.recipe_added.connect(self._on_recipe_added)
-
-        # -- 监督学习区 --
-        sup = QHBoxLayout()
+        # 底部：监督学习区
+        sup_w = QWidget()
+        sup = QHBoxLayout(sup_w)
+        sup.setContentsMargins(0, 0, 0, 0)
+        sup.setSpacing(6)
         self.chk = QCheckBox("监督学习")
         self.chk.stateChanged.connect(self.toggle_target)
         self.cmb = QComboBox()
@@ -142,10 +128,42 @@ class DataHandlePage(QWidget):
         sup.addWidget(QLabel("样本标签:"))
         sup.addWidget(self.cmb)
         sup.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
-        right_v.addLayout(sup)
-        bottom_split.addWidget(right_panel)
+        left_v.addWidget(sup_w, 0)  # 不让监督学习区抢太多空间
+        bottom_split.addWidget(left_panel)
+
+        # === 中：图形预览 ===
+        self.preview = FeaturePreviewWidget()
+        bottom_split.addWidget(self.preview)
+        self.feature_selector.selectionChanged.connect(self.preview.set_selected_columns)
+
+        # ===== 右：计算器 ======
+        right_panel = QWidget()
+        right_v = QVBoxLayout(right_panel)
+        right_v.setContentsMargins(0, 0, 0, 0)
+        right_v.setSpacing(8)
+
+        # 顶部操作条
+        bottom_bar = QHBoxLayout()
+        bottom_bar.addStretch()
+        self.btn_reset = QPushButton("清空表格")
+        self.btn_reset.clicked.connect(self.reset_ui)
+        bottom_bar.addWidget(self.btn_reset)
+        right_v.addLayout(bottom_bar)
+
+        # 计算器主体
+        self.calc = CalculatorWidget()
+        right_v.addWidget(self.calc, 1)  # 让计算器占据右侧主要空间
+        # 同步“新公式”到后端
+        self.calc.recipe_added.connect(self._on_recipe_added)
 
         right_v.addStretch()
+        right_panel.setLayout(right_v)
+        bottom_split.addWidget(right_panel)
+        right_v.addStretch()
+        # ------- 分割器拉伸策略（关键）-------
+        bottom_split.setStretchFactor(0, 2)  # 左
+        bottom_split.setStretchFactor(1, 3)  # 中
+        bottom_split.setStretchFactor(2, 2)  # 右
 
         layout.addWidget(self.data_page)
         #debug
