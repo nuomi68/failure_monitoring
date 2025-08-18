@@ -200,6 +200,14 @@ QHeaderView::section {
     font-weight: 600;
 }
 
+/* 表格内编辑时，使用默认的输入框样式，避免继承全局圆角等设置 */
+QTableView QLineEdit {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+}
+
 /* ---------- 滚动条 ---------- */
 QScrollBar:vertical,
 QScrollBar:horizontal {
