@@ -140,7 +140,7 @@ class MainController(QMainWindow):
         self.btn_pipeline = QPushButton()
 
         self.menu_items = [
-            (self.btn_nuclide, "📈", "核素预测"),
+            (self.btn_nuclide, "📈", "活度预测"),
             (self.btn_anomaly, "🔍", "异常检测"),
             (self.btn_damage, "🔧", "损伤评估"),
             (self.btn_ensemble, "🧩", "模型集成"),
