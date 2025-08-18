@@ -80,6 +80,31 @@ class PlainEditorDelegate(QStyledItemDelegate):
             )
         return ed
 
+    def setEditorData(self, editor, index):
+        """将原值写入编辑器并在显示后全选。"""
+        value = index.model().data(index, Qt.ItemDataRole.EditRole)
+        if value in (None, ""):
+            value = index.model().data(index, Qt.ItemDataRole.DisplayRole)
+
+        if isinstance(editor, QLineEdit):
+            editor.setText("" if value is None else str(value))
+            QTimer.singleShot(0, editor.selectAll)
+        elif isinstance(editor, QAbstractSpinBox):
+            try:
+                num = float(value) if value not in (None, "") else 0
+                if hasattr(editor, "setValue"):
+                    editor.setValue(num)
+            except Exception:
+                if hasattr(editor, "lineEdit") and editor.lineEdit():
+                    editor.lineEdit().setText("" if value is None else str(value))
+                    QTimer.singleShot(0, editor.lineEdit().selectAll)
+        else:
+            try:
+                editor.setText("" if value is None else str(value))
+                QTimer.singleShot(0, editor.selectAll)
+            except Exception:
+                pass
+
 
 class SolidColorDelegate(PlainEditorDelegate):
     def paint(self, painter, option, index):
