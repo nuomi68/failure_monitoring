@@ -63,6 +63,7 @@ def train_tsmixer(
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
 
     best = math.inf
+    best_state = None
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
@@ -84,12 +85,17 @@ def train_tsmixer(
                 pred = model(xb).squeeze(1)
                 vloss += criterion(pred, yb).item() * xb.size(0)
         vloss /= len(dval.dataset)
-        best = min(best, vloss)
+        if vloss < best:
+            best = vloss
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
         if log_callback:
             log_callback(
                 f"[TSMixer] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
             )
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     return model, best
 
