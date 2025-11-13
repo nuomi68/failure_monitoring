@@ -197,7 +197,11 @@ class TimeSeriesPage(QWidget):
         all_model =self.manager.get_all_model_name()
         for key, name in all_model.items():
             self.model_type_combo.addItem(name,key )
+        idx = self.model_type_combo.findText("TSMixer")  # 或者带匹配规则
+        if idx != -1:
+            self.model_type_combo.setCurrentIndex(idx)
         self.model_type_combo.setObjectName("model_type_combo")
+        
         form.addRow("模型类型", self.model_type_combo)
 
         # 训练参数

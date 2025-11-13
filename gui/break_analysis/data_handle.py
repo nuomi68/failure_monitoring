@@ -33,7 +33,7 @@ class DataHandlePage(QWidget):
         self.data_page = QWidget()
         main = QVBoxLayout(self.data_page)          # 顶层垂直
         title = QLabel("选择数据")
-        title.setStyleSheet("font-weight:600; font-size:26px;")
+        title.setStyleSheet("font-weight:400; font-size:26px;")
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         main.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
         # ── 上半部分：栈布局（示例页 / 数据表） ──
@@ -52,11 +52,11 @@ class DataHandlePage(QWidget):
         demo_wrap = QWidget()
         demo_v = QVBoxLayout(demo_wrap)
         title = QLabel("表格内容示例")
-        title.setStyleSheet("font-weight:600; font-size:20px;")
+        title.setStyleSheet("font-weight:400; font-size:20px;")
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         demo_v.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        rows, cols = 10,10
+        rows, cols = 10,7
         demo = QTableWidget(rows, cols)
         demo.setHorizontalHeaderLabels([f"测量值{i + 1}" for i in range(cols)])
         demo.setVerticalHeaderLabels([f"样本{i + 1}" for i in range(rows - 1)] + [""])
@@ -75,7 +75,7 @@ class DataHandlePage(QWidget):
         self.btn_open.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.btn_open.setMinimumHeight(120)
         self.btn_open.setStyleSheet("""
-            QPushButton { background-color: #fafafa; border: 2px dashed #9ca3af; border-radius: 30px; color: #4b5563; font-size:30px; }
+            QPushButton { background-color: #fafafa; border: 2px dashed #9ca3af; border-radius: 25px; color: #4b5563; font-size:30px; }
             QPushButton:hover { background-color: #f3f4f6; border-color: #6b7280; }
             QPushButton:pressed { background-color: #e5e7eb; border-style: solid; }
         """)

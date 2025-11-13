@@ -28,7 +28,7 @@ import os
 
 # 新增：运行时单例，保存当前训练得到的模型、缩放器等
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from sklearn.model_selection import train_test_split
 
 
@@ -95,6 +95,28 @@ DATA_CFG = {
     "xgb": 14,
     "timesnet": 32,       # 新增
 }
+
+
+def _coerce_numeric_columns(
+    df: pd.DataFrame, columns: Sequence[str] | None = None
+) -> pd.DataFrame:
+    """
+    尝试将给定列（或全部列）转换为数值类型，且不引入新的缺失值位置。
+    这样可修复曾因异常字符串导致 dtype=object 的列。
+    """
+    work = df.copy()
+    target_cols = columns if columns is not None else work.columns.tolist()
+    for col in target_cols:
+        if col not in work.columns:
+            continue
+        series = work[col]
+        if pd.api.types.is_numeric_dtype(series):
+            continue
+        converted = pd.to_numeric(series, errors="coerce")
+        if converted.isna().equals(series.isna()):
+            work[col] = converted
+    return work
+
 
 @dataclass
 class RuntimeStore:
@@ -407,16 +429,23 @@ class ModelManager:
             raise KeyError(f"未找到数据集 {dataset_id}")
 
 
-        # 只用数值特征（去掉时间列），并按需筛选特征列
-        feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
+        # 去掉时间列，并按需把对象列转换成数值，再筛选特征列
+        base_df = df.drop(columns=[time_col], errors="ignore")
         feature_cols = params.pop("feature_cols", None)
         if feature_cols:
-            try:
-                feat_df = feat_df[feature_cols]
-            except KeyError as exc:
-                raise ValueError(f"训练特征列缺失: {exc}") from exc
+            base_df = _coerce_numeric_columns(base_df, feature_cols)
+            missing = [c for c in feature_cols if c not in base_df.columns]
+            if missing:
+                raise ValueError(f"训练特征列缺失: {missing}")
+            feat_df = base_df[feature_cols]
+            nan_cols = [c for c in feat_df.columns if feat_df[c].isna().any()]
+            if nan_cols:
+                raise ValueError(f"特征列仍包含无法解析的取值: {nan_cols}")
+        else:
+            base_df = _coerce_numeric_columns(base_df)
+            feat_df = base_df.select_dtypes(include=[np.number])
         if feat_df.empty:
-            raise ValueError("数据集中不包含数值列，无法训练模型。")
+            raise ValueError("数据集中不存在数值列，无法训练模型。")
 
         feature_names = feat_df.columns.tolist()
 
@@ -687,10 +716,12 @@ class ModelManager:
                 raise ValueError(f"数据集中缺少列: {exc}") from exc
         else:
             time_col = self.datasets_registry[dataset_id]["time_col"]
-            feat_df = df.drop(columns=[time_col], errors="ignore").select_dtypes(include=[np.number])
+            base_df = df.drop(columns=[time_col], errors="ignore")
+            base_df = _coerce_numeric_columns(base_df)
+            feat_df = base_df.select_dtypes(include=[np.number])
             if feat_df.empty:
-                raise ValueError("数据集中不包含数值列，无法加载模型。")
-            feature_names = feat_df.columns.tolist()
+                raise ValueError("数据集中不存在数值列，无法加载模型。")
+        feature_names = feat_df.columns.tolist()
 
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(feat_df.values.astype(float))

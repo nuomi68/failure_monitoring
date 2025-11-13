@@ -237,21 +237,43 @@ def _q_to_score(qv: np.ndarray | float, norm: dict | None) -> np.ndarray | float
 _EXPR_FUNC_TOKENS = {"np", "sqrt", "log", "log10", "abs"}
 
 
-def _extract_vars_from_expr(expr: str) -> set[str]:
-    """从规范化表达式中提取变量名（包含反引号列名）。"""
+def _extract_vars_from_expr(expr: str) -> list[str]:
+    """Extract referenced column names from an expression, preserving first-seen order."""
     expr = _normalize_expr(str(expr))
-    vars_: set[str] = set(re.findall(r"`([^`]+)`", expr))
-    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)
-    for tok in tokens:
-        if tok not in _EXPR_FUNC_TOKENS:
-            vars_.add(tok)
-    return vars_
-
+    backtick_tokens = re.findall(r"`([^`]+)`", expr)
+    plain_tokens = [
+        tok for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)
+        if tok not in _EXPR_FUNC_TOKENS
+    ]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for tok in backtick_tokens + plain_tokens:
+        token = tok.strip()
+        if not token or token in seen:
+            continue
+        ordered.append(token)
+        seen.add(token)
+    return ordered
 
 def infer_input_features(features: list[str], recipes: list[dict]) -> list[str]:
-    """给定模型特征和计算配方，推断预测时需提供的原始特征列。"""
-    deps = {str(r.get("name")): _extract_vars_from_expr(r.get("expr", "")) for r in (recipes or [])}
-    required = set(features)
+    """Infer raw input columns required at inference time, keeping the original selection order."""
+    ordered_features: list[str] = []
+    seen_feat: set[str] = set()
+    for feat in features or []:
+        name = str(feat).strip()
+        if not name or name in seen_feat:
+            continue
+        ordered_features.append(name)
+        seen_feat.add(name)
+
+    deps: dict[str, list[str]] = {}
+    for rec in (recipes or []):
+        name = str(rec.get('name') or '').strip()
+        if not name:
+            continue
+        deps[name] = _extract_vars_from_expr(rec.get('expr', ''))
+
+    required: set[str] = set(ordered_features)
     changed = True
     while changed:
         changed = False
@@ -261,10 +283,30 @@ def infer_input_features(features: list[str], recipes: list[dict]) -> list[str]:
                     if v not in required:
                         required.add(v)
                         changed = True
-    derived = set(deps.keys())
-    base = sorted(f for f in required if f not in derived)
-    return base
 
+    derived = set(deps.keys())
+    base_order: list[str] = []
+    appended: set[str] = set()
+
+    for feat in ordered_features:
+        if feat in required and feat not in derived and feat not in appended:
+            base_order.append(feat)
+            appended.add(feat)
+
+    for name, vars_ in deps.items():
+        if name not in required:
+            continue
+        for var in vars_:
+            if var in required and var not in derived and var not in appended:
+                base_order.append(var)
+                appended.add(var)
+
+    for feat in required:
+        if feat not in derived and feat not in appended:
+            base_order.append(feat)
+            appended.add(feat)
+
+    return base_order
 
 # ---------------------------- 数据预处理（缩放） ----------------------------
 def _fit_transform_supervised(X: np.ndarray, y: np.ndarray, scaler_spec: Any, *, test_size: float, random_state: int,

@@ -385,7 +385,7 @@ class DataLoadDialog(QDialog):
         self.remaining_label = QLabel("")
 
         # 只看“缺失行±1”的开关
-        self.only_missing_chk = QCheckBox("仅显示缺失行±1（动态）")
+        self.only_missing_chk = QCheckBox("缺失仅异常行±1")
         self.only_missing_chk.setChecked(True)
         self.only_missing_chk.stateChanged.connect(self._refresh_missing_display)
 
