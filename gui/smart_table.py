@@ -31,7 +31,7 @@ from PyQt6.QtGui import (
     QColor,
 )
 
-from gui.data_load_dialog import DataLoadDialog
+from gui.data_load_dialog import DataLoadDialog, normalize_dataframe_headers
 @dataclass
 class SmartTableConfig:
     show_label_selector: bool = False
@@ -294,8 +294,6 @@ class SmartTable(QWidget):
 
     def _import(self):
         if self.cfg.use_data_load_dialog:
-
-
             dlg = DataLoadDialog.from_file_dialog(
                 self,
                 default_time_fmt=self.cfg.data_load_default_time_fmt,
@@ -306,6 +304,7 @@ class SmartTable(QWidget):
             df = dlg.loaded_dataframe()
             if df is None:
                 return
+            df = normalize_dataframe_headers(df)
             src_path = dlg.file_path()
         else:
             path, _ = QFileDialog.getOpenFileName(
@@ -326,6 +325,7 @@ class SmartTable(QWidget):
                         df = pd.read_csv(path)
                     except Exception:
                         df = pd.read_excel(path)
+                df = normalize_dataframe_headers(df)
             except Exception as e:
                 from PyQt6.QtWidgets import QMessageBox
 

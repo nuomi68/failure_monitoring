@@ -429,7 +429,8 @@ class UnsupervisedPage(QWidget):
             QMessageBox.warning(self,"提示","请选择特征")
             return
 
-        X = self.df[cols].astype(np.float32).values
+        # 后端会统一编码离散文本列，因此保持原始 dtype，避免 np.float32 转换时报错
+        X = self.df[cols].to_numpy(copy=True)
         alg = self.alg_combo.currentData()
         scaler_spec = self.scaler_combo.currentData()
         # 主参数：为不同算法映射

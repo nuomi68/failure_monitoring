@@ -55,11 +55,11 @@ class ParamPanel(QWidget):
         self._manager = manager
         self._adv_params: Dict[str, Any] = {}
 
-        self.batch = QSpinBox(minimum=1, maximum=2048, value=32)
-        self.epochs = QSpinBox(minimum=1, maximum=2000, value=50)
-        self.look_back = QSpinBox(minimum=1, maximum=1024, value=32)
+        self.batch = QSpinBox(minimum=1,value=32)
+        self.epochs = QSpinBox(minimum=1, value=50)
+        self.look_back = QSpinBox(minimum=1, value=32)
 
-        btn_adv = QPushButton("高级参数…")
+        btn_adv = QPushButton("高级参数")
         btn_adv.clicked.connect(self._open_adv_dialog)
 
         form = QFormLayout(self)

@@ -53,6 +53,8 @@ from PyQt6.QtWidgets import (
     QAbstractSpinBox,
 )
 
+TABLE_FILE_FILTER = "表格文件 (*.csv *.xls *.xlsx);;CSV 文件 (*.csv);;Excel 文件 (*.xls *.xlsx)"
+
 
 class PlainEditorDelegate(QStyledItemDelegate):
     """用 ID 选择器强制保持表格内编辑器的默认样式。"""
@@ -149,6 +151,24 @@ def _is_short_categorical_series(ser: pd.Series) -> bool:
         and max_len <= CATEGORICAL_MAX_LEN
         and text_ratio >= CATEGORICAL_MIN_COVERAGE
     )
+
+
+def _normalize_header_label(label: Any) -> str:
+    """清洗表头：去除 BOM、全角空格及前后空白。"""
+    if label is None:
+        return ""
+    text = str(label)
+    text = text.replace("\u3000", " ").replace("\ufeff", "")
+    return text.strip()
+
+
+def normalize_dataframe_headers(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """返回表头已清洗的新 DataFrame，便于匹配既有特征名。"""
+    if df is None:
+        return None
+    renamed = df.copy()
+    renamed.columns = [_normalize_header_label(c) for c in renamed.columns]
+    return renamed
 
 
 class DataFrameModel(QAbstractTableModel):
@@ -339,7 +359,7 @@ class DataLoadDialog(QDialog):
 
         # ---------- 顶部：选择文件 / 时间列与格式 ----------
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("选择 CSV 或 Excel 文件...")
+        self.path_edit.setPlaceholderText("选择表格文件（CSV/XLS/XLSX）...")
         self.path_edit.setReadOnly(True)
         btn_load = QPushButton("选择文件")
         btn_load.clicked.connect(self._choose_and_load)
@@ -471,7 +491,10 @@ class DataLoadDialog(QDialog):
     def _choose_and_load(self):
         """选择文件并直接加载预览。"""
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择数据文件", "", "All Supported (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx)"
+            self,
+            "选择表格文件",
+            "",
+            TABLE_FILE_FILTER,
         )
         if path:
             self.path_edit.setText(path)
@@ -493,6 +516,7 @@ class DataLoadDialog(QDialog):
                 df = pd.read_csv(path)
             else:
                 df = pd.read_excel(path)
+            df = normalize_dataframe_headers(df)
         except Exception as e:
             QMessageBox.critical(self, "读取失败", f"无法读取文件：{e}")
             return
@@ -944,9 +968,9 @@ class DataLoadDialog(QDialog):
         """先弹出文件选择框，随后打开本对话框。如果用户取消则返回 None。"""
         path, _ = QFileDialog.getOpenFileName(
             parent,
-            "选择数据文件",
+            "选择表格文件",
             "",
-            "All Supported (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx)",
+            TABLE_FILE_FILTER,
         )
         if not path:
             return None

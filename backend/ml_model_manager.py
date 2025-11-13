@@ -62,6 +62,7 @@ class MLModelManager:
             "model_type": meta.get("model_type", ""),
             "dataset_id": "",
             "metrics": meta.get("metrics", {}),
+            "features": list(meta.get("features", []) or []),
         }
         self.registry.data[model_id] = reg
         self._write_registry()

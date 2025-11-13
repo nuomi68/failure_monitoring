@@ -635,10 +635,13 @@ class FeaturePreviewWidget(QWidget):
             df_use = self._df
 
         chart = self.cmb_type.currentText()
+        has_target = (
+            bool(self._target_column)
+            and self._target_column in df_use.columns
+        )
         show_category_filter = (
             chart == "散点图"
-            and self._target_column
-            and self._target_column in df_use.columns
+            and has_target
             and self.category_filter.has_entries()
         )
         self.category_filter.setVisible(show_category_filter)
@@ -670,28 +673,29 @@ class FeaturePreviewWidget(QWidget):
                 self.canvas.draw()
                 return
 
+            applied_coloring = False  # 默认回退为普通散点图
             if show_category_filter:
                 selected = self.category_filter.selected_values()
-                if not selected:
-                    self.canvas.draw()
-                    return
-                label_series = df_use[self._target_column].astype(str)
-                mask = label_series.isin(selected)
-                filtered = df_use[mask]
-                label_series = label_series[mask]
-                if filtered.empty:
-                    self.canvas.draw()
-                    return
+                if selected:
+                    label_series = df_use[self._target_column].astype(str)
+                    mask = label_series.isin(selected)
+                    filtered = df_use[mask]
+                    label_series = label_series[mask]
+                    if filtered.empty:
+                        self.canvas.draw()
+                        return
 
-                for label in pd.Index(label_series).drop_duplicates():
-                    subset = filtered[label_series == label]
-                    kwargs: dict[str, Any] = {"alpha": 0.75}
-                    color_hex = self._category_colors.get(label)
-                    if color_hex:
-                        kwargs["color"] = color_hex
-                    self.ax.scatter(subset[x], subset[y], label=label, **kwargs)
-                self.ax.legend(title=self._target_column, loc="best")
-            else:
+                    for label in pd.Index(label_series).drop_duplicates():
+                        subset = filtered[label_series == label]
+                        kwargs: dict[str, Any] = {"alpha": 0.75}
+                        color_hex = self._category_colors.get(label)
+                        if color_hex:
+                            kwargs["color"] = color_hex
+                        self.ax.scatter(subset[x], subset[y], label=label, **kwargs)
+                    self.ax.legend(title=self._target_column, loc="best")
+                    applied_coloring = True
+
+            if not applied_coloring:
                 self.ax.scatter(df_use[x], df_use[y], alpha=0.6)
 
             self.ax.set_xlabel(x)
