@@ -5,15 +5,17 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Dict, List
 
+from PyQt6.QtCore import QSize
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QGridLayout,
     QLabel,
     QPushButton,
     QMessageBox,
     QGroupBox,
+    QFrame,
+    QStyle,
 )
 
 from backend.ml_interface import ML, infer_input_features
@@ -58,12 +60,12 @@ class EnsemblePage(QWidget):
 
         self.pred_cols: set[str] = set()
 
-        # ----- 四宫格布局 -----
+        # ----- 页面区块 -----
         self.grp_ts = self._build_ts_block()
         self.grp_ml = self._build_ml_block()
         self.grp_fault = self._build_fault_block()
 
-        # 裂变活度输入表
+        # 裂变活度输入区
         self.ts_input_wrap = QWidget()
         right_top = QVBoxLayout(self.ts_input_wrap)
         self.lbl_ts_hint = QLabel()
@@ -73,34 +75,48 @@ class EnsemblePage(QWidget):
         right_top.addWidget(self.tbl_ts)
         right_top.addWidget(self._make_ts_actions())
 
-        # 集成输入表（常驻）
+        # 集成输入表（常驻区）
         self.common_wrap = QWidget()
         right_bottom = QVBoxLayout(self.common_wrap)
         self.tbl_common = SmartTable(SmartTableConfig())
         right_bottom.addWidget(self.tbl_common)
         right_bottom.addWidget(self._make_final_actions())
 
-        # 左下角：ML 与故障块
-        self.bottom_left = QWidget()
-        left_bottom = QVBoxLayout(self.bottom_left)
-        left_bottom.setSpacing(8)
-        left_bottom.addWidget(self.grp_ml)
-        left_bottom.addWidget(self.grp_fault)
-        left_bottom.setStretch(0, 1)
-        left_bottom.setStretch(1, 1)
+        # 页面布局：标题 + 分隔线 + 各区块
+        self.lbl_page_title = self._make_section_label("核素活度预测")
+        self.lbl_fault_title = self._make_section_label("破损检测模型")
 
-        # 根布局 2x2
-        root = QGridLayout(self)
-        root.setHorizontalSpacing(12)
-        root.setVerticalSpacing(12)
-        root.addWidget(self.grp_ts, 0, 0)
-        root.addWidget(self.ts_input_wrap, 0, 1)
-        root.addWidget(self.bottom_left, 1, 0)
-        root.addWidget(self.common_wrap, 1, 1)
-        root.setColumnMinimumWidth(0, 280)  # 左栏固定较窄，右栏自适应
-        root.setColumnStretch(0, 0)
-        root.setColumnStretch(1, 1)
-        root.setRowStretch(1, 1)
+        self.fault_models_wrap = QWidget()
+        fault_left = QVBoxLayout(self.fault_models_wrap)
+        fault_left.setSpacing(8)
+        fault_left.addWidget(self.grp_ml)
+        fault_left.addWidget(self.grp_fault)
+        fault_left.setStretch(0, 1)
+        fault_left.setStretch(1, 1)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(12)
+        root.addWidget(self.lbl_page_title)
+        root.addWidget(self._make_divider())
+
+        top_layout = QHBoxLayout()
+        top_layout.setSpacing(12)
+        top_layout.addWidget(self.grp_ts)
+        top_layout.addWidget(self.ts_input_wrap)
+        top_layout.setStretch(0, 0)
+        top_layout.setStretch(1, 1)
+        root.addLayout(top_layout)
+
+        root.addWidget(self.lbl_fault_title)
+        root.addWidget(self._make_divider())
+
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setSpacing(12)
+        bottom_layout.addWidget(self.fault_models_wrap)
+        bottom_layout.addWidget(self.common_wrap)
+        bottom_layout.setStretch(0, 0)
+        bottom_layout.setStretch(1, 1)
+        root.addLayout(bottom_layout)
 
     # ------------------------------------------------------------------
     # 工具函数
@@ -120,12 +136,43 @@ class EnsemblePage(QWidget):
             l.setSpacing(2)
             lbl = QLabel(names.get(mid, mid))
             l.addWidget(lbl)
-            btn = QPushButton("x")
-            btn.setFixedSize(14, 14)
+            btn = QPushButton()
+            btn.setToolTip("移除模型")
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: white;
+                    border: none;        /* 如果你不要边框就这样写 */
+                }
+                QPushButton:hover {
+                    background-color: #ff4d4f;  /* 悬停时红色 */
+                }
+                QPushButton:pressed {
+                    background-color: #d9363e;  /* 按下时更深一点的红色*/
+                }
+            """)
+            btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+            btn.setIconSize(QSize(12, 12))
+            btn.setFlat(True)
+            btn.setFixedSize(18, 18)
             btn.clicked.connect(lambda _, m=mid: remove_cb(m))
             l.addWidget(btn)
             layout.addWidget(w)
         layout.addStretch()
+
+    def _make_section_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        font = lbl.font()
+        font.setBold(True)
+        font.setPointSize(max(font.pointSize() + 4, 14))
+        lbl.setFont(font)
+        return lbl
+
+    def _make_divider(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setFixedHeight(2)
+        return line
 
     def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
         df = tbl.dataframe()
