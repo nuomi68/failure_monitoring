@@ -12,6 +12,6 @@ if __name__ == "__main__":
 
     win = MainController()
     win.setWindowIcon(QIcon("./gui/icons/logo.png"))
-    win.show()
+    win.showMaximized()
 
     sys.exit(app.exec())
