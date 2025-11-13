@@ -177,7 +177,7 @@ QComboBox:focus { border: 1px solid $primary; }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: right center;
-    width: 28px;
+    width: 24px;
     border-left: 1px solid $border;
 }
 QComboBox QAbstractItemView {

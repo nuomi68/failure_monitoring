@@ -1,5 +1,7 @@
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtWidgets import QMessageBox
+import html
 import logging
 
 logger = logging.getLogger("failure_monitoring")
@@ -20,6 +22,30 @@ logger.propagate = False
 
 def front_log(msg: str, level: str = "info") -> None:
     getattr(logger, level, logger.info)(msg)
+
+
+def show_save_success(parent, model_id: str, model_name: str) -> None:
+    """统一展示模型保存成功的弹窗。"""
+
+    dlg = QMessageBox(parent)
+    dlg.setIcon(QMessageBox.Icon.Information)
+    dlg.setWindowTitle("已保存")
+    dlg.setTextFormat(Qt.TextFormat.RichText)
+    safe_id = html.escape(model_id or "-")
+    safe_name = html.escape(model_name or "-")
+    dlg.setText(
+        """
+        <div style="font-size:14px;">
+          <p style="margin:6px 0 10px 0;">模型已保存为 <b>{mid}</b></p>
+          
+          <p style="margin:0;">模型名：{name}</p>
+          <p style="margin:0;">模型ID：{mid}</p>
+          
+        </div>
+        """.format(mid=safe_id, name=safe_name)
+    )
+    dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    dlg.exec()
 
 
 class TrainWorker(QThread):

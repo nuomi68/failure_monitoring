@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .ml_interface import ML
-from .model_store import ensure_root, JsonRegistry
+from .model_store import ensure_root, JsonRegistry, generate_model_storage_id
 
 
 class MLModelManager:
@@ -19,8 +19,12 @@ class MLModelManager:
     """
 
     def __init__(self) -> None:
-        self.models_dir = ensure_root("ml")
-        self.registry = JsonRegistry(self.models_dir)
+        self.root = ensure_root("ml")
+        self.models_dir = self.root / "models"
+        self.registries_dir = self.root / "registries"
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        self.registries_dir.mkdir(parents=True, exist_ok=True)
+        self.registry = JsonRegistry(self.root, "registries/models_registry.json")
 
     # ------------------------------------------------------------------
     def _write_registry(self) -> None:
@@ -40,16 +44,20 @@ class MLModelManager:
         name: str
             Friendly name displayed in manager dialog.
         """
+        name = (name or "").strip()
         meta = ML.get_meta()
         if not meta:
             raise RuntimeError("暂无可保存的模型")
-        model_id = uuid.uuid4().hex
-        path = self.models_dir / f"{model_id}.joblib"
+        model_id = generate_model_storage_id(meta.get("model_type", ""), name or "model", self.models_dir)
+        display_name = name or model_id
+        model_dir = self.models_dir / model_id
+        model_dir.mkdir(parents=True, exist_ok=True)
+        path = model_dir / "model.joblib"
         ML.save(str(path))
         reg = {
             "model_id": model_id,
-            "name": name,
-            "path": str(path),
+            "name": display_name,
+            "path": str(path.relative_to(self.root)),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model_type": meta.get("model_type", ""),
             "dataset_id": "",
@@ -71,7 +79,7 @@ class MLModelManager:
             meta = self.registry.data.get(mid)
             if not meta:
                 raise KeyError(f"model_id '{mid}' not found")
-            paths.append(meta["path"])
+            paths.append(str(self._resolve_path(meta.get("path", ""))))
         if not paths:
             raise KeyError("no model ids provided")
         if len(paths) == 1:
@@ -95,7 +103,18 @@ class MLModelManager:
         if not meta:
             return False
         try:
-            Path(meta.get("path", "")).unlink(missing_ok=True)
+            model_path = self._resolve_path(meta.get("path", ""))
+        except ValueError:
+            model_path = None
+        try:
+            if model_path and model_path.exists():
+                if model_path.is_dir():
+                    shutil.rmtree(model_path, ignore_errors=True)
+                else:
+                    model_path.unlink(missing_ok=True)
+                    parent = model_path.parent
+                    if parent != self.models_dir and self.models_dir in parent.parents:
+                        shutil.rmtree(parent, ignore_errors=True)
         except Exception:
             pass
         self._write_registry()
@@ -107,7 +126,8 @@ class MLModelManager:
         if not meta:
             return False
         try:
-            shutil.copyfile(meta["path"], dest)
+            src = self._resolve_path(meta.get("path", ""))
+            shutil.copyfile(src, dest)
             return True
         except Exception:
             return False
@@ -115,24 +135,36 @@ class MLModelManager:
     # ------------------------------------------------------------------
     def import_model(self, src: str) -> bool:
         try:
-            shutil.copyfile(src, src)  # just to ensure readable
+            shutil.copyfile(src, src)
         except Exception:
             return False
-        mid = uuid.uuid4().hex
-        dest = self.models_dir / f"{mid}.joblib"
+        stem = Path(src).stem
+        model_id = generate_model_storage_id("import", stem, self.models_dir)
+        model_dir = self.models_dir / model_id
+        model_dir.mkdir(parents=True, exist_ok=True)
+        dest = model_dir / "model.joblib"
         try:
             shutil.copyfile(src, dest)
         except Exception:
             return False
         meta = {
-            "model_id": mid,
-            "name": Path(src).stem,
-            "path": str(dest),
+            "model_id": model_id,
+            "name": stem,
+            "path": str(dest.relative_to(self.root)),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model_type": "",
             "dataset_id": "",
             "metrics": {},
         }
-        self.registry.data[mid] = meta
+        self.registry.data[model_id] = meta
         self._write_registry()
         return True
+
+    # ------------------------------------------------------------------
+    def _resolve_path(self, path_str: str) -> Path:
+        if not path_str:
+            raise ValueError("empty path")
+        path = Path(path_str)
+        if not path.is_absolute():
+            path = self.root / path
+        return path

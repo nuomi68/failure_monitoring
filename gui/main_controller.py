@@ -104,7 +104,7 @@ class MainController(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("主控界面")
+        self.setWindowTitle("特征核素智能诊断程序v1.0")
         self.resize(1000, 600)
 
         # 当前状态：False → 展开；True → 折叠
@@ -126,7 +126,7 @@ class MainController(QMainWindow):
         # -------------------- 左侧侧边栏 --------------------
         self.left_frame = QFrame()
         self.left_frame.setObjectName("Sidebar")
-        self.left_frame.setFixedWidth(self.COLLAPSED_WIDTH)
+        self.left_frame.setFixedWidth(self.EXPANDED_WIDTH)
         left_layout = QVBoxLayout(self.left_frame)
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(4)
@@ -139,9 +139,9 @@ class MainController(QMainWindow):
         self.btn_pipeline = QPushButton()
 
         self.menu_items = [
-            (self.btn_nuclide, "📈", "活度预测"),
-            (self.btn_anomaly, "🔍", "异常检测"),
-            (self.btn_damage, "🔧", "损伤评估"),
+            (self.btn_nuclide, "📈", "核素活度预测"),
+            (self.btn_anomaly, "🔍", "破损检测模型"),
+            (self.btn_damage, "🔧", "破损检测模型2"),
             (self.btn_ensemble, "🧩", "模型集成"),
         ]
 
@@ -149,7 +149,7 @@ class MainController(QMainWindow):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setCheckable(True)
             btn.setToolTip(label)
-            btn.setText(f"{icon}")
+            btn.setText(f"{icon} {label}")
             left_layout.addWidget(btn)
 
         left_layout.addStretch()

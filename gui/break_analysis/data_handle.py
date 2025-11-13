@@ -135,6 +135,8 @@ class DataHandlePage(QWidget):
         self.preview = FeaturePreviewWidget()
         bottom_split.addWidget(self.preview)
         self.feature_selector.selectionChanged.connect(self.preview.set_selected_columns)
+        self.cmb.currentTextChanged.connect(self._on_target_column_changed)
+        self._on_target_column_changed()
 
         # ===== 右：计算器 ======
         right_panel = QWidget()
@@ -280,9 +282,15 @@ class DataHandlePage(QWidget):
                 selected = []
 
         self.preview.set_selected_columns(selected)
+        self._on_target_column_changed()
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked.value)
+        self._on_target_column_changed()
+
+    def _on_target_column_changed(self, _text: str | None = None):
+        if hasattr(self, "preview"):
+            self.preview.set_target_column(self.target_column())
 
     def _on_new_column(self, name: str, col: pd.Series):
         """收到计算器的新列后，同步 UI."""

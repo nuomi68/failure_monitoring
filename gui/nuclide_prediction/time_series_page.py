@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
 
 # —— 后端 ——
 from backend.timeseries_interface import ModelManager
-from gui.tools import logger,TrainWorker
+from gui.tools import logger, TrainWorker, show_save_success
 
 from  gui.data_load_dialog import DataLoadDialog, DataFrameModel
 from gui.model_manager_dialog import ModelManagerDialog
@@ -518,13 +518,16 @@ class TimeSeriesPage(QWidget):
             return
 
         name, ok = QInputDialog.getText(self, "模型名称", "请输入模型名称：")
-        if not ok or not name.strip():
+        if not ok:
+            return
+        friendly_name = name.strip()
+        if not friendly_name:
             return
 
         try:
             model_id = self.manager.save_model(
                 model_id=None,
-                name=name.strip(),
+                name=friendly_name,
                 model_type=self._trained_model_type or self.model_type_combo.currentData(),
                 dataset_id=self._dataset_id,
                 # 把所选特征一并保存到 params，方便下次加载回填
@@ -537,7 +540,7 @@ class TimeSeriesPage(QWidget):
             return
 
         self.status_label.setText(f"模型已保存：{model_id}")
-        QMessageBox.information(self, "成功", f"模型已保存为 {model_id}")
+        show_save_success(self, model_id, friendly_name)
 
 
     # ============================================================

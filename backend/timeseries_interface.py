@@ -2,7 +2,7 @@
 时间序列模型的后端管理模块。
 
 此模块提供 `ModelManager` 类用于处理数据集的注册与加载、模型的训练与保存等工作。
-数据集经过弹窗清洗后会持久化保存为 parquet 文件，并记录时间列和格式等元信息；
+数据集经过弹窗清洗后会持久化保存为 CSV 文件，并记录时间列和格式等元信息；
 模型训练完毕后可以保存到磁盘，并在统一的 JSON 注册表中登记其类型、参数、绑定的数据集等信息。
 
 由于当前环境缺少真实的模型训练依赖，本实现中的 `train` 方法仅提供示例性的占位训练，
@@ -33,6 +33,7 @@ from sklearn.model_selection import train_test_split
 
 
 from backend.data_utils import build_windows
+from .model_store import generate_model_storage_id
 from backend.models import (
     gru_model,
     tcn_model,
@@ -199,11 +200,10 @@ class ModelManager:
     ) -> Dict[str, Any]:
         """注册数据集（仅缓存，不立即持久化）。"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        uid = uuid.uuid4().hex[:8]
         prefix = ""
         if source_name:
             prefix = re.sub(r'[\\/:*?"<>|]', '_', Path(source_name).stem)
-        dataset_id = f"{prefix}_{timestamp}-DATA-{uid}" if prefix else f"{timestamp}-DATA-{uid}"
+        dataset_id = f"{prefix}_{timestamp}" if prefix else f"{timestamp}"
 
         self.datasets_cache[dataset_id] = {
             "df": df.copy(),
@@ -235,7 +235,15 @@ class ModelManager:
             raise KeyError(f"未找到数据集 {dataset_id}")
         manifest = self.datasets_registry[dataset_id]
         data_path = self.artifacts_dir / manifest["path"]
-        return pd.read_parquet(data_path)
+        suffix = data_path.suffix.lower()
+        if suffix == ".csv":
+            return pd.read_csv(data_path)
+        if suffix in {".parquet", ".pq"}:
+            return pd.read_parquet(data_path)
+        try:
+            return pd.read_csv(data_path)
+        except Exception:
+            return pd.read_parquet(data_path)
 
     def list_datasets(self) -> List[Dict[str, Any]]:
         """列出所有已注册的数据集的清单。"""
@@ -362,8 +370,12 @@ class ModelManager:
                     out.parent.mkdir(parents=True, exist_ok=True)
                     with open(out, "wb") as f:
                         f.write(zf.read(name))
+                model_file = target_dir / "model.joblib"
+                legacy_model = target_dir / "model.pkl"
+                if not model_file.exists() and legacy_model.exists():
+                    legacy_model.rename(model_file)
                 meta["artifacts"] = {
-                    "model_path": str((target_dir / "model.pkl").relative_to(self.artifacts_dir)),
+                    "model_path": str(model_file.relative_to(self.artifacts_dir)),
                     "config_path": str((target_dir / "config.json").relative_to(self.artifacts_dir)),
                     "metrics_path": str((target_dir / "metrics.json").relative_to(self.artifacts_dir)),
                 }
@@ -537,8 +549,8 @@ class ModelManager:
 
         dataset_dir = self.datasets_dir / dataset_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        data_path = dataset_dir / "data.parquet"
-        df.to_parquet(data_path, index=False)
+        data_path = dataset_dir / "data.csv"
+        df.to_csv(data_path, index=False)
 
         manifest: Dict[str, Any] = {
             "dataset_id": dataset_id,
@@ -585,9 +597,7 @@ class ModelManager:
         # 如果没有提供 ID，则创建一个新的
         is_new = model_id is None
         if is_new:
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            uid = uuid.uuid4().hex[:6]
-            model_id = f"{timestamp}-{model_type.upper()}-{uid}"
+            model_id = generate_model_storage_id(model_type or "MODEL", name, self.models_dir)
 
         model_dir = self.models_dir / model_id
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -600,7 +610,7 @@ class ModelManager:
                 raise ValueError("内存中找不到对应已训练模型，请先训练后再保存。")
             model_obj = real
         # 保存模型对象到二进制文件，避免字符串化导致加载后类型错误
-        model_path = model_dir / "model.pkl"
+        model_path = model_dir / "model.joblib"
         joblib.dump(model_obj, model_path)
 
         # 保存参数和指标

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Iterable, List
 
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QListWidget,
+    QListWidgetItem,
     QAbstractItemView,
     QPushButton,
     QLabel,
@@ -30,6 +31,7 @@ class FeatureSelectorWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._suppress_signal = False
+        self._col_order: list[str] = []
 
         root = QVBoxLayout(self)
 
@@ -71,49 +73,33 @@ class FeatureSelectorWidget(QWidget):
 
     # ---------------- 公共 API ---------------- #
     def set_columns(self, cols: List[str]) -> None:
-        """设置可选列并默认全选到右侧。"""
+        """Set available columns and select all by default."""
+        cols = self._dedup_preserve_order(cols)
+        self._col_order = cols
         self._suppress_signal = True
         try:
-            self.list_all.clear()
-            self.list_sel.clear()
-            for c in cols:
-                self.list_sel.addItem(c)
+            self._update_lists(set(cols))
         finally:
             self._suppress_signal = False
             self._emit()
 
     def set_selected(self, cols: List[str]) -> None:
-        """回填选择"""
-        all_cols = set(self.columns())
-        cols = [c for c in cols if c in all_cols]
-        left = [c for c in self.columns() if c not in cols]
+        """Restore selected columns."""
+        self._ensure_col_order()
+        valid = {c for c in cols if c in set(self._col_order)}
 
         self._suppress_signal = True
         try:
-            self.list_all.clear()
-            self.list_sel.clear()
-            for c in left:
-                self.list_all.addItem(c)
-            for c in cols:
-                self.list_sel.addItem(c)
+            self._update_lists(valid)
         finally:
             self._suppress_signal = False
             self._emit()
 
     def columns(self) -> List[str]:
-        """全部候选列（= 左列 + 右列的并集，按当前顺序）"""
-        res: List[str] = []
-        for w in (self.list_all, self.list_sel):
-            for i in range(w.count()):
-                res.append(w.item(i).text())
-        # 去重保持顺序
-        seen: set[str] = set()
-        uniq: List[str] = []
-        for c in res:
-            if c not in seen:
-                seen.add(c)
-                uniq.append(c)
-        return uniq
+        """All available columns (union of both lists) in stable order."""
+        if not self._col_order:
+            self._col_order = self._collect_from_lists()
+        return list(self._col_order)
 
     def selected(self) -> List[str]:
         """当前已选列"""
@@ -121,30 +107,111 @@ class FeatureSelectorWidget(QWidget):
 
     # -------------- 内部操作 -------------- #
     def _move_one_right(self) -> None:
-        for it in self.list_all.selectedItems():
-            self.list_sel.addItem(it.text())
-            self.list_all.takeItem(self.list_all.row(it))
+        left_sel, right_sel = self._capture_selection()
+        if not left_sel:
+            return
+        new_selected = set(self.selected()).union(left_sel)
+        self._update_lists(
+            new_selected,
+            left_selected=set(),
+            right_selected=right_sel,
+        )
         self._emit()
 
     def _move_one_left(self) -> None:
-        for it in self.list_sel.selectedItems():
-            self.list_all.addItem(it.text())
-            self.list_sel.takeItem(self.list_sel.row(it))
+        left_sel, right_sel = self._capture_selection()
+        if not right_sel:
+            return
+        new_selected = set(self.selected()).difference(right_sel)
+        self._update_lists(
+            new_selected,
+            left_selected=left_sel,
+            right_selected=set(),
+        )
         self._emit()
 
     def _move_all_right(self) -> None:
-        while self.list_all.count():
-            it = self.list_all.takeItem(0)
-            self.list_sel.addItem(it.text())
+        left_sel, right_sel = self._capture_selection()
+        self._ensure_col_order()
+        self._update_lists(
+            set(self._col_order),
+            left_selected=set(),
+            right_selected=right_sel,
+        )
         self._emit()
 
     def _move_all_left(self) -> None:
-        while self.list_sel.count():
-            it = self.list_sel.takeItem(0)
-            self.list_all.addItem(it.text())
+        left_sel, right_sel = self._capture_selection()
+        self._update_lists(
+            set(),
+            left_selected=left_sel,
+            right_selected=set(),
+        )
         self._emit()
 
     def _emit(self) -> None:
         if not self._suppress_signal:
             self.selectionChanged.emit(self.selected())
 
+    def _capture_selection(self) -> tuple[set[str], set[str]]:
+        left: set[str] = set()
+        for i in range(self.list_all.count()):
+            item = self.list_all.item(i)
+            if item.isSelected():
+                left.add(item.text())
+
+        right: set[str] = set()
+        for i in range(self.list_sel.count()):
+            item = self.list_sel.item(i)
+            if item.isSelected():
+                right.add(item.text())
+
+        return left, right
+
+    def _update_lists(
+        self,
+        selected_set: Iterable[str],
+        *,
+        left_selected: set[str] | None = None,
+        right_selected: set[str] | None = None,
+    ) -> None:
+        self._ensure_col_order()
+        col_set = set(self._col_order)
+        selected = {c for c in selected_set if c in col_set}
+        left_keep = (left_selected or set()) & col_set
+        right_keep = (right_selected or set()) & col_set
+
+        self.list_all.clear()
+        self.list_sel.clear()
+        for col in self._col_order:
+            if col in selected:
+                item = QListWidgetItem(col)
+                if col in right_keep:
+                    item.setSelected(True)
+                self.list_sel.addItem(item)
+            else:
+                item = QListWidgetItem(col)
+                if col in left_keep:
+                    item.setSelected(True)
+                self.list_all.addItem(item)
+
+    def _ensure_col_order(self) -> None:
+        if not self._col_order:
+            self._col_order = self._collect_from_lists()
+
+    def _collect_from_lists(self) -> list[str]:
+        res: list[str] = []
+        for widget in (self.list_all, self.list_sel):
+            for i in range(widget.count()):
+                res.append(widget.item(i).text())
+        return self._dedup_preserve_order(res)
+
+    @staticmethod
+    def _dedup_preserve_order(cols: Iterable[str]) -> list[str]:
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for col in cols:
+            if col not in seen:
+                seen.add(col)
+                uniq.append(col)
+        return uniq

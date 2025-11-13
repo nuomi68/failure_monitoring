@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui.smart_table import SmartTable, SmartTableConfig
+from gui.tools import show_save_success
 
 
 class ValidationPage(QWidget):
@@ -173,11 +174,14 @@ class ValidationPage(QWidget):
             QMessageBox.warning(self, "提示", "暂无可保存的模型")
             return
         name, ok = QInputDialog.getText(self, "保存模型", "模型名称：")
-        if not ok or not name.strip():
+        if not ok:
+            return
+        friendly_name = name.strip()
+        if not friendly_name:
             return
         try:
-            mid = self.manager.save_current(name.strip())
-            QMessageBox.information(self, "已保存", f"模型已保存为 ID: {mid}")
+            mid = self.manager.save_current(friendly_name)
+            show_save_success(self, mid, friendly_name)
         except Exception as e:
             QMessageBox.warning(self, "错误", str(e))
 

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from backend.fault_level_estimator import FaultLevelEstimator
 from backend.fault_model_manager import FaultModelManager
 from gui.model_manager_dialog import ModelManagerDialog
+from gui.tools import show_save_success
 
 from gui.smart_table import SmartTable, SmartTableConfig
 
@@ -33,10 +34,10 @@ class FaultLevelPage(QWidget):
 
         # ---------------- Top Controls ----------------
         top = QHBoxLayout()
-        self.btn_load = QPushButton("加载模型…")
-        self.btn_load.clicked.connect(self._open_model_manager)
-        top.addWidget(self.btn_load)
-        top.addStretch()
+        # self.btn_load = QPushButton("加载模型…")
+        # self.btn_load.clicked.connect(self._open_model_manager)
+        # top.addWidget(self.btn_load)
+        # top.addStretch()
 
         top.addWidget(QLabel("算法方法："))
         self.cb_method = QComboBox()
@@ -60,7 +61,7 @@ class FaultLevelPage(QWidget):
             lambda _: setattr(self, "_scaler_code", self.cb_scaler.currentData())
         )
         top.addWidget(self.cb_scaler)
-
+        top.addStretch()
         # ---------------- Splitter (Tables) ----------------
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -235,18 +236,21 @@ class FaultLevelPage(QWidget):
         )
 
         name, ok = QInputDialog.getText(self, "模型名称", "请输入模型名称：")
-        if not ok or not name.strip():
+        if not ok:
+            return
+        friendly_name = name.strip()
+        if not friendly_name:
             return
 
         try:
             mid = self.manager.save_model(
                 self._estimator,
-                name.strip(),
+                friendly_name,
                 label_col=label_col,
                 df=df_clean,
                 data_prefix=self.tbl_labelled.source_prefix(),
             )
-            QMessageBox.information(self, "已保存", f"模型已保存：{mid}")
+            show_save_success(self, mid, friendly_name)
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存模型失败：{e}")
 

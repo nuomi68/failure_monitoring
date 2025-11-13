@@ -13,7 +13,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 
 from .fault_level_estimator import FaultLevelEstimator
-from .model_store import ensure_root, JsonRegistry
+from .model_store import ensure_root, JsonRegistry, generate_model_storage_id
 
 
 class FaultModelManager:
@@ -25,8 +25,13 @@ class FaultModelManager:
     that the same ``ModelManagerDialog`` can be reused."""
 
     def __init__(self) -> None:
-        self.models_dir = ensure_root("fault_level")
-        self.registry = JsonRegistry(self.models_dir)
+        self.root = ensure_root("fault_level")
+        self.models_dir = self.root / "models"
+        self.datasets_dir = self.root / "datasets"
+        self.registries_dir = self.root / "registries"
+        for d in (self.models_dir, self.datasets_dir, self.registries_dir):
+            d.mkdir(parents=True, exist_ok=True)
+        self.registry = JsonRegistry(self.root, "registries/models_registry.json")
 
     # ------------------------------------------------------------------
     def _write_registry(self) -> None:
@@ -61,28 +66,35 @@ class FaultModelManager:
             Training dataframe to store for later reloading.
         """
 
-        model_id = uuid.uuid4().hex
-        path = self.models_dir / f"{model_id}.joblib"
+        name = (name or "").strip()
+        slug_source = name or data_prefix or "model"
+        model_id = generate_model_storage_id(estimator.method, slug_source, self.models_dir)
+        model_dir = self.models_dir / model_id
+        model_dir.mkdir(parents=True, exist_ok=True)
+        path = model_dir / "model.joblib"
         estimator.save(str(path))
 
         data_path = ""
         if df is not None:
+            data_dir = self.datasets_dir / model_id
+            data_dir.mkdir(parents=True, exist_ok=True)
             prefix = re.sub(r'[\\/:*?"<>|]', '_', data_prefix or "")
-            fname = f"{prefix}_{model_id}.csv" if prefix else f"{model_id}.csv"
-            data_path = str(self.models_dir / fname)
+            fname = f"{prefix}.csv" if prefix else "data.csv"
+            csv_path = data_dir / fname
             try:
-                df.to_csv(data_path, index=False)
+                df.to_csv(csv_path, index=False)
+                data_path = str(csv_path.relative_to(self.root))
             except Exception:
                 data_path = ""
 
         meta = {
             "model_id": model_id,
-            "name": name,
-            "path": str(path),
+            "name": name or slug_source,
+            "path": str(path.relative_to(self.root)),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model_type": estimator.method,
             # 兼容 ModelManagerDialog，用 dataset_id 显示训练数据文件名
-            "dataset_id": Path(data_path).name if data_path else "",
+            "dataset_id": Path(data_path).as_posix() if data_path else "",
             "data_path": data_path,
             "label_col": label_col or "",
             "metrics": {
@@ -105,12 +117,13 @@ class FaultModelManager:
         if not meta:
             raise KeyError(f"model_id '{model_id}' not found")
 
-        est = FaultLevelEstimator.load(meta["path"])
+        model_path = self._resolve_path(meta.get("path", ""))
+        est = FaultLevelEstimator.load(str(model_path))
 
         df: pd.DataFrame | None = None
         data_path = meta.get("data_path")
         if data_path:
-            p = Path(data_path)
+            p = self._resolve_path(data_path)
             if p.exists():
                 try:
                     df = pd.read_csv(p)
@@ -171,8 +184,26 @@ class FaultModelManager:
         if not meta:
             return False
         try:
-            Path(meta.get("path", "")).unlink(missing_ok=True)
-            Path(meta.get("data_path", "")).unlink(missing_ok=True)
+            model_path = self._resolve_path(meta.get("path", ""))
+            data_path = meta.get("data_path")
+            if model_path.exists():
+                if model_path.is_dir():
+                    shutil.rmtree(model_path, ignore_errors=True)
+                else:
+                    model_path.unlink(missing_ok=True)
+                    parent = model_path.parent
+                    if parent != self.models_dir and self.models_dir in parent.parents:
+                        shutil.rmtree(parent, ignore_errors=True)
+            if data_path:
+                d = self._resolve_path(data_path)
+                if d.exists():
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+                    else:
+                        d.unlink(missing_ok=True)
+                        parent = d.parent
+                        if parent != self.datasets_dir and self.datasets_dir in parent.parents:
+                            shutil.rmtree(parent, ignore_errors=True)
         except Exception:
             pass
         self._write_registry()
@@ -184,7 +215,7 @@ class FaultModelManager:
         if not meta:
             return False
         try:
-            shutil.copyfile(meta["path"], dest)
+            shutil.copyfile(self._resolve_path(meta.get("path", "")), dest)
             return True
         except Exception:
             return False
@@ -196,16 +227,18 @@ class FaultModelManager:
         except Exception:
             return False
         name = Path(src).stem
-        mid = uuid.uuid4().hex
-        dest = self.models_dir / f"{mid}.joblib"
+        model_id = generate_model_storage_id(est.method if hasattr(est, "method") else "import", name, self.models_dir)
+        model_dir = self.models_dir / model_id
+        model_dir.mkdir(parents=True, exist_ok=True)
+        dest = model_dir / "model.joblib"
         try:
             shutil.copyfile(src, dest)
         except Exception:
             return False
         meta = {
-            "model_id": mid,
+            "model_id": model_id,
             "name": name,
-            "path": str(dest),
+            "path": str(dest.relative_to(self.root)),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model_type": est.method,
             "dataset_id": "",
@@ -216,6 +249,15 @@ class FaultModelManager:
                 "scaler": est.scaler_spec,
             },
         }
-        self.registry.data[mid] = meta
+        self.registry.data[model_id] = meta
         self._write_registry()
         return True
+
+    # ------------------------------------------------------------------
+    def _resolve_path(self, path_str: str) -> Path:
+        if not path_str:
+            raise ValueError("empty path")
+        p = Path(path_str)
+        if not p.is_absolute():
+            p = self.root / p
+        return p

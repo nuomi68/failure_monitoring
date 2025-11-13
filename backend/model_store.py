@@ -6,8 +6,10 @@ from __future__ import annotations
 简单 JSON 注册表的逻辑。此前多个模型管理器各自携带这些样板代码；将它们
 整合在此可以保持管理器一致并更易维护。"""
 
-from pathlib import Path
+from datetime import datetime
 import json
+from pathlib import Path
+import re
 from typing import Any, Dict, List
 
 
@@ -25,6 +27,7 @@ class JsonRegistry:
     """
 
     def __init__(self, root: Path, filename: str = "registry.json") -> None:
+        self.root = root
         self.file = root / filename
         self.data: Dict[str, Dict[str, Any]] = {}
         self.reload()
@@ -41,6 +44,7 @@ class JsonRegistry:
 
     # ------------------------------------------------------------------
     def write(self) -> None:
+        self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text(
             json.dumps(self.data, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -53,7 +57,8 @@ class JsonRegistry:
         changed = False
         items: List[Dict[str, Any]] = []
         for mid, meta in list(self.data.items()):
-            if Path(meta.get("path", "")).exists():
+            path = self._resolve_path(meta.get("path", ""))
+            if path and path.exists():
                 items.append(meta)
             else:
                 changed = True
@@ -81,4 +86,46 @@ class JsonRegistry:
     def __getitem__(self, key: str) -> Dict[str, Any]:  # pragma: no cover
         self.reload()
         return self.data[key]
+
+    # ------------------------------------------------------------------
+    def _resolve_path(self, path_str: str) -> Path | None:
+        if not path_str:
+            return None
+        p = Path(path_str)
+        if not p.is_absolute():
+            p = (self.root / p).resolve()
+        return p
+
+
+_SLUG_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff_-]+")
+
+
+def _normalize_name_hint(name_hint: str) -> str:
+    """Return a filesystem-friendly slug derived from ``name_hint``."""
+
+    hint = (name_hint or "").strip()
+    if not hint:
+        return "model"
+    candidate = Path(hint).name  # drop any directory portion
+    stem = Path(candidate).stem or candidate
+    slug = _SLUG_RE.sub("_", stem)
+    slug = slug.strip("_") or "model"
+    return slug[:48]
+
+
+def generate_model_storage_id(model_type: str, name_hint: str, base_dir: Path | None = None) -> str:
+    """Create a timestamped identifier used as folder/file names when saving models."""
+
+    prefix = (model_type or "MODEL").upper()
+    slug = _normalize_name_hint(name_hint)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    candidate = f"{timestamp}-{prefix}-{slug}"
+    if base_dir is None:
+        return candidate
+    unique = candidate
+    suffix = 1
+    while (base_dir / unique).exists() or (base_dir / f"{unique}.joblib").exists():
+        unique = f"{candidate}-{suffix:02d}"
+        suffix += 1
+    return unique
 

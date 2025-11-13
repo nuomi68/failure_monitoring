@@ -668,7 +668,7 @@ class SupervisedPage(QWidget):
         tau = self.meta.get("tau", None)
         pieces = [f"任务:{task}", f"模型:{model}", f"规范化器:{scaler}"]
         if int(n_classes)>1: pieces.append(f"类别数:{n_classes}")
-        if len(classes)>0:   pieces.append(f"类名预览:{list(classes)[:5]}")
+        if classes is not None:   pieces.append(f"类名预览:{list(classes)[:5]}")
         if tau is not None: pieces.append(f"阈值τ:{tau:.3f}")
         logger.info("训练完成：%s", "，".join(pieces))
 
