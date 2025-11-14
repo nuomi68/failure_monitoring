@@ -5,16 +5,17 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.colors import to_hex
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSizePolicy,
     QPushButton, QListWidget, QListWidgetItem, QFrame, QCheckBox,
-    QStyledItemDelegate, QListView, QDialog, QMessageBox
+    QStyledItemDelegate, QListView, QDialog, QMessageBox, QToolTip
 )
-from PyQt6.QtGui import QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QStandardItem, QStandardItemModel, QCursor
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSize
+
+from gui.mpl_preview import InteractiveMplCanvas, MatplotlibPreviewDialog
 
 class HeatmapCanvas(FigureCanvas):
     """相关系数热力图——嵌入式 Matplotlib 画布"""
@@ -321,31 +322,6 @@ class CategoryFilterWidget(QWidget):
         self.selectionChanged.emit(self.selected_values())
 
 
-class PreviewEnlargeDialog(QDialog):
-    """放大 FeaturePreview 图表的独立窗口，带导航工具栏。"""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setWindowTitle("图表放大预览")
-        self.resize(900, 720)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        self.canvas = _PreviewCanvas(self)
-        toolbar = NavigationToolbar(self.canvas, self)
-        layout.addWidget(toolbar)
-        layout.addWidget(self.canvas)
-
-class _PreviewCanvas(FigureCanvas):
-    """承载 Matplotlib 的底层画布"""
-    def __init__(self, parent=None):
-        self.fig, self.ax = plt.subplots()
-        super().__init__(self.fig)
-        self.setParent(parent)
-        # 让画布在 QSplitter 里可以正常伸缩
-        self.setSizePolicy(QSizePolicy.Policy.Expanding,
-                           QSizePolicy.Policy.Expanding)
-
-
 class FeaturePreviewWidget(QWidget):
     """
     多图形预览：
@@ -409,9 +385,13 @@ class FeaturePreviewWidget(QWidget):
         root.addLayout(ctrl)
 
         # 中部：Matplotlib 画布 ------------------------------
-        self.canvas = _PreviewCanvas()
+        self.canvas = InteractiveMplCanvas()
         root.addWidget(self.canvas)
         self.ax = self.canvas.ax
+        self._hover_coords: np.ndarray | None = None
+        self._hover_labels: list[str] = []
+        self._hover_active_label: str | None = None
+        self.canvas.mpl_connect("motion_notify_event", self._on_hover_motion)
 
         # --- 状态 ----------------------------------------------------------
         self._df: pd.DataFrame = pd.DataFrame()
@@ -540,6 +520,9 @@ class FeaturePreviewWidget(QWidget):
     # ======= 绘图核心 ======================================================
     def _plot_on_axes(self, ax) -> bool:
         ax.clear()
+        self._hover_coords = None
+        self._hover_labels = []
+        self._hover_active_label = None
         if self._df.empty:
             return False
 
@@ -593,10 +576,12 @@ class FeaturePreviewWidget(QWidget):
                         if color_hex:
                             kwargs["color"] = color_hex
                         ax.scatter(subset[x], subset[y], label=label, **kwargs)
+                        self._append_hover_points(subset, x, y)
                     ax.legend(title=self._target_column, loc="best")
                     applied_coloring = True
             if not applied_coloring:
                 ax.scatter(df_use[x], df_use[y], alpha=0.6)
+                self._append_hover_points(df_use, x, y)
             ax.set_xlabel(x)
             ax.set_ylabel(y)
 
@@ -618,6 +603,59 @@ class FeaturePreviewWidget(QWidget):
 
         return True
 
+    def _append_hover_points(self, df: pd.DataFrame, x: str, y: str) -> None:
+        if df.empty:
+            return
+        try:
+            xs = pd.to_numeric(df[x], errors="coerce").to_numpy(dtype=float)
+            ys = pd.to_numeric(df[y], errors="coerce").to_numpy(dtype=float)
+        except Exception:
+            return
+        mask = ~(np.isnan(xs) | np.isnan(ys))
+        if not np.any(mask):
+            return
+        coords = np.column_stack([xs[mask], ys[mask]])
+        labels = df.index.astype(str).to_numpy()[mask]
+        if self._hover_coords is None:
+            self._hover_coords = coords
+        else:
+            self._hover_coords = np.vstack([self._hover_coords, coords])
+        self._hover_labels.extend(labels.tolist())
+
+    def _on_hover_motion(self, event):
+        if (
+            self._hover_coords is None
+            or not self._hover_labels
+            or event.inaxes is not self.ax
+        ):
+            if self._hover_active_label:
+                QToolTip.hideText()
+                self._hover_active_label = None
+            return
+        if event.x is None or event.y is None:
+            return
+        disp = self.ax.transData.transform(self._hover_coords)
+        if disp.size == 0:
+            return
+        ex, ey = event.x, event.y
+        diff = disp - np.array([ex, ey])
+        dist2 = np.sum(diff * diff, axis=1)
+        idx = int(np.argmin(dist2))
+        if dist2[idx] <= 225:
+            label = self._hover_labels[idx]
+            if self._hover_active_label != label:
+                qt_event = getattr(event, "guiEvent", None)
+                if qt_event is not None:
+                    pos = qt_event.globalPosition().toPoint()
+                else:
+                    pos = QCursor.pos()
+                QToolTip.showText(pos, label, self.canvas)
+                self._hover_active_label = label
+        else:
+            if self._hover_active_label:
+                QToolTip.hideText()
+                self._hover_active_label = None
+
     def _update_plot(self):
         self._update_control_visibility()
         rendered = self._plot_on_axes(self.ax)
@@ -626,7 +664,7 @@ class FeaturePreviewWidget(QWidget):
         self.canvas.draw()
 
     def _open_enlarge_dialog(self):
-        dlg = PreviewEnlargeDialog(self)
+        dlg = MatplotlibPreviewDialog(self)
         if not self._plot_on_axes(dlg.canvas.ax):
             dlg.close()
             QMessageBox.information(self, "提示", "暂无可放大的图表。")

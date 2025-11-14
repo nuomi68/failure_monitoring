@@ -16,6 +16,14 @@ from gui.data_load_dialog import DataLoadDialog
 
 from backend.ml_interface import ML
 
+SPLITTER_HANDLE_STYLE = """
+QSplitter::handle {
+    background-color: #d1d5db;
+    border: 1px solid #9ca3af;
+    margin: 0 1px;
+}
+"""
+
 class DataHandlePage(QWidget):
     """Data preprocessing interface embedding the ML window.
     - 记录计算器公式 self.calc_recipes
@@ -88,6 +96,8 @@ class DataHandlePage(QWidget):
         page1 = QWidget()
         page1_layout = QVBoxLayout(page1)
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setHandleWidth(6)
+        split.setStyleSheet(SPLITTER_HANDLE_STYLE)
         self.table = QTableWidget()
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -148,12 +158,12 @@ class DataHandlePage(QWidget):
         # 顶部操作条
         bottom_bar = QHBoxLayout()
         bottom_bar.addStretch()
-        self.btn_reset = QPushButton("清空表格")
-        self.btn_reset.clicked.connect(self.reset_ui)
-        bottom_bar.addWidget(self.btn_reset)
         self.btn_export = QPushButton("导出表格")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_table)
+        self.btn_reset = QPushButton("清空表格")
+        self.btn_reset.clicked.connect(self.reset_ui)
+        bottom_bar.addWidget(self.btn_reset)
         bottom_bar.addWidget(self.btn_export)
         right_v.addLayout(bottom_bar)
 

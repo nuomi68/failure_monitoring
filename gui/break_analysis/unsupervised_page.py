@@ -19,30 +19,49 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from sklearn.decomposition import PCA
-
+from gui.mpl_preview import InteractiveMplCanvas, MatplotlibPreviewDialog
 from backend.ml_interface import ML
 from gui.tools import logger
 
+SPLITTER_HANDLE_STYLE = """
+QSplitter::handle {
+    background-color: #d1d5db;
+    border: 1px solid #9ca3af;
+    margin: 0 1px;
+}
+"""
+
 # ============== 画布 ==============
-class UnCanvas(FigureCanvas):
+class UnCanvas(InteractiveMplCanvas):
     tau_changed = pyqtSignal(float)
-    def __init__(self, parent=None):
-        self.fig, self.ax = plt.subplots()
-        super().__init__(self.fig)
-        self.setParent(parent)
-        self.slider = QSlider(Qt.Orientation.Horizontal, parent)
-        self.slider.setRange(0,999)
-        self.slider.valueChanged.connect(self._emit)
-        self.lbl_tau = QLabel("τ = 0.950")
-    def _emit(self, v:int):
-        tau = v/1000.0
-        self.lbl_tau.setText(f"τ = {tau:.3f}")
+
+    def __init__(self, parent=None, *, show_controls: bool = True):
+        super().__init__(parent)
+        self.slider: QSlider | None = None
+        self.lbl_tau: QLabel | None = None
+        if show_controls:
+            self.slider = QSlider(Qt.Orientation.Horizontal, parent)
+            self.slider.setRange(0, 999)
+            self.slider.valueChanged.connect(self._emit)
+            self.lbl_tau = QLabel("τ = 0.950")
+
+    def _emit(self, v: int):
+        tau = v / 1000.0
+        if self.lbl_tau:
+            self.lbl_tau.setText(f"τ = {tau:.3f}")
         self.tau_changed.emit(tau)
 
     def plot_hist(self, scores: np.ndarray, tau: float):
         self.ax.clear()
-        self.ax.hist(scores, bins=30, alpha=0.7, label="scores")
+        counts, _, _ = self.ax.hist(
+            scores,
+            bins=min(30, max(5, len(scores))),
+            alpha=0.7,
+            label="scores",
+        )
         self.ax.axvline(tau, color="red", linestyle="--", label=f"τ={tau:.3f}")
+        ymax = float(np.max(counts)) if counts.size else 0.0
+        self.ax.set_ylim(0, max(1.0, ymax * 1.2))
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
@@ -53,16 +72,14 @@ class UnCanvas(FigureCanvas):
         XY = pca.fit_transform(X)
         mask = scores >= tau
         self.ax.scatter(XY[~mask, 0], XY[~mask, 1], c="lightgray", s=10, label="normal")
-        self.ax.scatter(XY[mask, 0],  XY[mask, 1],  c="red",       s=15, label="abnormal")
+        self.ax.scatter(XY[mask, 0], XY[mask, 1], c="red", s=15, label="abnormal")
         self.ax.set_xlabel("PC1")
         self.ax.set_ylabel("PC2")
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
 
-    def plot_timeseries(self, X: np.ndarray, scores: np.ndarray, tau: float):
-        """把样本按原始顺序，画分数随样本 index 的折线图。"""
-
+    def plot_timeseries(self, scores: np.ndarray, tau: float):
         self.ax.clear()
         self.ax.plot(np.arange(len(scores)), scores, lw=1)
         self.ax.axhline(tau, color="red", linestyle="--", label=f"τ={tau:.3f}")
@@ -71,6 +88,24 @@ class UnCanvas(FigureCanvas):
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
+
+class SquareCanvasHolder(QWidget):
+    """Keep an embedded canvas square and centered."""
+
+    def __init__(self, canvas: InteractiveMplCanvas, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.canvas = canvas
+        self.canvas.setParent(self)
+        self.setMinimumSize(200, 200)
+
+    def resizeEvent(self, event):
+        w = event.size().width()
+        h = event.size().height()
+        side = max(min(w, h), 200)
+        x = (w - side) // 2
+        y = (h - side) // 2
+        self.canvas.setGeometry(x, y, side, side)
+        super().resizeEvent(event)
 
 # ================= 高级参数对话框 =================
 class AdvancedParamsDialog(QDialog):
@@ -258,6 +293,7 @@ class UnsupervisedPage(QWidget):
         self.meta: dict[str, Any] = {}
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
+        self._preview_dialogs: list[MatplotlibPreviewDialog] = []
 
         # 每种算法的高级参数
         self.knn_params: Dict[str, Any] = {
@@ -334,6 +370,8 @@ class UnsupervisedPage(QWidget):
 
         # 主体：左特征 + 右可视化
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(6)
+        splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
 
         self.column_list = QListWidget()
         splitter.addWidget(self.column_list)
@@ -341,22 +379,51 @@ class UnsupervisedPage(QWidget):
         right_panel = QWidget()
         right_v = QVBoxLayout(right_panel)
 
+        viz_row = QHBoxLayout()
+        viz_row.addWidget(QLabel("图形："))
         self.viz_combo = QComboBox()
         self.viz_combo.addItems(["分数直方图", "PCA 散点", "时序折线"])
         self.viz_combo.currentIndexChanged.connect(lambda _: self.refresh_plot())
-        right_v.addWidget(self.viz_combo, alignment=Qt.AlignmentFlag.AlignLeft)
+        viz_row.addWidget(self.viz_combo)
+        self.btn_enlarge = QPushButton("放大查看")
+        self.btn_enlarge.setFixedHeight(28)
+        self.btn_enlarge.clicked.connect(self._open_plot_preview)
+        viz_row.addWidget(self.btn_enlarge)
+        viz_row.addStretch()
+        right_v.addLayout(viz_row)
 
         self.canvas = UnCanvas()
         self.canvas.tau_changed.connect(self.on_tau_changed)
-        right_v.addWidget(self.canvas)
-        right_v.addWidget(self.canvas.lbl_tau)
-        right_v.addWidget(self.canvas.slider)
 
+        plot_container = QWidget()
+        plot_layout = QVBoxLayout(plot_container)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
+        plot_layout.setSpacing(4)
+        self.canvas_holder = SquareCanvasHolder(self.canvas)
+        plot_layout.addWidget(self.canvas_holder)
+        if self.canvas.lbl_tau:
+            plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
+        if self.canvas.slider:
+            plot_layout.addWidget(self.canvas.slider)
+
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(6)
+        table_layout.addWidget(QLabel("异常样本："))
         self.tbl_abn = QTableWidget(0, 2)
         self.tbl_abn.setHorizontalHeaderLabels(["样本", "分数"])
         self.tbl_abn.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        right_v.addWidget(QLabel("异常样本："))
-        right_v.addWidget(self.tbl_abn)
+        table_layout.addWidget(self.tbl_abn)
+
+        viz_splitter = QSplitter(Qt.Orientation.Horizontal)
+        viz_splitter.setHandleWidth(6)
+        viz_splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
+        viz_splitter.addWidget(plot_container)
+        viz_splitter.addWidget(table_container)
+        viz_splitter.setStretchFactor(0, 3)
+        viz_splitter.setStretchFactor(1, 2)
+        right_v.addWidget(viz_splitter)
 
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 1)
@@ -465,7 +532,8 @@ class UnsupervisedPage(QWidget):
         # [LOG] 打分完成
         self._log_scores_ready()
         tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
-        self.canvas.slider.setValue(int(tau * 1000))
+        if self.canvas.slider:
+            self.canvas.slider.setValue(int(tau * 1000))
         logger.info("启用阈值：τ:%.3f", tau)  # [LOG]
         self.refresh_plot()
 
@@ -484,17 +552,32 @@ class UnsupervisedPage(QWidget):
             return
         tau = float(self.meta.get("tau", 0.5))
         self._update_abn_table(tau)
-        mode = self.viz_combo.currentText()
+        if not self._render_plot(self.canvas, tau):
+            self.canvas.ax.clear()
+            self.canvas.ax.text(
+                0.5,
+                0.5,
+                "暂无可视化",
+                ha="center",
+                va="center",
+            )
+            self.canvas.draw()
 
+    def _render_plot(self, canvas: UnCanvas, tau: float) -> bool:
+        mode = self.viz_combo.currentText()
         if mode == "分数直方图":
-            self.canvas.plot_hist(self.scores, tau)
-        elif mode == "PCA 散点":
-            self.canvas.plot_pca(self.X_scaled, self.scores, tau)
-        elif mode == "时序折线":
-            self.canvas.plot_timeseries(self.X_scaled, self.scores, tau)
-        else:
-            # 万一路由到其它，默认直方图
-            self.canvas.plot_hist(self.scores, tau)
+            canvas.plot_hist(self.scores, tau)
+            return True
+        if mode == "PCA 散点":
+            if self.X_scaled is None:
+                return False
+            canvas.plot_pca(self.X_scaled, self.scores, tau)
+            return True
+        if mode == "时序折线":
+            canvas.plot_timeseries(self.scores, tau)
+            return True
+        canvas.plot_hist(self.scores, tau)
+        return True
 
     def _update_abn_table(self, tau: float):
         if self.scores is None:
@@ -512,6 +595,29 @@ class UnsupervisedPage(QWidget):
                 name = str(int(idx))
             self.tbl_abn.setItem(row, 0, QTableWidgetItem(name))
             self.tbl_abn.setItem(row, 1, QTableWidgetItem(f"{self.scores[idx]:.3f}"))
+
+    def _open_plot_preview(self):
+        if self.scores is None:
+            QMessageBox.information(self, "提示", "请先训练模型。")
+            return
+        tau = float(self.meta.get("tau", 0.5))
+        preview = MatplotlibPreviewDialog(
+            self,
+            canvas_factory=lambda parent: UnCanvas(parent, show_controls=False),
+        )
+        preview.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._preview_dialogs.append(preview)
+        if not self._render_plot(preview.canvas, tau):
+            self._cleanup_preview_dialog(preview)
+            preview.close()
+            QMessageBox.information(self, "提示", "暂无可放大的图表。")
+            return
+        preview.finished.connect(lambda _res, dlg=preview: self._cleanup_preview_dialog(dlg))
+        preview.show()
+
+    def _cleanup_preview_dialog(self, dlg: MatplotlibPreviewDialog):
+        if dlg in self._preview_dialogs:
+            self._preview_dialogs.remove(dlg)
 
     def _parse_max_samples(self,val, n_samples: int):
         """Utility to parse IsolationForest max_samples value."""

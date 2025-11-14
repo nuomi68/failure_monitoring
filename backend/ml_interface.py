@@ -354,9 +354,9 @@ def _train_supervised_impl(
     # 可能需要对 y 进行 label 编码（仅分类且 y 不是数值）
     label_encoder: Optional[LabelEncoder] = None
     y_work = y
-    if adapter.kind == "supervised_clf" and not np.issubdtype(np.asarray(y).dtype, np.number):
+    if adapter.kind == "supervised_clf":
         label_encoder = LabelEncoder()
-        y_work = label_encoder.fit_transform(y)
+        y_work = label_encoder.fit_transform(np.asarray(y).ravel())
 
     # 处理 stratify：默认对二分类/多分类进行分层，且保证每类至少 2 个样本
     strat = y_work if (adapter.kind == "supervised_clf" and stratify is None and len(np.unique(y_work)) > 1) else stratify

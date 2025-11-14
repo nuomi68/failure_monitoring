@@ -13,24 +13,30 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QSplitter, QHBoxLayout,
     QMessageBox, QLabel, QComboBox, QSpinBox, QPushButton, QFileDialog, QLineEdit,
     QTableWidget, QTableWidgetItem, QSlider, QDialog, QFormLayout,
-    QDialogButtonBox, QDoubleSpinBox, QCheckBox, QSizePolicy
+    QDialogButtonBox, QDoubleSpinBox, QCheckBox, QSizePolicy, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from sklearn.decomposition import PCA
 from sklearn.utils.multiclass import type_of_target
 from sklearn.model_selection import train_test_split
 
 from backend.ml_interface import ML
+from gui.smart_table import SmartTable, SmartTableConfig
 from gui.tools import logger
+from gui.mpl_preview import MatplotlibPreviewDialog, InteractiveMplCanvas
+
+SPLITTER_HANDLE_STYLE = """
+QSplitter::handle {
+    background-color: #d1d5db;
+    border: 1px solid #9ca3af;
+    margin: 0 1px;
+}
+"""
 # ============== 画布 ==============
-class PlotCanvas(FigureCanvas):
+class PlotCanvas(InteractiveMplCanvas):
     threshold_changed = pyqtSignal(float)
     def __init__(self, parent=None, show_controls: bool = True):
-        self.fig, self.ax = plt.subplots()
-        super().__init__(self.fig)
-        self.setParent(parent)
+        super().__init__(parent)
         self.cbar = None
         self.slider = None
         self.lbl_tau = None
@@ -172,18 +178,24 @@ class PlotCanvas(FigureCanvas):
 
 
 # ============== 放大窗口 ==============
-class PlotPreviewDialog(QDialog):
-    """独立放大窗口，包含导航工具栏和只读画布。"""
-    def __init__(self, parent=None):
+class SquareCanvasHolder(QWidget):
+    """Keeps an embedded canvas square and centered within its container."""
+
+    def __init__(self, canvas: PlotCanvas, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle("图表放大预览")
-        self.resize(900, 720)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        self.canvas = PlotCanvas(self, show_controls=False)
-        toolbar = NavigationToolbar(self.canvas, self)
-        layout.addWidget(toolbar)
-        layout.addWidget(self.canvas)
+        self.canvas = canvas
+        self.canvas.setParent(self)
+        self.setMinimumSize(200, 200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def resizeEvent(self, event):
+        w = event.size().width()
+        h = event.size().height()
+        side = max(min(w, h), 200)
+        x = (w - side) // 2
+        y = (h - side) // 2
+        self.canvas.setGeometry(x, y, side, side)
+        super().resizeEvent(event)
 
 
 # ============== 高级参数对话框 ==============
@@ -410,6 +422,7 @@ class SupervisedPage(QWidget):
         self.df: pd.DataFrame | None = None
         self.target_col: str | None = None
         self.X_test: np.ndarray | None = None
+        self.X_test_raw: np.ndarray | None = None
         self.y_true: np.ndarray | None = None
         self.y_pred: np.ndarray | None = None
         self.test_scores: np.ndarray | None = None
@@ -417,7 +430,11 @@ class SupervisedPage(QWidget):
         self.is_clf = True
         self.binary = False
         self.metrics_text = ""
-        self._preview_dialogs: list[PlotPreviewDialog] = []
+        self._preview_dialogs: list[MatplotlibPreviewDialog] = []
+        self._test_feature_names: List[str] = []
+        self._test_indices: np.ndarray | None = None
+        self._viz_options: list[tuple[str, str]] = []
+        self._scatter_points: dict[str, Any] | None = None
 
         self.knn_params: Dict[str, Any] = {
             "n_neighbors": 5,
@@ -515,39 +532,59 @@ class SupervisedPage(QWidget):
         viz_bar.setContentsMargins(0, 0, 0, 0)
         viz_bar.addWidget(QLabel("图形:"))
         self.viz_combo = QComboBox()
-        self.viz_combo.setCurrentIndex(120)
         self.viz_combo.currentIndexChanged.connect(lambda: self._plot())
         viz_bar.addWidget(self.viz_combo)
-        viz_bar.addStretch()
+
         self.btn_plot_enlarge = QPushButton("放大查看")
         self.btn_plot_enlarge.setFixedHeight(28)
         self.btn_plot_enlarge.clicked.connect(self._open_plot_preview)
         viz_bar.addWidget(self.btn_plot_enlarge)
+        viz_bar.addStretch()
         right_v.addLayout(viz_bar)
 
         self.canvas = PlotCanvas()
         self.canvas.threshold_changed.connect(self._on_tau_change)
-        canvas_wrap = QWidget()
-        canvas_h = QHBoxLayout(canvas_wrap)
-        canvas_h.setContentsMargins(0, 0, 0, 0)
-        canvas_h.addStretch()
-        canvas_h.addWidget(self.canvas)
-        canvas_h.addStretch()
-        right_v.addWidget(canvas_wrap)
-        if self.canvas.lbl_tau:
-            right_v.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
-        if self.canvas.slider:
-            right_v.addWidget(self.canvas.slider, alignment=Qt.AlignmentFlag.AlignCenter)
-        # 默认隐藏 τ 控件
-        if self.canvas.slider:
-            self.canvas.slider.setVisible(False)
-        if self.canvas.lbl_tau:
-            self.canvas.lbl_tau.setVisible(False)
+        self.canvas.mpl_connect("button_press_event", self._on_plot_click)
 
         self.metrics_label = QLabel("")
         self.metrics_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.metrics_label.setVisible(False)
-        right_v.addWidget(self.metrics_label)
+
+        plot_container = QWidget()
+        plot_layout = QVBoxLayout(plot_container)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
+        plot_layout.setSpacing(6)
+        self.canvas_holder = SquareCanvasHolder(self.canvas)
+        plot_layout.addWidget(self.canvas_holder)
+        if self.canvas.lbl_tau:
+            plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
+        if self.canvas.slider:
+            plot_layout.addWidget(self.canvas.slider, alignment=Qt.AlignmentFlag.AlignCenter)
+        # 默认隐藏阈值控件
+        if self.canvas.slider:
+            self.canvas.slider.setVisible(False)
+        if self.canvas.lbl_tau:
+            self.canvas.lbl_tau.setVisible(False)
+        plot_layout.addWidget(self.metrics_label)
+
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(6)
+        table_layout.addWidget(QLabel("测试样本详情"))
+        self.tbl_test = SmartTable(SmartTableConfig(show_toolbar=False, editable=False, min_rows=0))
+        self.tbl_test.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table_layout.addWidget(self.tbl_test)
+
+        self.plot_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.plot_splitter.setHandleWidth(6)
+        self.plot_splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
+        self.plot_splitter.addWidget(plot_container)
+        self.plot_splitter.addWidget(table_container)
+        self.plot_splitter.setStretchFactor(0, 1)
+        self.plot_splitter.setStretchFactor(1, 1)
+        right_v.addWidget(self.plot_splitter)
+
 
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(1,2)
@@ -614,7 +651,9 @@ class SupervisedPage(QWidget):
             QMessageBox.warning(self,"提示","请选择特征")
             return
 
+        self._test_feature_names = list(cols)
         X = self.df[cols].values
+        all_indices = np.arange(len(X))
         y = self.df[self.target_col].values
         code = self.alg_combo.currentData()
         if not code:
@@ -664,7 +703,11 @@ class SupervisedPage(QWidget):
             feature_names=cols,
         )
 
-        X_tr_raw, X_te_raw, y_tr, y_te = train_test_split(X, y, test_size=test_size, random_state=rs, stratify=stratify)
+        X_tr_raw, X_te_raw, y_tr, y_te, _idx_tr, idx_te = train_test_split(
+            X, y, all_indices, test_size=test_size, random_state=rs, stratify=stratify
+        )
+        self.X_test_raw = X_te_raw
+        self._test_indices = idx_te
         self.X_test = ML.transform(X_te_raw)  # 与训练一致的规范化
         self.y_true = y_te
         pre =  ML.predict(X_te_raw)
@@ -701,6 +744,7 @@ class SupervisedPage(QWidget):
         self._compute_metrics()
         self._reset_viz_mode()
         self._plot()
+        self._update_test_table()
 
     def _update_pred_by_threshold(self):
         if not (self.is_clf and self.binary and self.test_scores is not None):
@@ -747,13 +791,26 @@ class SupervisedPage(QWidget):
             self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
         self.viz_combo.blockSignals(True)
         self.viz_combo.clear()
+        self._viz_options = []
 
         if self.is_clf:
-            self.viz_combo.addItems(["混淆矩阵", "得分条形图"])
+            options = [
+                ("confmat", "混淆矩阵"),
+                ("scores", "评分柱状图"),
+            ]
         else:
-            self.viz_combo.addItems(["预测 vs 真实", "残差直方图", "残差散点", "PCA 彩色散点"])
+            options = [
+                ("pred_vs_true", "预测 vs 真实"),
+                ("residual_hist", "残差直方图"),
+                ("residual_scatter", "残差散点"),
+                ("pca_scatter", "PCA 彩色散点"),
+            ]
+        for key, label in options:
+            self.viz_combo.addItem(label, userData=key)
+        self._viz_options = options
         self.viz_combo.blockSignals(False)
         self.metrics_label.setVisible(not self.is_clf)
+
 
 
     def _plot(self, target_canvas: PlotCanvas | None = None):
@@ -762,14 +819,17 @@ class SupervisedPage(QWidget):
         canvas = target_canvas or self.canvas
         if canvas is None:
             return
-        choice = self.viz_combo.currentText()
+        mode = self.viz_combo.currentData()
+        if mode is None and 0 <= self.viz_combo.currentIndex() < len(self._viz_options):
+            mode = self._viz_options[self.viz_combo.currentIndex()][0]
+        self._scatter_points = None
         if self.is_clf:
-            if choice == "混淆矩阵":
+            if mode == "confmat":
                 canvas.plot_confmat(self.y_true, self.y_pred, self.meta.get("classes_", None))
             else:
                 canvas.plot_scores(self.y_true, self.y_pred, self.meta.get("classes_", None))
         else:
-            if choice == "预测 vs 真实":
+            if mode == "pred_vs_true":
                 canvas.clear()
                 ax = canvas.ax
                 ax.scatter(self.y_true, self.y_pred, s=12)
@@ -780,17 +840,24 @@ class SupervisedPage(QWidget):
                 ax.set_title("预测值 vs 真实值")
                 canvas.fig.tight_layout()
                 canvas.draw()
-            elif choice == "残差直方图":
+                self._register_scatter_points("pred_vs_true", self.y_true, self.y_pred)
+            elif mode == "residual_hist":
                 canvas.clear()
                 res = self.y_pred - self.y_true
                 ax = canvas.ax
-                ax.hist(res, bins=30, alpha=0.75)
+                counts, _, _ = ax.hist(
+                    res,
+                    bins=min(30, max(5, len(res))),
+                    alpha=0.75,
+                )
                 ax.set_xlabel("残差")
                 ax.set_ylabel("频数")
                 ax.set_title("残差直方图")
+                ymax = float(np.max(counts)) if counts.size else 0.0
+                ax.set_ylim(0, max(1.0, ymax * 1.2))
                 canvas.fig.tight_layout()
                 canvas.draw()
-            elif choice == "残差散点":
+            elif mode == "residual_scatter":
                 canvas.clear()
                 res = self.y_pred - self.y_true
                 ax = canvas.ax
@@ -801,7 +868,8 @@ class SupervisedPage(QWidget):
                 ax.set_title("残差散点图")
                 canvas.fig.tight_layout()
                 canvas.draw()
-            elif choice == "PCA 彩色散点":
+                self._register_scatter_points("residual_scatter", self.y_pred, res)
+            elif mode == "pca_scatter":
                 canvas.clear()
                 XY = PCA(2, random_state=0).fit_transform(self.X_test)
                 err = np.abs(self.y_pred - self.y_true)
@@ -813,19 +881,84 @@ class SupervisedPage(QWidget):
                 ax.set_title("PCA 彩色散点")
                 canvas.fig.tight_layout()
                 canvas.draw()
+                self._register_scatter_points("pca_scatter", XY[:, 0], XY[:, 1])
+                canvas.draw()
+
+    def _register_scatter_points(self, mode: str, xs: np.ndarray, ys: np.ndarray) -> None:
+        try:
+            xs = np.asarray(xs, dtype=float).ravel()
+            ys = np.asarray(ys, dtype=float).ravel()
+        except Exception:
+            self._scatter_points = None
+            return
+        if xs.size == 0 or ys.size == 0 or xs.size != ys.size:
+            self._scatter_points = None
+            return
+        rows = np.arange(xs.size)
+        coords = np.column_stack([xs, ys])
+        self._scatter_points = {"mode": mode, "coords": coords, "rows": rows}
+
+    def _update_test_table(self) -> None:
+        if not hasattr(self, "tbl_test"):
+            return
+        if self.X_test_raw is None or self.y_true is None:
+            df = pd.DataFrame(columns=self._test_feature_names)
+        else:
+            df = pd.DataFrame(self.X_test_raw, columns=self._test_feature_names)
+            actual_col = "真实值" if not self.is_clf else "真实标签"
+            df[actual_col] = self.y_true
+            if self.y_pred is not None:
+                pred_col = "预测值" if not self.is_clf else "预测标签"
+                df[pred_col] = self.y_pred
+            if not self.is_clf and self.y_pred is not None:
+                df["残差"] = self.y_pred - self.y_true
+            elif self.is_clf and self.test_scores is not None:
+                df["得分"] = self.test_scores
+        with self.tbl_test.no_record():
+            self.tbl_test.set_dataframe(df, editable=False, record_state=False)
+
+    def _focus_test_row(self, row_idx: int) -> None:
+        if not hasattr(self, "tbl_test"):
+            return
+        table = self.tbl_test.table
+        if row_idx < 0 or row_idx >= table.rowCount():
+            return
+        table.selectRow(row_idx)
+        item = table.item(row_idx, 0)
+        if item is not None:
+            table.scrollToItem(item)
+
+    def _on_plot_click(self, event):
+        if (
+            self._scatter_points is None
+            or event.inaxes is not self.canvas.ax
+            or event.button != 1
+            or not getattr(event, "dblclick", False)
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
+        coords = self._scatter_points.get("coords")
+        if coords is None or not len(coords):
+            return
+        pos = np.array([event.xdata, event.ydata], dtype=float)
+        dists = np.linalg.norm(coords - pos, axis=1)
+        idx = int(np.argmin(dists))
+        self._focus_test_row(idx)
+
 
     def _open_plot_preview(self):
         if self.y_true is None:
             QMessageBox.information(self, "暂无图形", "请先训练模型或加载预测结果。")
             return
-        preview = PlotPreviewDialog(self)
+        preview = MatplotlibPreviewDialog(self, canvas_factory=lambda parent: PlotCanvas(parent, show_controls=False))
         preview.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._preview_dialogs.append(preview)
         self._plot(preview.canvas)
         preview.finished.connect(lambda _res, dlg=preview: self._cleanup_preview_dialog(dlg))
         preview.show()
 
-    def _cleanup_preview_dialog(self, dlg: PlotPreviewDialog):
+    def _cleanup_preview_dialog(self, dlg: MatplotlibPreviewDialog):
         if dlg in self._preview_dialogs:
             self._preview_dialogs.remove(dlg)
 

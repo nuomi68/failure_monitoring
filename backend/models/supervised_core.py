@@ -160,7 +160,17 @@ class _XGBClfAdapter:
     def fit(self, model, X, y=None):
         if y is None:
             raise ValueError("XGBoost 分类需要 y")
-        n_classes = len(np.unique(y))
+        y_arr = np.asarray(y).ravel()
+        orig_classes = np.unique(y_arr)
+        needs_remap = not np.array_equal(orig_classes, np.arange(orig_classes.size))
+        if needs_remap:
+            mapping = {cls: idx for idx, cls in enumerate(orig_classes)}
+            remap = np.vectorize(mapping.get)
+            y_arr = remap(y_arr)
+            model._ml_class_order = orig_classes
+        else:
+            model._ml_class_order = None
+        n_classes = len(np.unique(y_arr))
         params = model.get_params()
         objective = params.get("objective")
         if n_classes > 2:
@@ -170,17 +180,23 @@ class _XGBClfAdapter:
         else:
             if objective is None:
                 model.set_params(objective="binary:logistic")
-        model.fit(X, y)
+        model.fit(X, y_arr)
         return model
 
     def predict(self, model, X):
-        return model.predict(X)
+        preds = model.predict(X)
+        order = getattr(model, "_ml_class_order", None)
+        if order is not None:
+            preds = np.asarray(order)[np.asarray(preds).astype(int)]
+        return preds
 
     def scores(self, model, X, *, classes_: Optional[np.ndarray] = None):
         if not hasattr(model, "predict_proba"):
             return None
         proba = model.predict_proba(X)
-        cls = list(getattr(model, "classes_", []))
+        cls = list(
+            getattr(model, "_ml_class_order", getattr(model, "classes_", []))
+        )
         if not cls:
             return None
         pos_cls = 1 if 1 in cls else (cls[1] if len(cls) > 1 else cls[0])

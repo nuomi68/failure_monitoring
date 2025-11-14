@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Dict, List
 
-from PyQt6.QtCore import QSize
+from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -28,6 +28,8 @@ from backend.timeseries_interface import ModelManager
 from gui.smart_table import SmartTable, SmartTableConfig
 from gui.model_manager_dialog import ModelManagerDialog
 from gui.tools import make_section_label
+
+LEFT_GROUP_WIDTH = 280
 
 class EnsemblePage(QWidget):
     """
@@ -184,9 +186,14 @@ class EnsemblePage(QWidget):
         lay = QVBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         lay.addWidget(widget)
-        lay.addWidget(self._make_placeholder_btn())
-        wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        lay.addStretch(1)
+        lay.addWidget(self._make_placeholder_btn(), alignment=Qt.AlignmentFlag.AlignRight)
+        wrap.setMinimumHeight(260)
+        wrap.setMinimumWidth(LEFT_GROUP_WIDTH)
+        wrap.setMaximumWidth(LEFT_GROUP_WIDTH)
+        wrap.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         return wrap
 
     def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
@@ -247,6 +254,8 @@ class EnsemblePage(QWidget):
         lay = QVBoxLayout(box)
         lay.setContentsMargins(6, 10, 6, 6)
         lay.setSpacing(6)
+        box.setMinimumHeight(220)
+        box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         return box, lay
 
     def _build_ts_block(self) -> QWidget:
@@ -262,6 +271,7 @@ class EnsemblePage(QWidget):
         self.ts_model_wrap = QWidget()
         self.ts_model_layout = QVBoxLayout(self.ts_model_wrap)
         self.ts_model_layout.setContentsMargins(0, 0, 0, 0)
+        self.ts_model_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         lay.addWidget(self.ts_model_wrap)
 
         self.btn_ts_load.clicked.connect(self._open_ts_dialog)
@@ -281,6 +291,7 @@ class EnsemblePage(QWidget):
         self.ml_model_wrap = QWidget()
         self.ml_model_layout = QVBoxLayout(self.ml_model_wrap)
         self.ml_model_layout.setContentsMargins(0, 0, 0, 0)
+        self.ml_model_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         lay.addWidget(self.ml_model_wrap)
 
         self.btn_ml_load.clicked.connect(self._open_ml_dialog)
@@ -300,6 +311,7 @@ class EnsemblePage(QWidget):
         self.fault_model_wrap = QWidget()
         self.fault_model_layout = QVBoxLayout(self.fault_model_wrap)
         self.fault_model_layout.setContentsMargins(0, 0, 0, 0)
+        self.fault_model_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         lay.addWidget(self.fault_model_wrap)
 
         self.btn_fault_load.clicked.connect(self._open_fault_dialog)
