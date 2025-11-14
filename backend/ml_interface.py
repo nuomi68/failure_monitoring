@@ -3,7 +3,7 @@
 - 指令式：train / predict / transform / save / load / clear / get_meta
 - 新训练覆盖旧模型
 - 支持可选归一化器（standard/minmax/robust/maxabs/power/quantile/normalizer/none），并将拟合后的 scaler 与模型一起保存
-- ★ 新增：支持“计算器公式（calc_recipes）”的保存与加载；预测时自动补齐派生特征
+- 支持“计算器公式（calc_recipes）”的保存与加载；预测时自动补齐派生特征
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ class _State:
 
 STATE = _State()
 
-# ★：暂存“计算器公式”，用于在训练后写入 meta，或在加载后同步
+# 暂存“计算器公式”，用于在训练后写入 meta，或在加载后同步
 _PENDING_CALC_RECIPES: list[dict] | None = None
 
 
@@ -424,7 +424,7 @@ def _train_supervised_impl(
     # 二分类才有 tau
     tau = adapter.default_tau(None) if is_binary else None
 
-    # ★ 合并公式：优先用调用方传入的 calc_recipes；否则回退到 _PENDING
+    #合并公式：优先用调用方传入的 calc_recipes；否则回退到 _PENDING
     recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
 
     classes_meta = (
@@ -443,7 +443,7 @@ def _train_supervised_impl(
         "n_classes": n_classes if adapter.kind == "supervised_clf" else 1,
         "is_binary": bool(is_binary) if adapter.kind == "supervised_clf" else False,
         "target": (target_name if target_name else "目标"),
-        "calc_recipes": recipes_final,             # ★ 保存“计算器公式”
+        "calc_recipes": recipes_final,             #  保存“计算器公式”
     }
 
     # 输出恢复原标签（若编码过）
@@ -489,7 +489,7 @@ def _train_unsupervised_impl(
     tau_raw = adapter.default_tau(scores_raw)                # 模型给出的原始阈值
     tau = float(_score_to_q(float(tau_raw), norm))           # 统一到 [0,1]
 
-    # ★ 合并公式同监督分支
+    #  合并公式同监督分支
     recipes_final = list(calc_recipes or _PENDING_CALC_RECIPES or [])
 
     # 无监督的标签编码固定为 ["否","是"]
@@ -584,7 +584,8 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     Xs = artifact.scaler.transform(X_enc) if artifact.scaler is not None else X_enc
     mtype = artifact.meta.get("model_type")
     mapping = {"knn_clf": "knn_clf", "rf": "rf_clf", "knn_reg": "knn_reg", "rf_reg": "rf_reg", "knn": "knn",
-               "iforest": "iforest", "autoencoder": "autoencoder"}
+               "iforest": "iforest", "autoencoder": "autoencoder",
+               "xgb_clf": "xgb_clf", "xgb_reg": "xgb_reg", "xgb": "xgb_clf"}
     alg = mapping.get(mtype, mtype)
     adapter = get_adapter(alg)
 
@@ -769,7 +770,7 @@ class ML:
         # 多目标：返回 {target: {"labels": y, "scores": s}}
         if isinstance(cur, MultiOutputArtifact):
             assert isinstance(X, dict), "MultiOutput 预测需要传入列字典：{feature: ndarray}"
-            # ★ 对列字典先补齐计算列，并应用各模型的编码器
+            #  对列字典先补齐计算列，并应用各模型的编码器
             recipes: list[dict] = []
             enc_all: Dict[str, LabelEncoder] = {}
             for arts in cur.groups.values():
@@ -855,7 +856,7 @@ class ML:
         STATE.current.meta["tau"] = float(tau)
         STATE.current.meta["tau_is_normalized"] = bool(normalized)
 
-    # ★ 新增：在训练前后、或任意时机注入/覆盖“计算器公式”
+    #  新增：在训练前后、或任意时机注入/覆盖“计算器公式”
     @classmethod
     def set_calc_recipes(cls, recipes: list[dict] | None):
         global _PENDING_CALC_RECIPES

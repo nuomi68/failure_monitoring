@@ -5,12 +5,13 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.colors import to_hex
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSizePolicy,
     QPushButton, QListWidget, QListWidgetItem, QFrame, QCheckBox,
-    QStyledItemDelegate, QListView
+    QStyledItemDelegate, QListView, QDialog, QMessageBox
 )
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSize
@@ -62,6 +63,10 @@ class HeatmapCanvas(FigureCanvas):
 
         corr = df.corr(numeric_only=True)
         im = self.ax.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
+        # 默认 imshow 会把纵横比锁定为 1:1，一旦缩放/拖拽只改变某一方向，
+        # Matplotlib 会在坐标轴内部留出大片留白，给人“坐标轴也被拖走”的错觉。
+        # 设为 auto 让图像始终铺满坐标轴，可避免 UI 中出现这种错位。
+        self.ax.set_aspect("auto")
 
         labels = corr.columns.astype(str).tolist()
         positions = np.arange(len(labels))
@@ -206,131 +211,6 @@ class _ColorCheckDelegate(QStyledItemDelegate):
         return QSize(size.width(), height)
 
 
-class CategoryFilterCombo(QComboBox):
-    """带色卡、可勾选的下拉框，用于筛选散点图的类别。"""
-
-    selectionChanged = pyqtSignal(list)
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setMinimumWidth(160)
-        self.setEditable(True)
-        line = self.lineEdit()
-        if line:
-            line.setReadOnly(True)
-            line.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            line.setPlaceholderText("类别筛选")
-        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self._value_role = int(Qt.ItemDataRole.UserRole)
-
-        view = QListView(self)
-        view.setSpacing(4)
-        view.setUniformItemSizes(True)
-        view.setStyleSheet("QListView::item { padding: 4px 8px; }")
-        view.setItemDelegate(_ColorCheckDelegate(self))
-        self.setView(view)
-        self.setIconSize(QSize(16, 16))
-
-        model = QStandardItemModel(self)
-        self.setModel(model)
-        model.itemChanged.connect(self._on_item_changed)
-
-    def set_categories(self, entries: list[tuple[str, str]], color_map: dict[str, str]):
-        """
-        entries: [(label_text, label_key), ...]；label_key 为内部筛选键（字符串）
-        color_map: label_key -> '#RRGGBB'
-        """
-        model = self.model()
-        model.clear()
-
-        for label, key in entries:
-            item = QStandardItem(label)
-            item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsUserCheckable
-                | Qt.ItemFlag.ItemIsSelectable
-            )
-            item.setData(key, self._value_role)
-            item.setCheckState(Qt.CheckState.Checked)
-            model.appendRow(item)
-
-        self._update_display_text()
-        self.selectionChanged.emit(self.selected_values())
-
-    def clear_categories(self):
-        self.model().clear()
-        if self.lineEdit():
-            self.lineEdit().clear()
-        self.setVisible(False)
-        self.selectionChanged.emit([])
-
-    def has_entries(self) -> bool:
-        return self.model().rowCount() > 0
-
-    def selected_values(self) -> list[str]:
-        values: list[str] = []
-        model = self.model()
-        for row in range(model.rowCount()):
-            item = model.item(row)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                values.append(item.data(self._value_role))
-        return values
-
-    def _toggle_item(self, index):
-        item = self.model().itemFromIndex(index)
-        if not item:
-            return
-        new_state = (
-            Qt.CheckState.Unchecked
-            if item.checkState() == Qt.CheckState.Checked
-            else Qt.CheckState.Checked
-        )
-        item.setCheckState(new_state)
-        self._update_display_text()
-        self.selectionChanged.emit(self.selected_values())
-
-    def _update_display_text(self):
-        line = self.lineEdit()
-        if not line:
-            return
-
-        model = self.model()
-        total = model.rowCount()
-        if total == 0:
-            line.clear()
-            return
-
-        selected_labels = []
-        selected_count = 0
-        for row in range(total):
-            item = model.item(row)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                selected_count += 1
-                if len(selected_labels) < 3:
-                    selected_labels.append(item.text())
-
-        if selected_count == 0:
-            line.setText("隐藏全部")
-        elif selected_count == total:
-            line.setText("全部类别")
-        else:
-            summary = ", ".join(selected_labels)
-            if selected_count > len(selected_labels):
-                summary += ", ..."
-            line.setText(summary)
-            
-    def _on_item_changed(self, _item: QStandardItem):
-        self._set_fixed_display_text()
-        self.selectionChanged.emit(self.selected_values())
-
-    # 始终把编辑框文字设为“选择类别”
-    def _set_fixed_display_text(self):
-        line = self.lineEdit()
-        if line:
-            line.setText("选择类别")
-
-
 class _CategoryPopup(QFrame):
     """Popup checklist container that closes only when focus leaves."""
 
@@ -440,6 +320,21 @@ class CategoryFilterWidget(QWidget):
     def _on_checkbox_changed(self, _state: int):
         self.selectionChanged.emit(self.selected_values())
 
+
+class PreviewEnlargeDialog(QDialog):
+    """放大 FeaturePreview 图表的独立窗口，带导航工具栏。"""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("图表放大预览")
+        self.resize(900, 720)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        self.canvas = _PreviewCanvas(self)
+        toolbar = NavigationToolbar(self.canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self.canvas)
+
 class _PreviewCanvas(FigureCanvas):
     """承载 Matplotlib 的底层画布"""
     def __init__(self, parent=None):
@@ -477,12 +372,14 @@ class FeaturePreviewWidget(QWidget):
         ctrl.addWidget(QLabel("样本名称:"))
         self.cmb_idx = QComboBox()           
         self.cmb_idx.currentIndexChanged.connect(self._update_plot)
+        self.cmb_idx.currentIndexChanged.connect(self._update_control_visibility)
         ctrl.addWidget(self.cmb_idx)
 
         ctrl.addWidget(QLabel("图形类型:"))
         self.cmb_type = QComboBox()
         self.cmb_type.addItems(self.CHART_TYPES)
         self.cmb_type.currentIndexChanged.connect(self._update_plot)
+        self.cmb_type.currentIndexChanged.connect(self._update_control_visibility)
         ctrl.addWidget(self.cmb_type)
 
         self.category_filter = CategoryFilterWidget()
@@ -493,12 +390,22 @@ class FeaturePreviewWidget(QWidget):
         # X / Y 轴列选择（仅散点/直方用） -------------------------
         self.cmb_x = QComboBox()
         self.cmb_y = QComboBox()
-        for cmb, name in [(self.cmb_x, "X 轴"), (self.cmb_y, "Y 轴")]:
-            ctrl.addWidget(QLabel(name + ":"))
-            cmb.currentIndexChanged.connect(self._update_plot)
-            ctrl.addWidget(cmb)
+        self.lbl_x = QLabel("X 轴:")
+        self.lbl_y = QLabel("Y 轴:")
+        self.cmb_x.currentIndexChanged.connect(self._update_plot)
+        self.cmb_y.currentIndexChanged.connect(self._update_plot)
+        ctrl.addWidget(self.lbl_x)
+        ctrl.addWidget(self.cmb_x)
+        ctrl.addWidget(self.lbl_y)
+        ctrl.addWidget(self.cmb_y)
+        self._axis_widgets = [self.lbl_x, self.cmb_x, self.lbl_y, self.cmb_y]
 
         ctrl.addStretch()
+
+        self.btn_enlarge = QPushButton("放大查看")
+        self.btn_enlarge.setFixedHeight(28)
+        self.btn_enlarge.clicked.connect(self._open_enlarge_dialog)
+        ctrl.addWidget(self.btn_enlarge)
         root.addLayout(ctrl)
 
         # 中部：Matplotlib 画布 ------------------------------
@@ -511,6 +418,7 @@ class FeaturePreviewWidget(QWidget):
         self._sel_cols: list[str] = []
         self._target_column: str | None = None
         self._category_colors: dict[str, str] = {}
+        self._update_control_visibility()
 
     # ======= 公共 API ======================================================
     def set_dataframe(self, df: pd.DataFrame):
@@ -519,12 +427,16 @@ class FeaturePreviewWidget(QWidget):
         # ── 刷新“样本名称”下拉框 ──
         # 第一项固定为 “递增数列”，随后是所有列名
         self.cmb_idx.blockSignals(True)
-        self.cmb_idx.clear()
-        self.cmb_idx.addItem("递增数列")   
-        self.cmb_idx.addItems(df.columns.astype(str).tolist())
-        self.cmb_idx.setCurrentIndex(0)         
-        self.cmb_idx.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.cmb_idx.setMinimumContentsLength(6)
+        try:
+            self.cmb_idx.clear()
+            self.cmb_idx.addItem("递增数列")   
+            self.cmb_idx.addItems(df.columns.astype(str).tolist())
+            self.cmb_idx.setCurrentIndex(0)         
+            self.cmb_idx.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            self.cmb_idx.setMinimumContentsLength(6)
+        finally:
+            # 解锁信号，确保切换“样本名称”时能即时刷新图形
+            self.cmb_idx.blockSignals(False)
 
         # 刷新 X/Y 轴候选 + 绘图
         self._refresh_axis_comboboxes(df.columns.tolist(), trigger_plot=False)
@@ -578,6 +490,11 @@ class FeaturePreviewWidget(QWidget):
         if trigger_plot:
             self._update_plot()
 
+    def _update_control_visibility(self):
+        show_axes = self.cmb_type.currentText() == "散点图"
+        for widget in getattr(self, "_axis_widgets", []):
+            widget.setVisible(show_axes)
+
     def _refresh_category_filter(self):
         """根据当前标签列刷新类别筛选下拉框。"""
         if not self._target_column or self._target_column not in self._df.columns:
@@ -621,13 +538,11 @@ class FeaturePreviewWidget(QWidget):
         self._update_plot()
 
     # ======= 绘图核心 ======================================================
-    def _update_plot(self):
-        self.ax.clear()
+    def _plot_on_axes(self, ax) -> bool:
+        ax.clear()
         if self._df.empty:
-            self.canvas.draw();
-            return
+            return False
 
-        # —— 取用户选择的行索引（样本名称） ————————————————
         idx_choice = self.cmb_idx.currentText()
         if idx_choice != "递增数列" and idx_choice in self._df.columns:
             df_use = self._df.set_index(idx_choice, drop=False)
@@ -635,10 +550,7 @@ class FeaturePreviewWidget(QWidget):
             df_use = self._df
 
         chart = self.cmb_type.currentText()
-        has_target = (
-            bool(self._target_column)
-            and self._target_column in df_use.columns
-        )
+        has_target = bool(self._target_column) and self._target_column in df_use.columns
         show_category_filter = (
             chart == "散点图"
             and has_target
@@ -646,34 +558,25 @@ class FeaturePreviewWidget(QWidget):
         )
         self.category_filter.setVisible(show_category_filter)
 
-        # -------- 折线图 ---------------------------------------------------
         if chart == "折线图":
             if not self._sel_cols:
-                self.canvas.draw()
-                return
+                return False
             for col in self._sel_cols:
-                self.ax.plot(df_use.index, df_use[col], label=col)
-            self.ax.legend()
-            self.ax.set_xlabel("样本")
-
-            # ✅ 等距选择 4~5 个横坐标标签
+                ax.plot(df_use.index, df_use[col], label=col)
+            ax.legend()
+            ax.set_xlabel("样本")
             num_ticks = min(5, len(df_use))
             tick_indices = np.linspace(0, len(df_use) - 1, num=num_ticks, dtype=int)
             tick_values = df_use.index[tick_indices]
-            self.ax.set_xticks(tick_values)
-
-            # 如果 index 是文本（如时间标签），设置文字标签
+            ax.set_xticks(tick_values)
             if np.issubdtype(df_use.index.dtype, np.str_) or df_use.index.dtype == object:
-                self.ax.set_xticklabels(tick_values, rotation=45)
+                ax.set_xticklabels(tick_values, rotation=45)
 
-        # -------- 散点图 ---------------------------------------------------
         elif chart == "散点图":
             x, y = self.cmb_x.currentText(), self.cmb_y.currentText()
             if not x or not y or x == y:
-                self.canvas.draw()
-                return
-
-            applied_coloring = False  # 默认回退为普通散点图
+                return False
+            applied_coloring = False
             if show_category_filter:
                 selected = self.category_filter.selected_values()
                 if selected:
@@ -682,41 +585,52 @@ class FeaturePreviewWidget(QWidget):
                     filtered = df_use[mask]
                     label_series = label_series[mask]
                     if filtered.empty:
-                        self.canvas.draw()
-                        return
-
+                        return False
                     for label in pd.Index(label_series).drop_duplicates():
                         subset = filtered[label_series == label]
                         kwargs: dict[str, Any] = {"alpha": 0.75}
                         color_hex = self._category_colors.get(label)
                         if color_hex:
                             kwargs["color"] = color_hex
-                        self.ax.scatter(subset[x], subset[y], label=label, **kwargs)
-                    self.ax.legend(title=self._target_column, loc="best")
+                        ax.scatter(subset[x], subset[y], label=label, **kwargs)
+                    ax.legend(title=self._target_column, loc="best")
                     applied_coloring = True
-
             if not applied_coloring:
-                self.ax.scatter(df_use[x], df_use[y], alpha=0.6)
+                ax.scatter(df_use[x], df_use[y], alpha=0.6)
+            ax.set_xlabel(x)
+            ax.set_ylabel(y)
 
-            self.ax.set_xlabel(x)
-            self.ax.set_ylabel(y)
-
-        # -------- 直方图 ---------------------------------------------------
         elif chart == "直方图":
             col = self.cmb_x.currentText()
             if not col:
-                self.canvas.draw();
-                return
-            self.ax.hist(df_use[col].dropna(), bins=30, alpha=0.7)
-            self.ax.set_xlabel(col)
+                return False
+            ax.hist(df_use[col].dropna(), bins=30, alpha=0.7)
+            ax.set_xlabel(col)
 
-        # -------- 箱线图 ---------------------------------------------------
         elif chart == "箱线图":
             if not self._sel_cols:
-                self.canvas.draw();
-                return
+                return False
             data = [df_use[c].dropna() for c in self._sel_cols]
-            self.ax.boxplot(data, labels=self._sel_cols, vert=False)
+            ax.boxplot(data, labels=self._sel_cols, vert=False)
 
-        self.canvas.figure.tight_layout()
+        else:
+            return False
+
+        return True
+
+    def _update_plot(self):
+        self._update_control_visibility()
+        rendered = self._plot_on_axes(self.ax)
+        if rendered:
+            self.canvas.figure.tight_layout()
         self.canvas.draw()
+
+    def _open_enlarge_dialog(self):
+        dlg = PreviewEnlargeDialog(self)
+        if not self._plot_on_axes(dlg.canvas.ax):
+            dlg.close()
+            QMessageBox.information(self, "提示", "暂无可放大的图表。")
+            return
+        dlg.canvas.figure.tight_layout()
+        dlg.canvas.draw()
+        dlg.show()

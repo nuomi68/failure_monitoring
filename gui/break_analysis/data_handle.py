@@ -4,12 +4,12 @@ from PyQt6.QtWidgets import (
     QWidget, QPushButton, QFileDialog, QSplitter, QStackedLayout,
     QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QCheckBox, QComboBox,
-    QLabel, QSizePolicy, QSpacerItem
+    QLabel, QSizePolicy, QSpacerItem, QMessageBox
 )
 from PyQt6.QtCore import Qt
 
 from .calculator_widget import CalculatorWidget
-from .feature_preview import FeaturePreviewWidget,HeatmapCanvas
+from .feature_preview import FeaturePreviewWidget, HeatmapCanvas
 from gui.feature_selector_widget import FeatureSelectorWidget
 from gui.tools import logger
 from gui.data_load_dialog import DataLoadDialog
@@ -32,10 +32,10 @@ class DataHandlePage(QWidget):
 
         self.data_page = QWidget()
         main = QVBoxLayout(self.data_page)          # 顶层垂直
-        title = QLabel("选择数据")
-        title.setStyleSheet("font-weight:400; font-size:26px;")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        main.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
+        # title = QLabel("选择数据")
+        # title.setStyleSheet("font-weight:400; font-size:26px;")
+        # title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # main.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
         # ── 上半部分：栈布局（示例页 / 数据表） ──
         upper_container = QWidget()
         upper_v = QVBoxLayout(upper_container)
@@ -92,6 +92,7 @@ class DataHandlePage(QWidget):
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         split.addWidget(self.table)
+
         self.heatmap_canvas = HeatmapCanvas()
         split.addWidget(self.heatmap_canvas)
         split.setStretchFactor(0, 2)
@@ -150,6 +151,10 @@ class DataHandlePage(QWidget):
         self.btn_reset = QPushButton("清空表格")
         self.btn_reset.clicked.connect(self.reset_ui)
         bottom_bar.addWidget(self.btn_reset)
+        self.btn_export = QPushButton("导出表格")
+        self.btn_export.setEnabled(False)
+        self.btn_export.clicked.connect(self.export_table)
+        bottom_bar.addWidget(self.btn_export)
         right_v.addLayout(bottom_bar)
 
         # 计算器主体
@@ -220,7 +225,48 @@ class DataHandlePage(QWidget):
         self.cmb.clear()
         self.calc.setDataFrame(pd.DataFrame())
         self.df = pd.DataFrame()
+        self.btn_export.setEnabled(False)
         self.top_stack.setCurrentIndex(0)      # 恢复到示例页
+
+    def export_table(self):
+        if self.df is None or self.df.empty:
+            QMessageBox.information(self, "导出表格", "当前没有可导出的数据。")
+            return
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出表格",
+            "data_export.xlsx",
+            "Excel 文件 (*.xlsx);;CSV 文件 (*.csv)"
+        )
+        if not path:
+            return
+
+        fmt = "excel"
+        if selected_filter and "CSV" in selected_filter:
+            fmt = "csv"
+        ext = path.lower()
+        if ext.endswith(".csv"):
+            fmt = "csv"
+        elif ext.endswith(".xlsx"):
+            fmt = "excel"
+        else:
+            if fmt == "csv":
+                path += ".csv"
+            else:
+                path += ".xlsx"
+
+        try:
+            if fmt == "csv":
+                self.df.to_csv(path, index=False)
+            else:
+                self.df.to_excel(path, index=False)
+        except Exception as e:
+            logger.error("导出表格失败: %s", e)
+            QMessageBox.critical(self, "导出表格", f"保存失败：{e}")
+            return
+
+        QMessageBox.information(self, "导出表格", "导出成功。")
 
     def populate_table(self, df):
         sub = df.iloc[:100, :]
@@ -265,6 +311,7 @@ class DataHandlePage(QWidget):
 
         # 4) 热力图 + 顶部页切换
         self.heatmap_canvas.plot_corr(self.df)
+
         self.heatmap_canvas.setMaximumWidth(500)
         self.top_stack.setCurrentIndex(1)
 
@@ -283,6 +330,7 @@ class DataHandlePage(QWidget):
 
         self.preview.set_selected_columns(selected)
         self._on_target_column_changed()
+        self.btn_export.setEnabled(True)
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked.value)

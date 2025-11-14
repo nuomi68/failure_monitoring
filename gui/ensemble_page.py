@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QFrame,
     QStyle,
+    QSizePolicy,
 )
 
 from backend.ml_interface import ML, infer_input_features
@@ -26,7 +27,7 @@ from backend.timeseries_interface import ModelManager
 
 from gui.smart_table import SmartTable, SmartTableConfig
 from gui.model_manager_dialog import ModelManagerDialog
-
+from gui.tools import make_section_label
 
 class EnsemblePage(QWidget):
     """
@@ -64,6 +65,9 @@ class EnsemblePage(QWidget):
         self.grp_ts = self._build_ts_block()
         self.grp_ml = self._build_ml_block()
         self.grp_fault = self._build_fault_block()
+        self.grp_ts_wrap = self._wrap_group_with_placeholder(self.grp_ts)
+        self.grp_ml_wrap = self._wrap_group_with_placeholder(self.grp_ml)
+        self.grp_fault_wrap = self._wrap_group_with_placeholder(self.grp_fault)
 
         # 裂变活度输入区
         self.ts_input_wrap = QWidget()
@@ -83,14 +87,15 @@ class EnsemblePage(QWidget):
         right_bottom.addWidget(self._make_final_actions())
 
         # 页面布局：标题 + 分隔线 + 各区块
-        self.lbl_page_title = self._make_section_label("核素活度预测")
-        self.lbl_fault_title = self._make_section_label("破损检测模型")
+        self.lbl_page_title = make_section_label("核素活度预测")
+        self.lbl_fault_title = make_section_label("破损检测模型")
 
         self.fault_models_wrap = QWidget()
-        fault_left = QVBoxLayout(self.fault_models_wrap)
+        fault_left = QHBoxLayout(self.fault_models_wrap)
         fault_left.setSpacing(8)
-        fault_left.addWidget(self.grp_ml)
-        fault_left.addWidget(self.grp_fault)
+        fault_left.setContentsMargins(0, 0, 0, 0)
+        fault_left.addWidget(self.grp_ml_wrap)
+        fault_left.addWidget(self.grp_fault_wrap)
         fault_left.setStretch(0, 1)
         fault_left.setStretch(1, 1)
 
@@ -101,10 +106,10 @@ class EnsemblePage(QWidget):
 
         top_layout = QHBoxLayout()
         top_layout.setSpacing(12)
-        top_layout.addWidget(self.grp_ts)
+        top_layout.addWidget(self.grp_ts_wrap)
         top_layout.addWidget(self.ts_input_wrap)
-        top_layout.setStretch(0, 0)
-        top_layout.setStretch(1, 1)
+        top_layout.setStretch(0, 1)
+        top_layout.setStretch(1, 3)
         root.addLayout(top_layout)
 
         root.addWidget(self.lbl_fault_title)
@@ -114,8 +119,8 @@ class EnsemblePage(QWidget):
         bottom_layout.setSpacing(12)
         bottom_layout.addWidget(self.fault_models_wrap)
         bottom_layout.addWidget(self.common_wrap)
-        bottom_layout.setStretch(0, 0)
-        bottom_layout.setStretch(1, 1)
+        bottom_layout.setStretch(0, 1)
+        bottom_layout.setStretch(1, 3)
         root.addLayout(bottom_layout)
 
     # ------------------------------------------------------------------
@@ -141,7 +146,7 @@ class EnsemblePage(QWidget):
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: white;
-                    border: none;        /* 如果你不要边框就这样写 */
+                    border: none;    
                 }
                 QPushButton:hover {
                     background-color: #ff4d4f;  /* 悬停时红色 */
@@ -159,20 +164,30 @@ class EnsemblePage(QWidget):
             layout.addWidget(w)
         layout.addStretch()
 
-    def _make_section_label(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        font = lbl.font()
-        font.setBold(True)
-        font.setPointSize(max(font.pointSize() + 4, 14))
-        lbl.setFont(font)
-        return lbl
-
     def _make_divider(self) -> QFrame:
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
         line.setFixedHeight(2)
         return line
+
+    def _make_placeholder_btn(self) -> QPushButton:
+        btn = QPushButton("")
+        btn.setEnabled(False)
+        btn.setFlat(True)
+        btn.setFixedHeight(34)
+        btn.setStyleSheet("border: none; background: transparent;")
+        return btn
+
+    def _wrap_group_with_placeholder(self, widget: QWidget) -> QWidget:
+        wrap = QWidget()
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(widget)
+        lay.addWidget(self._make_placeholder_btn())
+        wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        return wrap
 
     def _set_table_headers(self, tbl: SmartTable, headers: List[str]) -> None:
         df = tbl.dataframe()
@@ -238,7 +253,7 @@ class EnsemblePage(QWidget):
         box, lay = self._build_left_group("核素活度预测模型")
         row = QHBoxLayout()
         row.addStretch(1)
-        self.btn_ts_load = QPushButton("加载…")
+        self.btn_ts_load = QPushButton("加载")
         self.btn_ts_clear = QPushButton("清除")
         row.addWidget(self.btn_ts_load)
         row.addWidget(self.btn_ts_clear)
@@ -257,7 +272,7 @@ class EnsemblePage(QWidget):
         box, lay = self._build_left_group("破损检测模型")
         row = QHBoxLayout()
         row.addStretch(1)
-        self.btn_ml_load = QPushButton("加载…")
+        self.btn_ml_load = QPushButton("加载")
         self.btn_ml_clear = QPushButton("清除")
         row.addWidget(self.btn_ml_load)
         row.addWidget(self.btn_ml_clear)
@@ -276,7 +291,7 @@ class EnsemblePage(QWidget):
         box, lay = self._build_left_group("破损检测模型2")
         row = QHBoxLayout()
         row.addStretch(1)
-        self.btn_fault_load = QPushButton("加载…")
+        self.btn_fault_load = QPushButton("加载")
         self.btn_fault_clear = QPushButton("清除")
         row.addWidget(self.btn_fault_load)
         row.addWidget(self.btn_fault_clear)
@@ -296,7 +311,7 @@ class EnsemblePage(QWidget):
     # ------------------------------------------------------------------
     def _make_ts_actions(self) -> QWidget:
         box = QWidget(); lay = QHBoxLayout(box)
-        self.btn_ts_to_down = QPushButton("生成预测并填入集成表")
+        self.btn_ts_to_down = QPushButton("生成预测")
         self.btn_ts_to_down.clicked.connect(self._on_ts_to_down_and_run)
         lay.addStretch(1); lay.addWidget(self.btn_ts_to_down)
         return box
@@ -497,8 +512,11 @@ class EnsemblePage(QWidget):
             self.tbl_ts.set_dataframe(df_ts_new, record_state=False)
 
         # 根据集成输入表头追加行
-        headers = list(self.tbl_common.dataframe().columns)
         df_common = self.tbl_common.dataframe()
+        headers = list(df_common.columns)
+        if not headers:
+            QMessageBox.information(self, "提示", "请先加载需要的模型以生成集成输入列。")
+            return
         if df_common.empty:
             df_common = pd.DataFrame(columns=headers)
         new_row_common = {

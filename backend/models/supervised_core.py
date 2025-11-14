@@ -32,11 +32,9 @@ class _KNNClfAdapter:
         return KNeighborsClassifier(**params)
 
     def fit(self, model, X, y=None):
-        # Ensure the requested neighbor count does not exceed the number of
-        # available training samples. ``KNeighborsClassifier`` will raise a
-        # ``ValueError`` during prediction if ``n_neighbors`` is larger than
-        # the fitted sample size.  Adjust it here to avoid runtime errors when
-        # users specify an excessively large value.
+        # 确保请求的邻居数量不超过可用的训练样本数量。
+        # 如果 n_neighbors 大于拟合时的样本数量，KNeighborsClassifier 会在预测时抛出 ValueError。
+        # 在这里进行调整，可以避免当用户指定过大的值时出现运行时错误。
         n_samples = X.shape[0]
         if getattr(model, "n_neighbors", None) is not None and model.n_neighbors > n_samples:
             model.set_params(n_neighbors=n_samples)
@@ -68,10 +66,9 @@ class _KNNRegAdapter:
         return KNeighborsRegressor(**params)
 
     def fit(self, model, X, y=None):
-        # ``KNeighborsRegressor`` requires ``n_neighbors`` to be no greater
-        # than the number of training samples.  When the user requests a
-        # larger value, shrink it to ``len(X)`` to prevent ``ValueError`` on
-        # prediction.
+        # 确保请求的邻居数量不超过可用的训练样本数量。
+        # 如果 n_neighbors 大于拟合时的样本数量，KNeighborsClassifier 会在预测时抛出 ValueError。
+        # 在这里进行调整，可以避免当用户指定过大的值时出现运行时错误。
         n_samples = X.shape[0]
         if getattr(model, "n_neighbors", None) is not None and model.n_neighbors > n_samples:
             model.set_params(n_neighbors=n_samples)
@@ -143,9 +140,97 @@ class _RFRegAdapter:
         return "rf_reg"
 
 
+class _XGBClfAdapter:
+    code = "xgb_clf"
+    kind: Literal["supervised_clf"] = "supervised_clf"
+
+    def build(self, **params):
+        try:
+            from xgboost import XGBClassifier  # type: ignore
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise RuntimeError("缺少 xgboost 依赖，请先安装 `pip install xgboost`.") from exc
+
+        cfg = params.copy()
+        cfg.setdefault("use_label_encoder", False)
+        cfg.setdefault("eval_metric", "logloss")
+        if cfg.get("objective") == "auto":  # xgboost 不认识 auto
+            cfg.pop("objective")
+        return XGBClassifier(**cfg)
+
+    def fit(self, model, X, y=None):
+        if y is None:
+            raise ValueError("XGBoost 分类需要 y")
+        n_classes = len(np.unique(y))
+        params = model.get_params()
+        objective = params.get("objective")
+        if n_classes > 2:
+            if objective not in {"multi:softprob", "multi:softmax"}:
+                model.set_params(objective="multi:softprob")
+            model.set_params(num_class=n_classes)
+        else:
+            if objective is None:
+                model.set_params(objective="binary:logistic")
+        model.fit(X, y)
+        return model
+
+    def predict(self, model, X):
+        return model.predict(X)
+
+    def scores(self, model, X, *, classes_: Optional[np.ndarray] = None):
+        if not hasattr(model, "predict_proba"):
+            return None
+        proba = model.predict_proba(X)
+        cls = list(getattr(model, "classes_", []))
+        if not cls:
+            return None
+        pos_cls = 1 if 1 in cls else (cls[1] if len(cls) > 1 else cls[0])
+        pos_idx = cls.index(pos_cls)
+        return proba[:, pos_idx]
+
+    def default_tau(self, scores, *, classes_: Optional[np.ndarray] = None):
+        return 0.5
+
+    def meta_model_type(self) -> str:
+        return "xgb_clf"
+
+
+class _XGBRegAdapter:
+    code = "xgb_reg"
+    kind: Literal["supervised_reg"] = "supervised_reg"
+
+    def build(self, **params):
+        try:
+            from xgboost import XGBRegressor  # type: ignore
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("缺少 xgboost 依赖，请先安装 `pip install xgboost`.") from exc
+        cfg = params.copy()
+        cfg.setdefault("eval_metric", "rmse")
+        return XGBRegressor(**cfg)
+
+    def fit(self, model, X, y=None):
+        if y is None:
+            raise ValueError("XGBoost 回归需要 y")
+        model.fit(X, y)
+        return model
+
+    def predict(self, model, X):
+        return model.predict(X)
+
+    def scores(self, model, X, *, classes_: Optional[np.ndarray] = None):
+        return model.predict(X)
+
+    def default_tau(self, scores, *, classes_: Optional[np.ndarray] = None):
+        return None
+
+    def meta_model_type(self) -> str:
+        return "xgb_reg"
+
+
 ADAPTERS: list[AlgoAdapter] = [
     _KNNClfAdapter(),
     _KNNRegAdapter(),
     _RFClfAdapter(),
     _RFRegAdapter(),
+    _XGBClfAdapter(),
+    _XGBRegAdapter(),
 ]

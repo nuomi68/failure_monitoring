@@ -15,7 +15,7 @@ from gui.model_manager_dialog import ModelManagerDialog
 from gui.tools import show_save_success
 
 from gui.smart_table import SmartTable, SmartTableConfig
-
+from gui.tools import make_section_label
 
 class FaultLevelPage(QWidget):
     """破口大小估计器页面，使用 SmartTable 统一表格展示
@@ -52,7 +52,7 @@ class FaultLevelPage(QWidget):
         top.addWidget(self.cb_method)
 
         top.addSpacing(16)
-        top.addWidget(QLabel("特征缩放："))
+        top.addWidget(QLabel("规范化："))
         self.cb_scaler = QComboBox()
         for name, spec in FaultLevelEstimator.available_scalers():
             self.cb_scaler.addItem(name, spec)
@@ -67,7 +67,8 @@ class FaultLevelPage(QWidget):
 
         upper = QWidget()
         up_lay = QVBoxLayout(upper)
-        up_lay.addWidget(QLabel("损伤评估样本表"))
+
+        up_lay.addWidget(make_section_label("破损检测样本表"))
         self.tbl_labelled = SmartTable(
             SmartTableConfig(
                 show_label_selector=True,
@@ -78,7 +79,7 @@ class FaultLevelPage(QWidget):
 
         lower = QWidget()
         lo_lay = QVBoxLayout(lower)
-        lo_lay.addWidget(QLabel("损伤评估输入表"))
+        lo_lay.addWidget(make_section_label("破损检测输入表"))
         self.tbl_unlabelled = SmartTable(SmartTableConfig())
         lo_lay.addWidget(self.tbl_unlabelled)
 
@@ -87,9 +88,9 @@ class FaultLevelPage(QWidget):
 
         # ---------------- Bottom Buttons ----------------
         bottom = QHBoxLayout()
-        self.btn_predict = QPushButton("计算破口大小")
+        self.btn_predict = QPushButton("计算")
         self.btn_predict.clicked.connect(self._on_predict)
-        self.btn_save = QPushButton("保存模型…")
+        self.btn_save = QPushButton("保存模型")
         self.btn_save.clicked.connect(self._on_save_model)
         self.btn_save.setEnabled(False)
 
@@ -124,15 +125,15 @@ class FaultLevelPage(QWidget):
     def _on_predict(self):
         label_col = self.tbl_labelled.label_column()
         if not label_col:
-            QMessageBox.warning(self, "提示", "请选择破口大小列。")
+            QMessageBox.warning(self, "提示", "请选择破损等级列。")
             return
 
         df_lab = self.tbl_labelled.dataframe()
         if df_lab.empty:
-            QMessageBox.warning(self, "提示", "损伤评估样本表为空。")
+            QMessageBox.warning(self, "提示", "破损检测样本表为空。")
             return
         if label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", f"破口大小列“{label_col}”不在损伤评估样本表中。")
+            QMessageBox.warning(self, "提示", f"破口大小列“{label_col}”不在破损检测样本表中。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
@@ -143,7 +144,7 @@ class FaultLevelPage(QWidget):
             QMessageBox.information(
                 self,
                 "数据清洗",
-                f"损伤评估样本表中有 {len(nan_rows_lab)} 行包含非数值特征，已自动剔除：\n{[int(i) for i in nan_rows_lab]}"
+                f"破损检测样本表中有 {len(nan_rows_lab)} 行包含非数值特征，已自动剔除：\n{[int(i) for i in nan_rows_lab]}"
             )
         keep_lab = ~X_lab.isna().any(axis=1)
         X_lab = X_lab[keep_lab].to_numpy(dtype=float)
@@ -155,7 +156,7 @@ class FaultLevelPage(QWidget):
 
         df_un = self.tbl_unlabelled.dataframe()
         if df_un.empty:
-            QMessageBox.warning(self, "提示", "损伤评估输入表为空，请先填写。")
+            QMessageBox.warning(self, "提示", "破损检测输入表为空，请先填写。")
             return
 
         # 优先使用保存/加载的特征顺序
@@ -164,7 +165,7 @@ class FaultLevelPage(QWidget):
             feat_for_predict = list(self._estimator.feature_names)
         use_cols = [c for c in feat_for_predict if c in df_un.columns]
         if not use_cols:
-            QMessageBox.critical(self, "列不匹配", "损伤评估输入表与损伤评估样本表的特征列不匹配。")
+            QMessageBox.critical(self, "列不匹配", "破损检测输入表与破损检测样本表的特征列不匹配。")
             return
 
         X_un = df_un[use_cols].apply(pd.to_numeric, errors="coerce")
@@ -173,7 +174,7 @@ class FaultLevelPage(QWidget):
             QMessageBox.information(
                 self,
                 "数据清洗",
-                f"损伤评估输入表中有 {len(nan_rows_un)} 行包含非数值或缺失，已自动剔除：\n{[int(i) for i in nan_rows_un]}"
+                f"破损检测输入表中有 {len(nan_rows_un)} 行包含非数值或缺失，已自动剔除：\n{[int(i) for i in nan_rows_un]}"
             )
         keep_un = ~X_un.isna().any(axis=1)
         X_un_valid = X_un[keep_un].to_numpy(dtype=float)
@@ -188,30 +189,35 @@ class FaultLevelPage(QWidget):
         )
 
         if X_un_valid.shape[0] == 0:
-            QMessageBox.warning(self, "提示", "清洗后损伤评估输入表无有效行。")
+            QMessageBox.warning(self, "提示", "清洗后破损检测输入表无有效行。")
             return
 
         preds = self._estimator.predict(X_un_valid)
 
-        df_un["预测破口大小"] = ""
-        df_un.loc[keep_un.to_numpy().nonzero()[0], "预测破口大小"] = preds
+        pred_col_name = label_col
+        df_un[pred_col_name] = ""
+        df_un.loc[keep_un, pred_col_name] = preds
         with self.tbl_unlabelled.no_record():
             self.tbl_unlabelled.set_dataframe(df_un, record_state=False)
-            pred_col = df_un.columns.get_loc("预测破口大小")
+            pred_col = df_un.columns.get_loc(pred_col_name)
             for r in range(self.tbl_unlabelled.table.rowCount()):
                 item = self.tbl_unlabelled.table.item(r, pred_col)
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
         self.btn_save.setEnabled(True)
-        QMessageBox.information(self, "完成", f"已为 {preds.shape[0]} 行写入预测破口大小。\n方法：{self._methods[self._method_code]}")
+        QMessageBox.information(
+            self,
+            "完成",
+            f"已为 {preds.shape[0]} 行写入“{pred_col_name}”预测值。\n方法：{self._methods[self._method_code]}",
+        )
 
     def _on_save_model(self):
         # 需要有样本才可保存
         df_lab = self.tbl_labelled.dataframe()
         label_col = self.tbl_labelled.label_column()
         if df_lab.empty or not label_col or label_col not in df_lab.columns:
-            QMessageBox.warning(self, "提示", "请先准备好损伤评估样本表并指定破口大小列，再保存模型。")
+            QMessageBox.warning(self, "提示", "请先准备好破损检测样本表并指定破损等级列，再保存模型。")
             return
 
         feat_cols = [c for c in df_lab.columns if c != label_col]
@@ -282,14 +288,14 @@ class FaultLevelPage(QWidget):
         self._scaler_code = s_specs[idx]
         self.btn_save.setEnabled(True)
 
-        # 载入损伤评估样本表并同步特征列
+        # 载入破损检测样本表并同步特征列
         if df is not None:
             with self.tbl_labelled.no_record():
                 self.tbl_labelled.set_dataframe(df, record_state=False)
                 lbl = meta.get("label_col")
                 if lbl and lbl in df.columns:
                     self.tbl_labelled.set_label_column(lbl)
-            # 清空损伤评估输入表但保留特征列
+            # 清空破损检测输入表但保留特征列
             cols = est.feature_names or list(df.columns)
             self.tbl_unlabelled.set_dataframe(pd.DataFrame(columns=cols), record_state=False)
         else:

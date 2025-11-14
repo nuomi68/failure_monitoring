@@ -132,16 +132,16 @@ class MainController(QMainWindow):
         left_layout.setSpacing(4)
 
         # 功能按钮
-        self.btn_nuclide = QPushButton()
         self.btn_anomaly = QPushButton()
         self.btn_damage = QPushButton()
+        self.btn_nuclide = QPushButton()
         self.btn_ensemble = QPushButton()
         self.btn_pipeline = QPushButton()
 
         self.menu_items = [
-            (self.btn_nuclide, "📈", "核素活度预测"),
             (self.btn_anomaly, "🔍", "破损检测模型"),
             (self.btn_damage, "🔧", "破损检测模型2"),
+            (self.btn_nuclide, "📈", "核素活度预测"),
             (self.btn_ensemble, "🧩", "模型集成"),
         ]
 
@@ -169,14 +169,14 @@ class MainController(QMainWindow):
         self.damage_page = FaultLevelPage()
         self.ensemble_page = EnsemblePage()
         self.nuclide_page = TimeSeriesPage()
-        self.stack.addWidget(self.nuclide_page)
         self.stack.addWidget(self.anomaly_page)
         self.stack.addWidget(self.damage_page)
+        self.stack.addWidget(self.nuclide_page)
         self.stack.addWidget(self.ensemble_page)
 
         # 默认选中第一页
-        self.btn_nuclide.setChecked(True)
-        self.stack.setCurrentWidget(self.nuclide_page)
+        self.btn_anomaly.setChecked(True)
+        self.stack.setCurrentWidget(self.anomaly_page)
 
         # 底部日志窗口
         self.log_view = QPlainTextEdit()

@@ -8,15 +8,16 @@ supervised_page_rewired.py
 """
 
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QSplitter, QHBoxLayout,
     QMessageBox, QLabel, QComboBox, QSpinBox, QPushButton, QFileDialog, QLineEdit,
     QTableWidget, QTableWidgetItem, QSlider, QDialog, QFormLayout,
-    QDialogButtonBox, QDoubleSpinBox, QCheckBox
+    QDialogButtonBox, QDoubleSpinBox, QCheckBox, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from sklearn.decomposition import PCA
 from sklearn.utils.multiclass import type_of_target
 from sklearn.model_selection import train_test_split
@@ -26,19 +27,25 @@ from gui.tools import logger
 # ============== 画布 ==============
 class PlotCanvas(FigureCanvas):
     threshold_changed = pyqtSignal(float)
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_controls: bool = True):
         self.fig, self.ax = plt.subplots()
         super().__init__(self.fig)
         self.setParent(parent)
         self.cbar = None
-        self.slider = QSlider(Qt.Orientation.Horizontal, parent)
-        self.slider.setRange(0, 999)
-        self.slider.setValue(500)
-        self.slider.valueChanged.connect(self._emit_threshold)
-        self.lbl_tau = QLabel("阈值 τ = 0.500")
+        self.slider = None
+        self.lbl_tau = None
+        if show_controls:
+            self.slider = QSlider(Qt.Orientation.Horizontal, parent)
+            self.slider.setRange(0, 999)
+            self.slider.setValue(500)
+            self.slider.valueChanged.connect(self._emit_threshold)
+            self.lbl_tau = QLabel("阈值 τ = 0.500")
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     def _emit_threshold(self, v: int):
         tau = v / 1000.0
-        self.lbl_tau.setText(f"阈值 τ = {tau:.3f}")
+        if self.lbl_tau:
+            self.lbl_tau.setText(f"阈值 τ = {tau:.3f}")
         self.threshold_changed.emit(tau)
     def _clear_cbar(self):
         if self.cbar:
@@ -164,6 +171,21 @@ class PlotCanvas(FigureCanvas):
         self.draw()
 
 
+# ============== 放大窗口 ==============
+class PlotPreviewDialog(QDialog):
+    """独立放大窗口，包含导航工具栏和只读画布。"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("图表放大预览")
+        self.resize(900, 720)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        self.canvas = PlotCanvas(self, show_controls=False)
+        toolbar = NavigationToolbar(self.canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self.canvas)
+
+
 # ============== 高级参数对话框 ==============
 class AdvParamsDlg(QDialog):
     def __init__(self, parent: QWidget, code: str, params: Dict[str, Any], is_classification: bool):
@@ -201,7 +223,7 @@ class AdvParamsDlg(QDialog):
             self.sp_p = QSpinBox()
             self.sp_p.setRange(1, 10)
             self.sp_p.setValue(int(params.get("p", 2)))
-            p_layout.addWidget(QLabel("p:"))
+            p_layout.addWidget(QLabel("p"))
             p_layout.addWidget(self.sp_p)
             form.addRow(self.p_row)
 
@@ -213,7 +235,7 @@ class AdvParamsDlg(QDialog):
             self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
             form.addRow("n_jobs", self.sp_jobs)
 
-        else:
+        elif "rf" in code:
             self.cb_criterion = QComboBox()
             if self.is_clf:
                 self.cb_criterion.addItems(["gini", "entropy", "log_loss"])
@@ -250,15 +272,77 @@ class AdvParamsDlg(QDialog):
             self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
             form.addRow("n_jobs", self.sp_jobs)
 
+        else:
+            def _dbl(min_v, max_v, step, value, decimals=3):
+                sp = QDoubleSpinBox()
+                sp.setDecimals(decimals)
+                sp.setRange(min_v, max_v)
+                sp.setSingleStep(step)
+                sp.setValue(value)
+                return sp
+
+            self.sp_depth = QSpinBox()
+            self.sp_depth.setRange(1, 64)
+            self.sp_depth.setValue(int(params.get("max_depth", 6)))
+            form.addRow("max_depth", self.sp_depth)
+
+            self.sp_lr = _dbl(0.001, 1.0, 0.01, float(params.get("learning_rate", 0.1)))
+            form.addRow("learning_rate", self.sp_lr)
+
+            self.sp_subsample = _dbl(0.1, 1.0, 0.05, float(params.get("subsample", 0.8)), decimals=2)
+            form.addRow("subsample", self.sp_subsample)
+
+            self.sp_colsample = _dbl(0.1, 1.0, 0.05, float(params.get("colsample_bytree", 0.8)), decimals=2)
+            form.addRow("colsample_bytree", self.sp_colsample)
+
+            self.sp_mcw = _dbl(0.0, 100.0, 0.5, float(params.get("min_child_weight", 1.0)), decimals=2)
+            form.addRow("min_child_weight", self.sp_mcw)
+
+            self.sp_gamma = _dbl(0.0, 10.0, 0.1, float(params.get("gamma", 0.0)), decimals=2)
+            form.addRow("gamma", self.sp_gamma)
+
+            self.sp_reg_lambda = _dbl(0.0, 20.0, 0.1, float(params.get("reg_lambda", 1.0)), decimals=2)
+            form.addRow("reg_lambda", self.sp_reg_lambda)
+
+            self.sp_reg_alpha = _dbl(0.0, 20.0, 0.1, float(params.get("reg_alpha", 0.0)), decimals=2)
+            form.addRow("reg_alpha", self.sp_reg_alpha)
+
+            self.sp_jobs = QSpinBox()
+            self.sp_jobs.setRange(-1, 64)
+            self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
+            form.addRow("n_jobs", self.sp_jobs)
+
+            self.cb_objective = QComboBox()
+            if self.is_clf:
+                options = [
+                    ("binary:logistic", "binary:logistic"),
+                    ("binary:logitraw", "binary:logitraw"),
+                    ("multi:softprob", "multi:softprob"),
+                ]
+                self.sp_spw = _dbl(0.0, 1000.0, 0.5, float(params.get("scale_pos_weight", 1.0)), decimals=2)
+                form.addRow("scale_pos_weight", self.sp_spw)
+            else:
+                options = [
+                    ("reg:squarederror", "reg:squarederror"),
+                    ("reg:gamma", "reg:gamma"),
+                    ("reg:pseudohubererror", "reg:pseudohubererror"),
+                ]
+            for text, data in options:
+                self.cb_objective.addItem(text, data)
+            cur = params.get("objective", options[0][1])
+            idx = self.cb_objective.findData(cur)
+            self.cb_objective.setCurrentIndex(idx if idx >= 0 else 0)
+            form.addRow("objective", self.cb_objective)
+
         self.sp_test_size = QDoubleSpinBox()
         self.sp_test_size.setRange(0.05,0.95)
         self.sp_test_size.setSingleStep(0.05)
         self.sp_test_size.setValue(float(params.get("test_size",0.2)))
-        form.addRow("测试集比例", self.sp_test_size)
+        form.addRow("\u6d4b\u8bd5\u96c6\u6bd4\u4f8b", self.sp_test_size)
         self.sp_rs = QSpinBox()
         self.sp_rs.setRange(-1,999999)
         self.sp_rs.setValue(int(params.get("random_state",0)))
-        form.addRow("随机种子", self.sp_rs)
+        form.addRow("\u968f\u673a\u79cd\u5b50", self.sp_rs)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
@@ -279,7 +363,7 @@ class AdvParamsDlg(QDialog):
             self.params["n_jobs"] = self.sp_jobs.value()
             if self.cb_metric.currentText()=="minkowski": self.params["p"] = self.sp_p.value()
             elif "p" in self.params: del self.params["p"]
-        else:
+        elif "rf" in self.code:
             self.params["criterion"] = self.cb_criterion.currentText()
             self.params["max_depth"] = None if self.sp_depth.value()==0 else self.sp_depth.value()
             self.params["min_samples_split"] = self.sp_mss.value()
@@ -287,6 +371,22 @@ class AdvParamsDlg(QDialog):
             self.params["max_features"] = self._parse_max_features(self.le_mf.text().strip())
             self.params["bootstrap"] = self.ck_boot.isChecked()
             self.params["n_jobs"] = self.sp_jobs.value()
+        else:
+            self.params["max_depth"] = self.sp_depth.value()
+            self.params["learning_rate"] = self.sp_lr.value()
+            self.params["subsample"] = self.sp_subsample.value()
+            self.params["colsample_bytree"] = self.sp_colsample.value()
+            self.params["min_child_weight"] = self.sp_mcw.value()
+            self.params["gamma"] = self.sp_gamma.value()
+            self.params["reg_lambda"] = self.sp_reg_lambda.value()
+            self.params["reg_alpha"] = self.sp_reg_alpha.value()
+            self.params["n_jobs"] = self.sp_jobs.value()
+            self.params["objective"] = self.cb_objective.currentData()
+            if hasattr(self, "sp_spw"):
+                self.params["scale_pos_weight"] = self.sp_spw.value()
+            else:
+                self.params.pop("scale_pos_weight", None)
+        super().accept()
         super().accept()
 
     @staticmethod
@@ -317,6 +417,7 @@ class SupervisedPage(QWidget):
         self.is_clf = True
         self.binary = False
         self.metrics_text = ""
+        self._preview_dialogs: list[PlotPreviewDialog] = []
 
         self.knn_params: Dict[str, Any] = {
             "n_neighbors": 5,
@@ -337,6 +438,37 @@ class SupervisedPage(QWidget):
             "min_samples_leaf": 1,
             "max_features": "sqrt",
             "bootstrap": True,
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
+        self.xgb_params_clf: Dict[str, Any] = {
+            "n_estimators": 200,
+            "learning_rate": 0.1,
+            "max_depth": 6,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "gamma": 0.0,
+            "reg_lambda": 1.0,
+            "reg_alpha": 0.0,
+            "min_child_weight": 1.0,
+            "scale_pos_weight": 1.0,
+            "objective": "binary:logistic",
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
+        self.xgb_params_reg: Dict[str, Any] = {
+            "n_estimators": 200,
+            "learning_rate": 0.1,
+            "max_depth": 6,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "gamma": 0.0,
+            "reg_lambda": 1.0,
+            "reg_alpha": 0.0,
+            "min_child_weight": 1.0,
+            "objective": "reg:squarederror",
             "n_jobs": -1,
             "test_size": 0.2,
             "random_state": 0,
@@ -377,19 +509,40 @@ class SupervisedPage(QWidget):
 
         right_panel = QWidget()
         right_v = QVBoxLayout(right_panel)
+        right_v.setSpacing(8)
+
+        viz_bar = QHBoxLayout()
+        viz_bar.setContentsMargins(0, 0, 0, 0)
+        viz_bar.addWidget(QLabel("图形:"))
         self.viz_combo = QComboBox()
         self.viz_combo.setCurrentIndex(120)
         self.viz_combo.currentIndexChanged.connect(lambda: self._plot())
-        right_v.addWidget(self.viz_combo, alignment=Qt.AlignmentFlag.AlignLeft)
+        viz_bar.addWidget(self.viz_combo)
+        viz_bar.addStretch()
+        self.btn_plot_enlarge = QPushButton("放大查看")
+        self.btn_plot_enlarge.setFixedHeight(28)
+        self.btn_plot_enlarge.clicked.connect(self._open_plot_preview)
+        viz_bar.addWidget(self.btn_plot_enlarge)
+        right_v.addLayout(viz_bar)
 
         self.canvas = PlotCanvas()
         self.canvas.threshold_changed.connect(self._on_tau_change)
-        right_v.addWidget(self.canvas)
-        right_v.addWidget(self.canvas.lbl_tau)
-        right_v.addWidget(self.canvas.slider)
+        canvas_wrap = QWidget()
+        canvas_h = QHBoxLayout(canvas_wrap)
+        canvas_h.setContentsMargins(0, 0, 0, 0)
+        canvas_h.addStretch()
+        canvas_h.addWidget(self.canvas)
+        canvas_h.addStretch()
+        right_v.addWidget(canvas_wrap)
+        if self.canvas.lbl_tau:
+            right_v.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
+        if self.canvas.slider:
+            right_v.addWidget(self.canvas.slider, alignment=Qt.AlignmentFlag.AlignCenter)
         # 默认隐藏 τ 控件
-        self.canvas.slider.setVisible(False)
-        self.canvas.lbl_tau.setVisible(False)
+        if self.canvas.slider:
+            self.canvas.slider.setVisible(False)
+        if self.canvas.lbl_tau:
+            self.canvas.lbl_tau.setVisible(False)
 
         self.metrics_label = QLabel("")
         self.metrics_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -411,10 +564,12 @@ class SupervisedPage(QWidget):
         if self.is_clf:
             self.alg_combo.addItem("KNN 分类","knn_clf")
             self.alg_combo.addItem("随机森林分类","rf_clf")
+            self.alg_combo.addItem("XGBoost 分类","xgb_clf")
             self.rf_params["criterion"] = "gini"
         else:
             self.alg_combo.addItem("KNN 回归","knn_reg")
             self.alg_combo.addItem("随机森林回归","rf_reg")
+            self.alg_combo.addItem("XGBoost 回归","xgb_reg")
             self.rf_params["criterion"] = "squared_error"
         self.column_list.clear()
         for col in df.columns:
@@ -428,11 +583,25 @@ class SupervisedPage(QWidget):
     def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
 
+    def _params_for_code(self, code: Optional[str]) -> Dict[str, Any]:
+        if not code:
+            return {}
+        if "knn" in code:
+            return self.knn_params
+        if "rf" in code:
+            return self.rf_params
+        if "xgb" in code:
+            return self.xgb_params_clf if "clf" in code else self.xgb_params_reg
+        return {}
+
     def open_adv_dialog(self):
         # [LOG]
         logger.info("打开高级参数：算法:%s", self.alg_combo.currentText())
         code = self.alg_combo.currentData()
-        params = self.knn_params if "knn" in code else self.rf_params
+        params = self._params_for_code(code)
+        if not params:
+            QMessageBox.warning(self, "提示", "请先选择算法")
+            return
         dlg = AdvParamsDlg(self, code, params, self.is_clf)
         dlg.exec()
 
@@ -448,9 +617,15 @@ class SupervisedPage(QWidget):
         X = self.df[cols].values
         y = self.df[self.target_col].values
         code = self.alg_combo.currentData()
+        if not code:
+            QMessageBox.warning(self, "提示", "请选择算法")
+            return
         scaler_spec = self.scaler_combo.currentData()
 
-        params_base = self.knn_params if "knn" in code else self.rf_params
+        params_base = self._params_for_code(code)
+        if not params_base:
+            QMessageBox.warning(self, "提示", "无法读取算法参数")
+            return
         test_size = float(params_base.get("test_size", 0.2))
         rs = int(params_base.get("random_state", 0))
         stratify = y if (self.is_clf and len(np.unique(y)) > 1) else None
@@ -463,18 +638,16 @@ class SupervisedPage(QWidget):
                 stratify = None
 
         n_main = self.k_spin.value()
-        if "knn" in code:
-            self.knn_params["n_neighbors"] = n_main
-        else:
-            self.rf_params["n_estimators"] = n_main
         params = params_base.copy()
         params.pop("test_size", None)
         params["random_state"] = rs
         params["target_name"] = self.target_col
         if "knn" in code:
+            params_base["n_neighbors"] = n_main
             params["n_neighbors"] = n_main
             params.pop("random_state", None)
         else:
+            params_base["n_estimators"] = n_main
             params["n_estimators"] = n_main
         # [LOG] 训练前信息与切分策略
         self._log_split(X, y, test_size, rs, stratify)
@@ -512,15 +685,17 @@ class SupervisedPage(QWidget):
           # 只有二分类才启用阈值
         tau_meta = self.meta.get("tau")
 
-        if self.binary and tau_meta is not None:
+        if self.binary and tau_meta is not None and self.canvas.slider:
             tau = float(tau_meta)
             self.canvas.slider.setValue(int(tau * 1000))
             self._update_pred_by_threshold()
-            logger.info("启用阈值：二分类，τ:%.3f", float(tau))  # [LOG]
+            logger.info("启用阈值：二分类，τ::%.3f", float(tau))  # [LOG]
         else:
-            # 多分类/回归：隐藏阈值相关控件
-            self.canvas.slider.setVisible(False)
-            self.canvas.lbl_tau.setVisible(False)
+            #多分类/回归：隐藏阈值相关控件
+            if self.canvas.slider:
+                self.canvas.slider.setVisible(False)
+            if self.canvas.lbl_tau:
+                self.canvas.lbl_tau.setVisible(False)
             logger.info("关闭阈值：%s", "回归或多分类")           # [LOG]
 
         self._compute_metrics()
@@ -566,8 +741,10 @@ class SupervisedPage(QWidget):
             # [LOG] 回归指标
             logger.info("测试集MAE误差:%.3f   测试集MSE误差:%.3f   测试集R2误差:%.3f", mae, mse, r2)
     def _reset_viz_mode(self):
-        self.canvas.slider.setVisible(self.is_clf and self.binary)
-        self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
+        if self.canvas.slider:
+            self.canvas.slider.setVisible(self.is_clf and self.binary)
+        if self.canvas.lbl_tau:
+            self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
         self.viz_combo.blockSignals(True)
         self.viz_combo.clear()
 
@@ -579,68 +756,88 @@ class SupervisedPage(QWidget):
         self.metrics_label.setVisible(not self.is_clf)
 
 
-    def _plot(self):
-        if self.y_true is None: return
+    def _plot(self, target_canvas: PlotCanvas | None = None):
+        if self.y_true is None:
+            return
+        canvas = target_canvas or self.canvas
+        if canvas is None:
+            return
         choice = self.viz_combo.currentText()
         if self.is_clf:
             if choice == "混淆矩阵":
-                self.canvas.plot_confmat(self.y_true, self.y_pred, self.meta.get("classes_", None))
+                canvas.plot_confmat(self.y_true, self.y_pred, self.meta.get("classes_", None))
             else:
-                self.canvas.plot_scores(self.y_true, self.y_pred, self.meta.get("classes_", None))
+                canvas.plot_scores(self.y_true, self.y_pred, self.meta.get("classes_", None))
         else:
             if choice == "预测 vs 真实":
-                self.canvas.clear()
-                ax = self.canvas.ax
+                canvas.clear()
+                ax = canvas.ax
                 ax.scatter(self.y_true, self.y_pred, s=12)
                 lo, hi = self.y_true.min(), self.y_true.max()
                 ax.plot([lo, hi], [lo, hi], "--", color="gray", lw=1)
                 ax.set_xlabel("真实值")
                 ax.set_ylabel("预测值")
                 ax.set_title("预测值 vs 真实值")
-                self.canvas.fig.tight_layout()
-                self.canvas.draw()
+                canvas.fig.tight_layout()
+                canvas.draw()
             elif choice == "残差直方图":
-                self.canvas.clear()
+                canvas.clear()
                 res = self.y_pred - self.y_true
-                ax = self.canvas.ax
+                ax = canvas.ax
                 ax.hist(res, bins=30, alpha=0.75)
                 ax.set_xlabel("残差")
                 ax.set_ylabel("频数")
                 ax.set_title("残差直方图")
-                self.canvas.fig.tight_layout()
-                self.canvas.draw()
+                canvas.fig.tight_layout()
+                canvas.draw()
             elif choice == "残差散点":
-                self.canvas.clear()
+                canvas.clear()
                 res = self.y_pred - self.y_true
-                ax = self.canvas.ax
+                ax = canvas.ax
                 ax.scatter(self.y_pred, res, s=12)
                 ax.axhline(0, color="gray", ls="--")
                 ax.set_xlabel("预测值")
                 ax.set_ylabel("残差")
                 ax.set_title("残差散点图")
-                self.canvas.fig.tight_layout()
-                self.canvas.draw()
+                canvas.fig.tight_layout()
+                canvas.draw()
             elif choice == "PCA 彩色散点":
-                self.canvas.clear()
+                canvas.clear()
                 XY = PCA(2, random_state=0).fit_transform(self.X_test)
                 err = np.abs(self.y_pred - self.y_true)
-                ax = self.canvas.ax
+                ax = canvas.ax
                 sc = ax.scatter(XY[:, 0], XY[:, 1], c=err, cmap="viridis", s=15)
-                self.canvas.cbar = self.canvas.fig.colorbar(sc, ax=ax, label="|残差|")
+                canvas.cbar = canvas.fig.colorbar(sc, ax=ax, label="|残差|")
                 ax.set_xlabel("PC1")
                 ax.set_ylabel("PC2")
                 ax.set_title("PCA 彩色散点")
-                self.canvas.fig.tight_layout()
-                self.canvas.draw()
+                canvas.fig.tight_layout()
+                canvas.draw()
+
+    def _open_plot_preview(self):
+        if self.y_true is None:
+            QMessageBox.information(self, "暂无图形", "请先训练模型或加载预测结果。")
+            return
+        preview = PlotPreviewDialog(self)
+        preview.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._preview_dialogs.append(preview)
+        self._plot(preview.canvas)
+        preview.finished.connect(lambda _res, dlg=preview: self._cleanup_preview_dialog(dlg))
+        preview.show()
+
+    def _cleanup_preview_dialog(self, dlg: PlotPreviewDialog):
+        if dlg in self._preview_dialogs:
+            self._preview_dialogs.remove(dlg)
 
     def _on_alg_changed(self, _i: int):
         code = self.alg_combo.currentData()
+        params = self._params_for_code(code)
         if code and "knn" in code:
             self.k_label.setText("邻居数：")
-            self.k_spin.setValue(int(self.knn_params.get("n_neighbors", 5)))
+            self.k_spin.setValue(int(params.get("n_neighbors", 5)))
         else:
-            self.k_label.setText("树数：")
-            self.k_spin.setValue(int(self.rf_params.get("n_estimators", 100)))
+            self.k_label.setText("树数量：")
+            self.k_spin.setValue(int(params.get("n_estimators", 100)))
         self._reset_viz_mode()
         # [LOG]
         logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())

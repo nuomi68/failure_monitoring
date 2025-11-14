@@ -1,6 +1,7 @@
 
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox, QLabel
+from PyQt6.QtGui import QFontMetrics
 import html
 import logging
 
@@ -70,3 +71,9 @@ class TrainWorker(QThread):
     def stop(self):
         """Forcefully terminate the worker thread."""
         self.terminate()
+
+
+def make_section_label(text: str, scale: float = 1.7) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setObjectName("SectionTitle")
+    return lbl

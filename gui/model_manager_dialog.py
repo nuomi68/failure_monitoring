@@ -1,3 +1,6 @@
+from pathlib import Path
+import re
+
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
     QDialog,
@@ -14,6 +17,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from gui.tools import logger
+
+_DATASET_STEM_RE = re.compile(r"^(?P<stem>.+?)_\d{6,}.*$")
 
 class ModelManagerDialog(QDialog):
     """通用模型管理对话框，支持可选多选模式。"""
@@ -48,12 +53,12 @@ class ModelManagerDialog(QDialog):
         self.table.doubleClicked.connect(self._load_clicked)
 
         right = QVBoxLayout()
-        self.btn_load = QPushButton("加载为当前")
+        self.btn_load = QPushButton("加载")
         self.btn_rename = QPushButton("重命名")
         self.btn_delete = QPushButton("删除")
-        self.btn_export = QPushButton("导出…")
-        self.btn_import = QPushButton("导入…")
-        for b in (self.btn_load, self.btn_rename, self.btn_delete, self.btn_export, self.btn_import):
+        self.btn_export = QPushButton("导出")
+        self.btn_import = QPushButton("导入")
+        for b in (self.btn_load, self.btn_rename, self.btn_delete):
             b.setMinimumHeight(34)
             right.addWidget(b)
         right.addStretch(1)
@@ -88,8 +93,12 @@ class ModelManagerDialog(QDialog):
         if kw:
             def match(m):
                 s = " ".join([
-                    m.get("name",""), m.get("model_id",""), m.get("model_type",""),
-                    m.get("dataset_id",""), m.get("created_at",""), str(m.get("metrics",""))
+                    m.get("name",""),
+                    m.get("model_id",""),
+                    m.get("model_type",""),
+                    self._dataset_label(m),
+                    m.get("created_at",""),
+                    self._feature_summary(m),
                 ]).lower()
                 return kw in s
             models = [m for m in models if match(m)]
@@ -101,15 +110,9 @@ class ModelManagerDialog(QDialog):
             self.table.setItem(r, 0, QTableWidgetItem(meta.get("name","")))
             self.table.setItem(r, 1, QTableWidgetItem(meta.get("model_id","")))
             self.table.setItem(r, 2, QTableWidgetItem(meta.get("model_type","")))
-            self.table.setItem(r, 3, QTableWidgetItem(meta.get("dataset_id","")))
+            self.table.setItem(r, 3, QTableWidgetItem(self._dataset_label(meta)))
             self.table.setItem(r, 4, QTableWidgetItem(meta.get("created_at","")))
-            metrics = meta.get("metrics")
-
-            if isinstance(metrics, dict):
-                metrics_text = ", ".join(f"{k}: {v}" for k, v in metrics.items())
-            else:
-                metrics_text = str(metrics or "")
-            self.table.setItem(r, 5, QTableWidgetItem(metrics_text))
+            self.table.setItem(r, 5, QTableWidgetItem(self._feature_summary(meta)))
 
     def _cell_text(self, row: int, col: int) -> str:
         item = self.table.item(row, col)
@@ -124,6 +127,58 @@ class ModelManagerDialog(QDialog):
             "created_at": self._cell_text(r, 4),
             "remarks": self._cell_text(r, 5),  # 你现在第5列填的是“备注/指标”的文本
         }
+
+    def _dataset_label(self, meta: dict) -> str:
+        candidates = [
+            meta.get("dataset_name"),
+            meta.get("dataset_id"),
+            meta.get("data_path"),
+            meta.get("dataset_path"),
+        ]
+        for raw in candidates:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            text = text.replace("\\", "/").rstrip("/")
+            base = Path(text).name if "/" in text else text
+            name = base
+            lower = name.lower()
+            for ext in (".csv", ".xlsx", ".xls", ".parquet", ".pq", ".json"):
+                if lower.endswith(ext):
+                    name = name[: -len(ext)]
+                    lower = name.lower()
+                    break
+            match = _DATASET_STEM_RE.match(name)
+            if match:
+                name = match.group("stem")
+            return name or text
+        return ""
+
+    def _feature_summary(self, meta: dict) -> str:
+        feats: list[str] = []
+        fields = [
+            meta.get("features"),
+            meta.get("feature_names"),
+        ]
+        metrics = meta.get("metrics")
+        if isinstance(metrics, dict):
+            fields.append(metrics.get("features"))
+        params = meta.get("params")
+        if isinstance(params, dict):
+            fields.append(params.get("feature_cols"))
+            fields.append(params.get("features"))
+
+        for field in fields:
+            if isinstance(field, list) and field:
+                feats = [str(f).strip() for f in field if str(f).strip()]
+                if feats:
+                    break
+        if not feats:
+            return ""
+        preview = ", ".join(feats[:8])
+        if len(feats) > 8:
+            preview += f" ...(+{len(feats) - 8})"
+        return f"特征: {preview}"
 
     # ---------- actions ----------
     def _load_clicked(self):
