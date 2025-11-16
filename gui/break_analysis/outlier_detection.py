@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedLayout
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedLayout, QMessageBox
 )
 from PyQt6.QtCore import Qt
 from .data_handle import DataHandlePage
@@ -23,9 +23,14 @@ class OutlierDetectionPage(QWidget):
         # ============== 顶部：步骤标题（居中） + 导航按钮（右侧） ==============
         header = QVBoxLayout()
 
-        # 步骤标题行（整体居中）
+        # 步骤标题行（整体居中），按钮同一行
         steps_row = QHBoxLayout()
-        steps_row.addStretch()  # 左侧撑开，保证整体居中
+        self.prev_btn = QPushButton("上一步")
+        self.prev_btn.clicked.connect(self.prev_step)
+        self.next_btn = QPushButton("下一步")
+        self.next_btn.clicked.connect(self.next_step)
+        steps_row.addWidget(self.prev_btn)
+        steps_row.addStretch()
         self.labels = []
         for text in ["数据处理", "异常检测", "监督学习", "验证预测"]:
             lbl = QLabel(text)
@@ -35,20 +40,10 @@ class OutlierDetectionPage(QWidget):
             lbl.setProperty("step", "")  # 用属性控制是否为当前步骤
             self.labels.append(lbl)
             steps_row.addWidget(lbl)
-        steps_row.addStretch()  # 右侧撑开，保证整体居中
+        steps_row.addStretch()
+        steps_row.addWidget(self.next_btn)
         steps_row.setSpacing(12)  # 四个标题之间的间距
         header.addLayout(steps_row)
-
-        # 导航按钮行（靠右）
-        nav_row = QHBoxLayout()
-        nav_row.addStretch()
-        self.prev_btn = QPushButton("上一步")
-        self.prev_btn.clicked.connect(self.prev_step)
-        self.next_btn = QPushButton("下一步")
-        self.next_btn.clicked.connect(self.next_step)
-        nav_row.addWidget(self.prev_btn)
-        nav_row.addWidget(self.next_btn)
-        header.addLayout(nav_row)
 
         layout.addLayout(header)
 
@@ -58,6 +53,7 @@ class OutlierDetectionPage(QWidget):
         self.unsup_page = UnsupervisedPage()
         self.sup_page = SupervisedPage()
         self.valid_page = ValidationPage()
+        self.data_page.data_status_changed.connect(lambda _status: self.update_steps())
         self.stack.addWidget(self.data_page)
         self.stack.addWidget(self.unsup_page)
         self.stack.addWidget(self.sup_page)
@@ -97,8 +93,11 @@ class OutlierDetectionPage(QWidget):
             # 刷新样式以应用属性变化
             lbl.style().unpolish(lbl)
             lbl.style().polish(lbl)
+        allow_next = self._step < self.stack.count() - 1
+        if self._step == 0 and not self.data_page.has_loaded_data():
+            allow_next = False
         self.prev_btn.setEnabled(self._step > 0)
-        self.next_btn.setEnabled(self._step < self.stack.count() - 1)
+        self.next_btn.setEnabled(allow_next)
         self.stack.setCurrentIndex(self._step)
         if self._step == 3:
             src = self.sup_page if self.data_page.has_target() else self.unsup_page
@@ -108,6 +107,13 @@ class OutlierDetectionPage(QWidget):
             self.valid_page.configure(raw_feats)
 
     def next_step(self) -> None:
+        if self._step == 0:
+            if not self.data_page.has_loaded_data():
+                QMessageBox.warning(self, "提示", "请先加载数据后再进行下一步。")
+                return
+            if self.data_page.has_target() and not self.data_page.target_column():
+                QMessageBox.warning(self, "提示", "请选择监督学习的样本标签列。")
+                return
         if self._step == 0:
             if self.data_page.has_target():
                 if not self._sup_inited:

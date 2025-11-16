@@ -27,11 +27,12 @@ from gui.mpl_preview import MatplotlibPreviewDialog, InteractiveMplCanvas
 
 SPLITTER_HANDLE_STYLE = """
 QSplitter::handle {
-    background-color: #d1d5db;
-    border: 1px solid #9ca3af;
-    margin: 0 1px;
+    background-color: #000000;
+    border: none;
+    margin: 0;
 }
 """
+SPLITTER_HANDLE_WIDTH = 2
 # ============== 画布 ==============
 class PlotCanvas(InteractiveMplCanvas):
     threshold_changed = pyqtSignal(float)
@@ -71,6 +72,41 @@ class PlotCanvas(InteractiveMplCanvas):
         self.ax.set_axis_off()
         self.fig.tight_layout()
         self.draw()
+
+    def _set_square_axes(self, ax=None):
+        target_ax = ax if ax is not None else self.ax
+
+        # 先根据现有数据得到范围
+        x0, x1 = target_ax.get_xlim()
+        y0, y1 = target_ax.get_ylim()
+
+        dx = x1 - x0
+        dy = y1 - y0
+        side = max(dx, dy)  # 取更大的那个跨度
+
+        # 以当前中心为基准，把两个轴都调成同样的跨度
+        x_c = (x0 + x1) / 2
+        y_c = (y0 + y1) / 2
+        target_ax.set_xlim(x_c - side / 2, x_c + side / 2)
+        target_ax.set_ylim(y_c - side / 2, y_c + side / 2)
+
+        # 再保证单位比例一致
+        target_ax.set_aspect("equal", adjustable="box")
+
+    def _resize_colorbar(self, ratio: float = 0.6):
+        if not self.cbar:
+            return
+        try:
+            ratio = float(ratio)
+        except Exception:
+            ratio = 0.6
+        ratio = max(0.0, min(1.0, ratio))
+        ax_box = self.ax.get_position()
+        cb_ax = self.cbar.ax
+        cb_box = cb_ax.get_position()
+        target_h = ax_box.height * ratio
+        y0 = ax_box.y0 + (ax_box.height - target_h) / 2
+        cb_ax.set_position([cb_box.x0, y0, cb_box.width, target_h])
     def plot_pca(self, X: np.ndarray, labels: np.ndarray):
         self._clear_cbar()
         self.ax.clear()
@@ -83,6 +119,7 @@ class PlotCanvas(InteractiveMplCanvas):
         self.ax.set_ylabel("PC2")
         self.ax.set_title("PCA 彩色散点")
         self.ax.legend(title="类别")
+        self._set_square_axes(self.ax)
         self.fig.tight_layout()
         self.draw()
     def plot_confmat(self, y_true, y_pred, labels=None):
@@ -110,6 +147,7 @@ class PlotCanvas(InteractiveMplCanvas):
         self.ax.set_xlabel("预测")
         self.ax.set_ylabel("真实")
         self.ax.set_title("混淆矩阵")
+        self._set_square_axes(self.ax)
         self.cbar = self.fig.colorbar(im, ax=self.ax)
         self.fig.tight_layout()
         self.draw()
@@ -195,6 +233,28 @@ class SquareCanvasHolder(QWidget):
         x = (w - side) // 2
         y = (h - side) // 2
         self.canvas.setGeometry(x, y, side, side)
+        super().resizeEvent(event)
+
+
+class SliderHolder(QWidget):
+    """Keep the τ slider at ~90% of the available width while staying centered."""
+
+    def __init__(self, slider: QSlider, parent: QWidget | None = None, ratio: float = 0.9):
+        super().__init__(parent)
+        self.slider = slider
+        self.slider.setParent(self)
+        self._ratio = max(0.0, min(1.0, float(ratio)))
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(slider.sizeHint().height() + 12)
+
+    def resizeEvent(self, event):
+        w = event.size().width()
+        h = event.size().height()
+        target_w = max(1, min(w, int(w * self._ratio)))
+        slider_h = min(h, self.slider.sizeHint().height())
+        x = (w - target_w) // 2
+        y = (h - slider_h) // 2
+        self.slider.setGeometry(x, y, target_w, slider_h)
         super().resizeEvent(event)
 
 
@@ -435,6 +495,12 @@ class SupervisedPage(QWidget):
         self._test_indices: np.ndarray | None = None
         self._viz_options: list[tuple[str, str]] = []
         self._scatter_points: dict[str, Any] | None = None
+        self.slider_holder: SliderHolder | None = None
+        self.X_train_raw: np.ndarray | None = None
+        self.y_train: np.ndarray | None = None
+        self.y_pred_train: np.ndarray | None = None
+        self.train_scores: np.ndarray | None = None
+        self._train_indices: np.ndarray | None = None
 
         self.knn_params: Dict[str, Any] = {
             "n_neighbors": 5,
@@ -521,12 +587,24 @@ class SupervisedPage(QWidget):
         top.addWidget(self.train_btn)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.column_list = QListWidget()
-        splitter.addWidget(self.column_list)
+        splitter.setHandleWidth(SPLITTER_HANDLE_WIDTH)
+        splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
 
-        right_panel = QWidget()
-        right_v = QVBoxLayout(right_panel)
-        right_v.setSpacing(8)
+        column_panel = QWidget()
+        column_layout = QVBoxLayout(column_panel)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.setSpacing(6)
+        column_label = QLabel("特征选择")
+        column_layout.addWidget(column_label)
+        self.column_list = QListWidget()
+        column_layout.addWidget(self.column_list, 1)
+        splitter.addWidget(column_panel)
+        splitter.setStretchFactor(0, 1)
+
+        plot_panel = QWidget()
+        plot_panel_layout = QVBoxLayout(plot_panel)
+        plot_panel_layout.setContentsMargins(0, 0, 0, 0)
+        plot_panel_layout.setSpacing(8)
 
         viz_bar = QHBoxLayout()
         viz_bar.setContentsMargins(0, 0, 0, 0)
@@ -540,7 +618,7 @@ class SupervisedPage(QWidget):
         self.btn_plot_enlarge.clicked.connect(self._open_plot_preview)
         viz_bar.addWidget(self.btn_plot_enlarge)
         viz_bar.addStretch()
-        right_v.addLayout(viz_bar)
+        plot_panel_layout.addLayout(viz_bar)
 
         self.canvas = PlotCanvas()
         self.canvas.threshold_changed.connect(self._on_tau_change)
@@ -555,39 +633,35 @@ class SupervisedPage(QWidget):
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.setSpacing(6)
         self.canvas_holder = SquareCanvasHolder(self.canvas)
-        plot_layout.addWidget(self.canvas_holder)
+        plot_layout.addWidget(self.canvas_holder, 1)
         if self.canvas.lbl_tau:
             plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
         if self.canvas.slider:
-            plot_layout.addWidget(self.canvas.slider, alignment=Qt.AlignmentFlag.AlignCenter)
+            self.slider_holder = SliderHolder(self.canvas.slider, parent=plot_container)
+            plot_layout.addWidget(self.slider_holder)
         # 默认隐藏阈值控件
-        if self.canvas.slider:
-            self.canvas.slider.setVisible(False)
+        self._set_tau_slider_visible(False)
         if self.canvas.lbl_tau:
             self.canvas.lbl_tau.setVisible(False)
         plot_layout.addWidget(self.metrics_label)
+        plot_panel_layout.addWidget(plot_container, 1)
 
-        table_container = QWidget()
-        table_layout = QVBoxLayout(table_container)
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(6)
         table_layout.addWidget(QLabel("测试样本详情"))
         self.tbl_test = SmartTable(SmartTableConfig(show_toolbar=False, editable=False, min_rows=0))
         self.tbl_test.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table_layout.addWidget(self.tbl_test)
+        self.btn_export = QPushButton("导出结果")
+        self.btn_export.clicked.connect(self._export_results)
+        table_layout.addWidget(self.btn_export)
 
-        self.plot_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.plot_splitter.setHandleWidth(6)
-        self.plot_splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
-        self.plot_splitter.addWidget(plot_container)
-        self.plot_splitter.addWidget(table_container)
-        self.plot_splitter.setStretchFactor(0, 1)
-        self.plot_splitter.setStretchFactor(1, 1)
-        right_v.addWidget(self.plot_splitter)
-
-
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(1,2)
+        splitter.addWidget(plot_panel)
+        splitter.addWidget(table_panel)
+        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(2, 1)
         main = QVBoxLayout(self)
         main.addLayout(top)
         main.addWidget(splitter)
@@ -603,11 +677,17 @@ class SupervisedPage(QWidget):
             self.alg_combo.addItem("随机森林分类","rf_clf")
             self.alg_combo.addItem("XGBoost 分类","xgb_clf")
             self.rf_params["criterion"] = "gini"
+            idx = self.alg_combo.findData("rf_clf")
+            if idx >= 0:
+                self.alg_combo.setCurrentIndex(idx)
         else:
             self.alg_combo.addItem("KNN 回归","knn_reg")
             self.alg_combo.addItem("随机森林回归","rf_reg")
             self.alg_combo.addItem("XGBoost 回归","xgb_reg")
             self.rf_params["criterion"] = "squared_error"
+            idx = self.alg_combo.findData("rf_reg")
+            if idx >= 0:
+                self.alg_combo.setCurrentIndex(idx)
         self.column_list.clear()
         for col in df.columns:
             it = QListWidgetItem(col)
@@ -706,12 +786,22 @@ class SupervisedPage(QWidget):
         X_tr_raw, X_te_raw, y_tr, y_te, _idx_tr, idx_te = train_test_split(
             X, y, all_indices, test_size=test_size, random_state=rs, stratify=stratify
         )
+        self.X_train_raw = X_tr_raw
+        self.y_train = y_tr
+        self._train_indices = _idx_tr
         self.X_test_raw = X_te_raw
         self._test_indices = idx_te
         self.X_test = ML.transform(X_te_raw)  # 与训练一致的规范化
         self.y_true = y_te
         pre =  ML.predict(X_te_raw)
         self.y_pred, self.test_scores = pre["labels"], pre["scores"]
+        try:
+            pre_train = ML.predict(X_tr_raw)
+            self.y_pred_train = pre_train.get("labels")
+            self.train_scores = pre_train.get("scores")
+        except Exception:
+            self.y_pred_train = None
+            self.train_scores = None
         # [LOG] 预测完成
         self._log_predict_done()
 
@@ -735,8 +825,7 @@ class SupervisedPage(QWidget):
             logger.info("启用阈值：二分类，τ::%.3f", float(tau))  # [LOG]
         else:
             #多分类/回归：隐藏阈值相关控件
-            if self.canvas.slider:
-                self.canvas.slider.setVisible(False)
+            self._set_tau_slider_visible(False)
             if self.canvas.lbl_tau:
                 self.canvas.lbl_tau.setVisible(False)
             logger.info("关闭阈值：%s", "回归或多分类")           # [LOG]
@@ -759,7 +848,7 @@ class SupervisedPage(QWidget):
 
     def _on_tau_change(self, tau: float):
         # [LOG]
-        self._log_tau_changed(tau)
+        #self._log_tau_changed(tau)
         if self.is_clf and self.binary:
             self.meta["tau"] = tau
             self._update_pred_by_threshold()
@@ -785,8 +874,7 @@ class SupervisedPage(QWidget):
             # [LOG] 回归指标
             logger.info("测试集MAE误差:%.3f   测试集MSE误差:%.3f   测试集R2误差:%.3f", mae, mse, r2)
     def _reset_viz_mode(self):
-        if self.canvas.slider:
-            self.canvas.slider.setVisible(self.is_clf and self.binary)
+        self._set_tau_slider_visible(self.is_clf and self.binary)
         if self.canvas.lbl_tau:
             self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
         self.viz_combo.blockSignals(True)
@@ -801,7 +889,7 @@ class SupervisedPage(QWidget):
         else:
             options = [
                 ("pred_vs_true", "预测 vs 真实"),
-                ("residual_hist", "残差直方图"),
+               # ("residual_hist", "残差直方图"),
                 ("residual_scatter", "残差散点"),
                 ("pca_scatter", "PCA 彩色散点"),
             ]
@@ -809,7 +897,12 @@ class SupervisedPage(QWidget):
             self.viz_combo.addItem(label, userData=key)
         self._viz_options = options
         self.viz_combo.blockSignals(False)
-        self.metrics_label.setVisible(not self.is_clf)
+
+    def _set_tau_slider_visible(self, visible: bool) -> None:
+        if self.slider_holder:
+            self.slider_holder.setVisible(visible)
+        if self.canvas.slider:
+            self.canvas.slider.setVisible(visible)
 
 
 
@@ -833,11 +926,18 @@ class SupervisedPage(QWidget):
                 canvas.clear()
                 ax = canvas.ax
                 ax.scatter(self.y_true, self.y_pred, s=12)
-                lo, hi = self.y_true.min(), self.y_true.max()
+                y_true_min, y_true_max = self.y_true.min(), self.y_true.max()
+                y_pred_min, y_pred_max = self.y_pred.min(), self.y_pred.max()
+                lo = min(y_true_min, y_pred_min)
+                hi = max(y_true_max, y_pred_max)
+                pad = max((hi - lo) * 0.05, 1e-6)
                 ax.plot([lo, hi], [lo, hi], "--", color="gray", lw=1)
                 ax.set_xlabel("真实值")
                 ax.set_ylabel("预测值")
                 ax.set_title("预测值 vs 真实值")
+                ax.set_xlim(lo - pad, hi + pad)
+                ax.set_ylim(lo - pad, hi + pad)
+                canvas._set_square_axes(ax)
                 canvas.fig.tight_layout()
                 canvas.draw()
                 self._register_scatter_points("pred_vs_true", self.y_true, self.y_pred)
@@ -866,6 +966,7 @@ class SupervisedPage(QWidget):
                 ax.set_xlabel("预测值")
                 ax.set_ylabel("残差")
                 ax.set_title("残差散点图")
+                canvas._set_square_axes(ax)
                 canvas.fig.tight_layout()
                 canvas.draw()
                 self._register_scatter_points("residual_scatter", self.y_pred, res)
@@ -879,7 +980,9 @@ class SupervisedPage(QWidget):
                 ax.set_xlabel("PC1")
                 ax.set_ylabel("PC2")
                 ax.set_title("PCA 彩色散点")
+                canvas._set_square_axes(ax)
                 canvas.fig.tight_layout()
+                canvas._resize_colorbar(0.6)
                 canvas.draw()
                 self._register_scatter_points("pca_scatter", XY[:, 0], XY[:, 1])
                 canvas.draw()
@@ -901,21 +1004,37 @@ class SupervisedPage(QWidget):
     def _update_test_table(self) -> None:
         if not hasattr(self, "tbl_test"):
             return
-        if self.X_test_raw is None or self.y_true is None:
-            df = pd.DataFrame(columns=self._test_feature_names)
-        else:
-            df = pd.DataFrame(self.X_test_raw, columns=self._test_feature_names)
-            actual_col = "真实值" if not self.is_clf else "真实标签"
-            df[actual_col] = self.y_true
-            if self.y_pred is not None:
-                pred_col = "预测值" if not self.is_clf else "预测标签"
-                df[pred_col] = self.y_pred
-            if not self.is_clf and self.y_pred is not None:
-                df["残差"] = self.y_pred - self.y_true
-            elif self.is_clf and self.test_scores is not None:
-                df["得分"] = self.test_scores
+        df = self._build_result_dataframe(
+            self.X_test_raw, self.y_true, self.y_pred, self.test_scores, self._test_indices
+        )
         with self.tbl_test.no_record():
             self.tbl_test.set_dataframe(df, editable=False, record_state=False)
+
+    def _export_results(self) -> None:
+        if self.df is None:
+            QMessageBox.warning(self, "提示", "请先加载并训练模型。")
+            return
+        if self.X_test_raw is None and self.X_train_raw is None:
+            QMessageBox.warning(self, "提示", "暂无可导出的结果。")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "导出结果", "", "Excel 文件 (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        test_df = self._build_result_dataframe(
+            self.X_test_raw, self.y_true, self.y_pred, self.test_scores, self._test_indices
+        )
+        train_df = self._build_result_dataframe(
+            self.X_train_raw, self.y_train, self.y_pred_train, self.train_scores, self._train_indices
+        )
+        try:
+            with pd.ExcelWriter(path) as writer:
+                test_df.to_excel(writer, sheet_name="测试集结果", index=False)
+                train_df.to_excel(writer, sheet_name="训练集结果", index=False)
+            QMessageBox.information(self, "成功", f"已导出到 {path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "导出失败", f"写入文件失败：{exc}")
 
     def _focus_test_row(self, row_idx: int) -> None:
         if not hasattr(self, "tbl_test"):
@@ -927,6 +1046,65 @@ class SupervisedPage(QWidget):
         item = table.item(row_idx, 0)
         if item is not None:
             table.scrollToItem(item)
+
+    def _sample_name_column(self) -> str | None:
+        if self.df is not None:
+            name = self.df.index.name
+            if name and name in self.df.columns:
+                return str(name)
+        return None
+
+    def _sample_name_header(self) -> str:
+        col = self._sample_name_column()
+        return col if col else "样本"
+
+    def _sample_names_for_indices(self, indices: np.ndarray | list[int]) -> list[str]:
+        if self.df is None or indices is None:
+            return []
+        arr = np.asarray(indices, dtype=int)
+        try:
+            names = self.df.index.take(arr)
+        except Exception:
+            names = arr
+        return [str(name) for name in names]
+
+    def _with_sample_name_column(self, df: pd.DataFrame, indices: np.ndarray | list[int]) -> pd.DataFrame:
+        df = df.copy()
+        header = self._sample_name_header()
+        names = self._sample_names_for_indices(indices)
+        if len(df) != len(names):
+            return df
+        if header in df.columns:
+            df.loc[:, header] = names
+            cols = [header] + [c for c in df.columns if c != header]
+            df = df[cols]
+        else:
+            df.insert(0, header, names)
+        return df
+
+    def _build_result_dataframe(
+        self,
+        X_raw: np.ndarray | None,
+        y_true: np.ndarray | None,
+        y_pred: np.ndarray | None,
+        scores: np.ndarray | None,
+        indices: np.ndarray | list[int] | None,
+    ) -> pd.DataFrame:
+        if X_raw is None or y_true is None:
+            return pd.DataFrame(columns=self._test_feature_names)
+        df = pd.DataFrame(X_raw, columns=self._test_feature_names)
+        actual_col = "真实值" if not self.is_clf else "真实标签"
+        df[actual_col] = y_true
+        if y_pred is not None:
+            pred_col = "预测值" if not self.is_clf else "预测标签"
+            df[pred_col] = y_pred
+        if not self.is_clf and y_pred is not None:
+            df["残差"] = y_pred - y_true
+        elif self.is_clf and scores is not None:
+            df["得分"] = scores
+        if indices is not None and len(df):
+            df = self._with_sample_name_column(df, indices[: len(df)])
+        return df
 
     def _on_plot_click(self, event):
         if (
@@ -1007,7 +1185,7 @@ class SupervisedPage(QWidget):
         logger.info("预测完成：测试集大小:%d", len(self.y_true))
 
     def _log_tau_changed(self, tau: float):
-        logger.info("阈值 τ 更新为 %.3f（仅二分类生效）", tau)
+        logger.info("阈值 τ 更新为 %.3f", tau)
 
 
     def _log_metrics_cls(self, y_true, y_pred):
@@ -1018,4 +1196,3 @@ class SupervisedPage(QWidget):
             logger.info("测试集指标：准确率:%.3f | 精确率:%.3f | 召回率:%.3f | F1:%.3f", acc, p, r, f1)
         except Exception as e:
             logger.warning("分类指标计算失败：%s", e)
-

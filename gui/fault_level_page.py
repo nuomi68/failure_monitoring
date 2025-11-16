@@ -56,7 +56,7 @@ class FaultLevelPage(QWidget):
         self.cb_scaler = QComboBox()
         for name, spec in FaultLevelEstimator.available_scalers():
             self.cb_scaler.addItem(name, spec)
-        self.cb_scaler.setCurrentIndex(2)
+        self.cb_scaler.setCurrentIndex(1)
         self.cb_scaler.currentIndexChanged.connect(
             lambda _: setattr(self, "_scaler_code", self.cb_scaler.currentData())
         )

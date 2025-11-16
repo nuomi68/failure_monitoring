@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+from matplotlib.backend_bases import MouseButton
 
 from PyQt6.QtWidgets import (
     QWidget,
@@ -31,10 +32,8 @@ class InteractiveMplCanvas(FigureCanvas):
         self.mpl_connect("scroll_event", self._on_scroll)
         self._is_panning = False
         self._pan_axes = None
-        self._pan_last_xdata = None
-        self._pan_last_ydata = None
-        self._pan_last_xlim = None
-        self._pan_last_ylim = None
+        self._pan_button = None
+        self._pan_key = None
         self.mpl_connect("button_press_event", self._on_press)
         self.mpl_connect("button_release_event", self._on_release)
         self.mpl_connect("motion_notify_event", self._on_motion)
@@ -91,41 +90,37 @@ class InteractiveMplCanvas(FigureCanvas):
 
     # ---------------- Drag pan -----------------
     def _on_press(self, event):
-        if event.button != 1 or event.inaxes is None:
+        if event.inaxes is None or event.button != MouseButton.LEFT:
             return
         if getattr(self, "toolbar", None) is not None:
             if getattr(self.toolbar, "mode", ""):
                 return
         self._is_panning = True
         self._pan_axes = event.inaxes
-        self._pan_last_xdata = event.xdata
-        self._pan_last_ydata = event.ydata
-        self._pan_last_xlim = self._pan_axes.get_xlim()
-        self._pan_last_ylim = self._pan_axes.get_ylim()
+        self._pan_button = event.button
+        self._pan_key = event.key
+        self._pan_axes.start_pan(event.x, event.y, event.button)
 
     def _on_motion(self, event):
         if not self._is_panning:
             return
-        if event.inaxes is not self._pan_axes:
+        if self._pan_axes is None:
             return
-        if event.xdata is None or event.ydata is None:
+        if event.x is None or event.y is None:
             return
         ax = self._pan_axes
-        dx = event.xdata - self._pan_last_xdata
-        dy = event.ydata - self._pan_last_ydata
-        ax.set_xlim(self._pan_last_xlim[0] - dx, self._pan_last_xlim[1] - dx)
-        ax.set_ylim(self._pan_last_ylim[0] - dy, self._pan_last_ylim[1] - dy)
+        ax.drag_pan(self._pan_button, self._pan_key, event.x, event.y)
         self.draw_idle()
-        self._pan_last_xdata = event.xdata
-        self._pan_last_ydata = event.ydata
-        self._pan_last_xlim = ax.get_xlim()
-        self._pan_last_ylim = ax.get_ylim()
 
     def _on_release(self, event):
-        if event.button != 1:
+        if event.button != MouseButton.LEFT:
             return
+        if self._pan_axes is not None:
+            self._pan_axes.end_pan()
         self._is_panning = False
         self._pan_axes = None
+        self._pan_button = None
+        self._pan_key = None
 
 
 class InteractiveToolbar(NavigationToolbar2QT):

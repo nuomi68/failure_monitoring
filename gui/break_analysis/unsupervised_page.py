@@ -13,23 +13,25 @@ from typing import List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
     QLabel, QComboBox, QSpinBox, QSlider, QFileDialog, QMessageBox, QDoubleSpinBox,
-    QLineEdit, QCheckBox, QFormLayout, QDialog, QDialogButtonBox, QTableWidget,
-    QTableWidgetItem, QSplitter
+    QLineEdit, QCheckBox, QFormLayout, QDialog, QDialogButtonBox, QSplitter,
+    QAbstractItemView, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from sklearn.decomposition import PCA
 from gui.mpl_preview import InteractiveMplCanvas, MatplotlibPreviewDialog
 from backend.ml_interface import ML
 from gui.tools import logger
+from gui.smart_table import SmartTable, SmartTableConfig
 
 SPLITTER_HANDLE_STYLE = """
 QSplitter::handle {
-    background-color: #d1d5db;
-    border: 1px solid #9ca3af;
-    margin: 0 1px;
+    background-color: #000000;
+    border: none;
+    margin: 0;
 }
 """
+SPLITTER_HANDLE_WIDTH = 2
 
 # ============== 画布 ==============
 class UnCanvas(InteractiveMplCanvas):
@@ -78,6 +80,7 @@ class UnCanvas(InteractiveMplCanvas):
         self.ax.legend()
         self.fig.tight_layout()
         self.draw()
+        return XY
 
     def plot_timeseries(self, scores: np.ndarray, tau: float):
         self.ax.clear()
@@ -106,6 +109,29 @@ class SquareCanvasHolder(QWidget):
         y = (h - side) // 2
         self.canvas.setGeometry(x, y, side, side)
         super().resizeEvent(event)
+
+
+class SliderHolder(QWidget):
+    """Keep τ slider width proportional to the container (≈90%)."""
+
+    def __init__(self, slider: QSlider, parent: QWidget | None = None, ratio: float = 0.9):
+        super().__init__(parent)
+        self.slider = slider
+        self.slider.setParent(self)
+        self._ratio = max(0.0, min(1.0, float(ratio)))
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(slider.sizeHint().height() + 10)
+
+    def resizeEvent(self, event):
+        w = event.size().width()
+        h = event.size().height()
+        target_w = max(1, min(w, int(w * self._ratio)))
+        slider_h = min(h, self.slider.sizeHint().height())
+        x = (w - target_w) // 2
+        y = (h - slider_h) // 2
+        self.slider.setGeometry(x, y, target_w, slider_h)
+        super().resizeEvent(event)
+
 
 # ================= 高级参数对话框 =================
 class AdvancedParamsDialog(QDialog):
@@ -166,6 +192,14 @@ class AdvancedParamsDialog(QDialog):
             form.addRow("n_jobs", self.sp_jobs)
 
         elif alg == "iforest":  #
+            # contamination
+            self.sp_contamination = QDoubleSpinBox()
+            self.sp_contamination.setRange(0.0, 1.0)
+            self.sp_contamination.setDecimals(3)
+            self.sp_contamination.setSingleStep(0.001)
+            self.sp_contamination.setValue(float(params.get("contamination", 0.01) or 0.0))
+            form.addRow("contamination", self.sp_contamination)
+
             # max_samples
             self.le_max_samples = QLineEdit(str(params.get("max_samples", "auto")))
             form.addRow("max_samples", self.le_max_samples)
@@ -233,11 +267,10 @@ class AdvancedParamsDialog(QDialog):
             self.sp_dropout.setSingleStep(0.05)
             self.sp_dropout.setValue(float(params.get("dropout", 0.0)))
             form.addRow("dropout", self.sp_dropout)
-
-            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            buttons.accepted.connect(self.accept)
-            buttons.rejected.connect(self.reject)
-            form.addRow(buttons)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
 
     def _toggle_p_row(self, metric: str):
         """只有 minkowski 时显示 p，否则隐藏这一行"""
@@ -257,6 +290,7 @@ class AdvancedParamsDialog(QDialog):
                 self.params["p"] = 2
             self.params["n_jobs"] = self.sp_jobs.value()
         elif self.alg == "iforest":
+            self.params["contamination"] = self.sp_contamination.value()
             self.params["max_samples"] = self.le_max_samples.text().strip()
             self.params["max_features"] = self.sp_max_features.value()
             self.params["bootstrap"] = self.ck_bootstrap.isChecked()
@@ -294,6 +328,10 @@ class UnsupervisedPage(QWidget):
         self.scores: np.ndarray | None = None
         self.X_scaled: np.ndarray | None = None
         self._preview_dialogs: list[MatplotlibPreviewDialog] = []
+        self._scatter_points: dict | None = None
+        self._abn_row_lookup: dict[int, int] = {}
+        self.slider_holder: SliderHolder | None = None
+        self._last_abn_df: pd.DataFrame | None = None
 
         # 每种算法的高级参数
         self.knn_params: Dict[str, Any] = {
@@ -312,6 +350,7 @@ class UnsupervisedPage(QWidget):
             "random_state": 0,
             "warm_start": False,
             "n_jobs": -1,
+            "contamination": 0.01,
         }
         self.ae_params: Dict[str, Any] = {
             "hidden": [64, 32],
@@ -347,17 +386,6 @@ class UnsupervisedPage(QWidget):
         top.addWidget(self.k_label)
         top.addWidget(self.k_spin)
 
-        # 污染率控件，也要引用到成员，方便 hide/show
-        self.contam_label = QLabel("污染率：")
-        self.contam_spin = QDoubleSpinBox()
-        self.contam_spin.setDecimals(3)
-        self.contam_spin.setSingleStep(0.001)
-        self.contam_spin.setRange(0.0, 1.0)
-        self.contam_spin.setValue(0.01)
-        self.contam_spin.setMinimumWidth(100)
-        top.addWidget(self.contam_label)
-        top.addWidget(self.contam_spin)
-
         self.btn_advanced = QPushButton("高级参数")
         self.btn_advanced.clicked.connect(self.open_advanced_dialog)
         top.addWidget(self.btn_advanced)
@@ -370,14 +398,24 @@ class UnsupervisedPage(QWidget):
 
         # 主体：左特征 + 右可视化
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(6)
+        splitter.setHandleWidth(SPLITTER_HANDLE_WIDTH)
         splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
 
+        column_panel = QWidget()
+        column_layout = QVBoxLayout(column_panel)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.setSpacing(6)
+        column_label = QLabel("特征选择")
+        column_layout.addWidget(column_label)
         self.column_list = QListWidget()
-        splitter.addWidget(self.column_list)
+        column_layout.addWidget(self.column_list, 1)
+        splitter.addWidget(column_panel)
+        splitter.setStretchFactor(0, 1)
 
-        right_panel = QWidget()
-        right_v = QVBoxLayout(right_panel)
+        plot_panel = QWidget()
+        plot_panel_layout = QVBoxLayout(plot_panel)
+        plot_panel_layout.setContentsMargins(0, 0, 0, 0)
+        plot_panel_layout.setSpacing(8)
 
         viz_row = QHBoxLayout()
         viz_row.addWidget(QLabel("图形："))
@@ -390,48 +428,58 @@ class UnsupervisedPage(QWidget):
         self.btn_enlarge.clicked.connect(self._open_plot_preview)
         viz_row.addWidget(self.btn_enlarge)
         viz_row.addStretch()
-        right_v.addLayout(viz_row)
+        plot_panel_layout.addLayout(viz_row)
 
         self.canvas = UnCanvas()
         self.canvas.tau_changed.connect(self.on_tau_changed)
+        self.canvas.mpl_connect("button_press_event", self._on_plot_click)
+        self.canvas_holder = SquareCanvasHolder(self.canvas)
 
         plot_container = QWidget()
         plot_layout = QVBoxLayout(plot_container)
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.setSpacing(4)
-        self.canvas_holder = SquareCanvasHolder(self.canvas)
-        plot_layout.addWidget(self.canvas_holder)
+        plot_layout.addWidget(self.canvas_holder, 1)
         if self.canvas.lbl_tau:
             plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
         if self.canvas.slider:
-            plot_layout.addWidget(self.canvas.slider)
+            self.slider_holder = SliderHolder(self.canvas.slider, parent=plot_container)
+            plot_layout.addWidget(self.slider_holder)
+        plot_panel_layout.addWidget(plot_container, 1)
 
-        table_container = QWidget()
-        table_layout = QVBoxLayout(table_container)
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(6)
         table_layout.addWidget(QLabel("异常样本："))
-        self.tbl_abn = QTableWidget(0, 2)
-        self.tbl_abn.setHorizontalHeaderLabels(["样本", "分数"])
-        self.tbl_abn.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_abn = SmartTable(SmartTableConfig(show_toolbar=False, editable=False, min_rows=0))
+        self.tbl_abn.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table_layout.addWidget(self.tbl_abn)
+        self.btn_export = QPushButton("导出结果")
+        self.btn_export.clicked.connect(self._export_results)
+        table_layout.addWidget(self.btn_export)
 
-        viz_splitter = QSplitter(Qt.Orientation.Horizontal)
-        viz_splitter.setHandleWidth(6)
-        viz_splitter.setStyleSheet(SPLITTER_HANDLE_STYLE)
-        viz_splitter.addWidget(plot_container)
-        viz_splitter.addWidget(table_container)
-        viz_splitter.setStretchFactor(0, 3)
-        viz_splitter.setStretchFactor(1, 2)
-        right_v.addWidget(viz_splitter)
-
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 1)
+        splitter.addWidget(plot_panel)
+        splitter.addWidget(table_panel)
         splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(2, 1)
 
         main = QVBoxLayout(self)
         main.addLayout(top)
         main.addWidget(splitter)
+        QTimer.singleShot(0, self._init_default_algorithm)
+
+    def _init_default_algorithm(self):
+        if not hasattr(self, "alg_combo"):
+            return
+        default_idx = self.alg_combo.findData("iforest")
+        self.alg_combo.blockSignals(True)
+        if default_idx >= 0:
+            self.alg_combo.setCurrentIndex(default_idx)
+        else:
+            self.alg_combo.setCurrentIndex(0)
+        self.alg_combo.blockSignals(False)
+        self._on_alg_changed(self.alg_combo.currentIndex())
 
     def set_data(self, df: pd.DataFrame, checked: List[str]):
         self.df = df
@@ -450,26 +498,20 @@ class UnsupervisedPage(QWidget):
     def _on_alg_changed(self, _index: int):
         alg = self.alg_combo.currentData()
         if alg == "knn":
-            # KNN：邻居数 + 显示污染率
+            # KNN：邻居数
             self.k_label.setText("邻居数：")
             self.k_spin.setValue(int(self.knn_params.get("n_neighbors", 5)))
-            self.contam_label.show()
-            self.contam_spin.show()
 
         elif alg == "iforest":
-            # 孤立森林：树数 + 显示污染率
+            # 孤立森林：树数，并根据污染率同步 τ
             self.k_label.setText("树数：")
             self.k_spin.setValue(int(self.if_params.get("n_estimators", 100)))
-            self.contam_spin.setValue(float(self.if_params.get("contamination", 0.01)))
-            self.contam_label.show()
-            self.contam_spin.show()
+            self._apply_iforest_tau_from_contamination()
 
         else:  # autoencoder
-            # 自编码器：Epochs + 隐藏污染率
+            # 自编码器：Epochs
             self.k_label.setText("Epochs：")
             self.k_spin.setValue(int(self.ae_params.get("epochs", 50)))
-            self.contam_label.hide()
-            self.contam_spin.hide()
         # [LOG]
         logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
     # ---------------- 打开高级参数对话框 ----------------
@@ -484,8 +526,9 @@ class UnsupervisedPage(QWidget):
         )
         dlg = AdvancedParamsDialog(self, alg, params)
         if dlg.exec():
-            # 写回已经在对话框里做了；如果需要可以在此处刷新
-            pass
+            if alg == "iforest":
+                # 污染率在高级参数中调整后，立即同步 τ 默认值
+                self._apply_iforest_tau_from_contamination()
 
     def train_model(self):
         if self.df is None:
@@ -509,7 +552,6 @@ class UnsupervisedPage(QWidget):
             params = self.ae_params.copy()
         else:
             self.if_params["n_estimators"] = self.k_spin.value()
-            self.if_params["contamination"] = self.contam_spin.value()
             params = self.if_params.copy()
             # 解析 max_samples
             max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(X))
@@ -532,8 +574,11 @@ class UnsupervisedPage(QWidget):
         # [LOG] 打分完成
         self._log_scores_ready()
         tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
-        if self.canvas.slider:
-            self.canvas.slider.setValue(int(tau * 1000))
+        self._set_canvas_tau(tau)
+        if alg == "iforest":
+            tau_from_contam = self._apply_iforest_tau_from_contamination(params.get("contamination"))
+            if tau_from_contam is not None:
+                tau = tau_from_contam
         logger.info("启用阈值：τ:%.3f", tau)  # [LOG]
         self.refresh_plot()
 
@@ -563,38 +608,195 @@ class UnsupervisedPage(QWidget):
             )
             self.canvas.draw()
 
+    def _set_canvas_tau(self, tau: float) -> None:
+        """Update slider to the given τ (0~1) so downstream views refresh."""
+        try:
+            tau = float(tau)
+        except Exception:
+            return
+        tau = max(0.0, min(0.999, tau))
+        slider = getattr(self.canvas, "slider", None)
+        slider_value = int(round(tau * 1000))
+        slider_value = max(0, min(999, slider_value))
+        if slider is None:
+            self.on_tau_changed(slider_value / 1000.0)
+            return
+        if slider.value() == slider_value:
+            self.on_tau_changed(slider_value / 1000.0)
+        else:
+            slider.setValue(slider_value)
+
+    def _apply_iforest_tau_from_contamination(self, contamination: float | None = None) -> float | None:
+        """Derive τ = 1 - contamination and push it to the slider."""
+        if contamination is None:
+            contamination = self.if_params.get("contamination")
+        try:
+            contamination = float(contamination)
+        except Exception:
+            return None
+        contamination = max(0.0, min(1.0, contamination))
+        tau = max(0.0, min(0.999, 1.0 - contamination))
+        self._set_canvas_tau(tau)
+        return tau
+
     def _render_plot(self, canvas: UnCanvas, tau: float) -> bool:
         mode = self.viz_combo.currentText()
         if mode == "分数直方图":
             canvas.plot_hist(self.scores, tau)
+            self._scatter_points = None
             return True
         if mode == "PCA 散点":
             if self.X_scaled is None:
                 return False
-            canvas.plot_pca(self.X_scaled, self.scores, tau)
+            XY = canvas.plot_pca(self.X_scaled, self.scores, tau)
+            if XY is not None:
+                self._register_scatter_points("pca", XY[:, 0], XY[:, 1])
+            else:
+                self._scatter_points = None
             return True
         if mode == "时序折线":
             canvas.plot_timeseries(self.scores, tau)
+            self._scatter_points = None
             return True
         canvas.plot_hist(self.scores, tau)
+        self._scatter_points = None
         return True
 
     def _update_abn_table(self, tau: float):
-        if self.scores is None:
+        self._abn_row_lookup = {}
+        if self.scores is None or self.df is None:
+            self._clear_abn_table()
             return
         mask = self.scores >= tau
         idxs = np.where(mask)[0]
         # 按分数从高到低排序
         order = np.argsort(self.scores[idxs])[::-1]
         idxs = idxs[order]
-        self.tbl_abn.setRowCount(len(idxs))
-        for row, idx in enumerate(idxs):
-            if self.df is not None and len(self.df.index) > int(idx):
-                name = str(self.df.index[int(idx)])
-            else:
-                name = str(int(idx))
-            self.tbl_abn.setItem(row, 0, QTableWidgetItem(name))
-            self.tbl_abn.setItem(row, 1, QTableWidgetItem(f"{self.scores[idx]:.3f}"))
+        self._abn_row_lookup = {int(idx): row for row, idx in enumerate(idxs)}
+        if len(idxs) == 0:
+            self._clear_abn_table()
+            return
+        result = self.df.iloc[idxs, :].copy()
+        result["分数"] = self.scores[idxs]
+        result = self._with_sample_name_column(result, idxs)
+        self._last_abn_df = result.copy()
+        with self.tbl_abn.no_record():
+            self.tbl_abn.set_dataframe(result, editable=False, record_state=False)
+
+    def _clear_abn_table(self):
+        headers = [self._sample_name_header()] + list(self.df.columns if self.df is not None else []) + ["分数"]
+        df_empty = pd.DataFrame(columns=headers)
+        self._last_abn_df = df_empty.copy()
+        with self.tbl_abn.no_record():
+            self.tbl_abn.set_dataframe(df_empty, editable=False, record_state=False)
+
+    def _export_results(self) -> None:
+        if self.df is None or self.scores is None:
+            QMessageBox.warning(self, "提示", "请先完成训练并生成结果。")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "导出结果", "", "Excel 文件 (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        test_df = (
+            self._last_abn_df.copy()
+            if isinstance(self._last_abn_df, pd.DataFrame)
+            else pd.DataFrame()
+        )
+        train_df = self.df.copy()
+        train_df["分数"] = self.scores
+        tau = float(self.meta.get("tau", 0.5))
+        train_df["是否异常"] = np.where(self.scores >= tau, "异常", "正常")
+        try:
+            with pd.ExcelWriter(path) as writer:
+                test_df.to_excel(writer, sheet_name="异常样本", index=False)
+                train_df.to_excel(writer, sheet_name="正常样本", index=False)
+            QMessageBox.information(self, "成功", f"已导出到 {path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "导出失败", f"写入文件失败：{exc}")
+
+    def _sample_name_column(self) -> str | None:
+        if self.df is not None:
+            name = self.df.index.name
+            if name and name in self.df.columns:
+                return str(name)
+        return None
+
+    def _sample_name_header(self) -> str:
+        col = self._sample_name_column()
+        return col if col else "样本"
+
+    def _sample_names_for_indices(self, idxs: np.ndarray) -> list[str]:
+        if self.df is None or len(idxs) == 0:
+            return []
+        try:
+            names = self.df.index.take(idxs)
+        except Exception:
+            names = idxs
+        return [str(name) for name in names]
+
+    def _with_sample_name_column(self, df: pd.DataFrame, idxs: np.ndarray) -> pd.DataFrame:
+        df = df.copy()
+        header = self._sample_name_header()
+        names = self._sample_names_for_indices(idxs)
+        if len(df) != len(names):
+            return df
+        if header in df.columns:
+            df.loc[:, header] = names
+            cols = [header] + [c for c in df.columns if c != header]
+            df = df[cols]
+        else:
+            df.insert(0, header, names)
+        return df
+
+    def _register_scatter_points(self, mode: str, xs: np.ndarray, ys: np.ndarray) -> None:
+        try:
+            xs = np.asarray(xs, dtype=float).ravel()
+            ys = np.asarray(ys, dtype=float).ravel()
+        except Exception:
+            self._scatter_points = None
+            return
+        if xs.size == 0 or ys.size == 0 or xs.size != ys.size:
+            self._scatter_points = None
+            return
+        coords = np.column_stack([xs, ys])
+        rows = np.arange(xs.size)
+        self._scatter_points = {"mode": mode, "coords": coords, "rows": rows}
+
+    def _focus_abn_row(self, sample_idx: int) -> None:
+        if not hasattr(self, "tbl_abn"):
+            return
+        row = self._abn_row_lookup.get(int(sample_idx))
+        if row is None:
+            return
+        table = self.tbl_abn.table
+        if row < 0 or row >= table.rowCount():
+            return
+        table.selectRow(row)
+        item = table.item(row, 0)
+        if item is not None:
+            table.scrollToItem(item)
+
+    def _on_plot_click(self, event):
+        if (
+            not self._scatter_points
+            or self._scatter_points.get("mode") != "pca"
+            or event.inaxes is not self.canvas.ax
+            or event.button != 1
+            or not getattr(event, "dblclick", False)
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
+        coords = self._scatter_points.get("coords")
+        rows = self._scatter_points.get("rows")
+        if coords is None or rows is None or len(coords) == 0:
+            return
+        pos = np.array([event.xdata, event.ydata], dtype=float)
+        dists = np.linalg.norm(coords - pos, axis=1)
+        idx = int(rows[int(np.argmin(dists))])
+        self._focus_abn_row(idx)
 
     def _open_plot_preview(self):
         if self.scores is None:

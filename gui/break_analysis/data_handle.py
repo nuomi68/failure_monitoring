@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox,
     QLabel, QSizePolicy, QSpacerItem, QMessageBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from .calculator_widget import CalculatorWidget
 from .feature_preview import FeaturePreviewWidget, HeatmapCanvas
@@ -25,6 +25,7 @@ QSplitter::handle {
 """
 
 class DataHandlePage(QWidget):
+    data_status_changed = pyqtSignal(bool)
     """Data preprocessing interface embedding the ML window.
     - 记录计算器公式 self.calc_recipes
     - 每当新增配方时，调用 ML.set_calc_recipes(...) 以同步到后端
@@ -185,6 +186,7 @@ class DataHandlePage(QWidget):
         layout.addWidget(self.data_page)
         #debug
         #self.load_dev_file()
+        self.data_status_changed.emit(False)
 
     # --------------------- 公式处理 ---------------------
     def _on_recipe_added(self, name: str, expr: str):
@@ -237,6 +239,7 @@ class DataHandlePage(QWidget):
         self.df = pd.DataFrame()
         self.btn_export.setEnabled(False)
         self.top_stack.setCurrentIndex(0)      # 恢复到示例页
+        self.data_status_changed.emit(False)
 
     def export_table(self):
         if self.df is None or self.df.empty:
@@ -341,6 +344,7 @@ class DataHandlePage(QWidget):
         self.preview.set_selected_columns(selected)
         self._on_target_column_changed()
         self.btn_export.setEnabled(True)
+        self.data_status_changed.emit(True)
 
     def toggle_target(self, state):
         self.cmb.setEnabled(state == Qt.CheckState.Checked.value)
@@ -386,6 +390,9 @@ class DataHandlePage(QWidget):
     def target_column(self) -> str | None:
         """返回选择的标签列名称，若未启用则为 ``None``"""
         return self.cmb.currentText() if self.has_target() and self.cmb.currentText() else None
+
+    def has_loaded_data(self) -> bool:
+        return self.df is not None and not self.df.empty
 
     def _update_heatmap(self):
         """根据已选特征即时重绘热力图"""
