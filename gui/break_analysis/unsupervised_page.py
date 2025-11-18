@@ -40,17 +40,54 @@ class UnCanvas(InteractiveMplCanvas):
     def __init__(self, parent=None, *, show_controls: bool = True):
         super().__init__(parent)
         self.slider: QSlider | None = None
-        self.lbl_tau: QLabel | None = None
+        self.tau_widget: QWidget | None = None
+        self.tau_spin: QDoubleSpinBox | None = None
         if show_controls:
             self.slider = QSlider(Qt.Orientation.Horizontal, parent)
-            self.slider.setRange(0, 999)
-            self.slider.valueChanged.connect(self._emit)
-            self.lbl_tau = QLabel("τ = 0.950")
+            self.slider.setRange(1, 999)
+            self.slider.setValue(950)
+            self.slider.valueChanged.connect(self._on_slider_change)
 
-    def _emit(self, v: int):
-        tau = v / 1000.0
-        if self.lbl_tau:
-            self.lbl_tau.setText(f"τ = {tau:.3f}")
+            self.tau_widget = QWidget(parent)
+            layout = QHBoxLayout(self.tau_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            label = QLabel("阈值τ： ", self.tau_widget)
+            layout.addWidget(label)
+
+            self.tau_spin = QDoubleSpinBox(self.tau_widget)
+            self.tau_spin.setDecimals(3)
+            self.tau_spin.setRange(0.001, 0.999)
+            self.tau_spin.setSingleStep(0.001)
+            self.tau_spin.setKeyboardTracking(False)
+            self.tau_spin.setValue(0.950)
+            self.tau_spin.setMinimumWidth(120)
+            self.tau_spin.valueChanged.connect(self._on_tau_spin_change)
+            layout.addWidget(self.tau_spin)
+
+    def _set_tau_spin_value(self, tau: float) -> None:
+        if not self.tau_spin:
+            return
+        if abs(self.tau_spin.value() - tau) < 1e-6:
+            return
+        self.tau_spin.blockSignals(True)
+        self.tau_spin.setValue(tau)
+        self.tau_spin.blockSignals(False)
+
+    def _on_slider_change(self, value: int):
+        tau = max(0.001, min(0.999, value / 1000.0))
+        self._set_tau_spin_value(tau)
+        self.tau_changed.emit(tau)
+
+    def _on_tau_spin_change(self, tau: float):
+        tau = max(0.001, min(0.999, float(tau)))
+        if self.slider:
+            slider_value = int(round(tau * 1000))
+            slider_value = max(self.slider.minimum(), min(self.slider.maximum(), slider_value))
+            if slider_value != self.slider.value():
+                self.slider.blockSignals(True)
+                self.slider.setValue(slider_value)
+                self.slider.blockSignals(False)
         self.tau_changed.emit(tau)
 
     def plot_hist(self, scores: np.ndarray, tau: float):
@@ -440,8 +477,8 @@ class UnsupervisedPage(QWidget):
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.setSpacing(4)
         plot_layout.addWidget(self.canvas_holder, 1)
-        if self.canvas.lbl_tau:
-            plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
+        if self.canvas.tau_widget:
+            plot_layout.addWidget(self.canvas.tau_widget, alignment=Qt.AlignmentFlag.AlignCenter)
         if self.canvas.slider:
             self.slider_holder = SliderHolder(self.canvas.slider, parent=plot_container)
             plot_layout.addWidget(self.slider_holder)
@@ -457,7 +494,11 @@ class UnsupervisedPage(QWidget):
         table_layout.addWidget(self.tbl_abn)
         self.btn_export = QPushButton("导出结果")
         self.btn_export.clicked.connect(self._export_results)
-        table_layout.addWidget(self.btn_export)
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 0, 0, 0)
+        export_row.addStretch()
+        export_row.addWidget(self.btn_export)
+        table_layout.addLayout(export_row)
 
         splitter.addWidget(plot_panel)
         splitter.addWidget(table_panel)
@@ -614,10 +655,10 @@ class UnsupervisedPage(QWidget):
             tau = float(tau)
         except Exception:
             return
-        tau = max(0.0, min(0.999, tau))
+        tau = max(0.001, min(0.999, tau))
         slider = getattr(self.canvas, "slider", None)
         slider_value = int(round(tau * 1000))
-        slider_value = max(0, min(999, slider_value))
+        slider_value = max(1, min(999, slider_value))
         if slider is None:
             self.on_tau_changed(slider_value / 1000.0)
             return
@@ -635,7 +676,7 @@ class UnsupervisedPage(QWidget):
         except Exception:
             return None
         contamination = max(0.0, min(1.0, contamination))
-        tau = max(0.0, min(0.999, 1.0 - contamination))
+        tau = max(0.001, min(0.999, 1.0 - contamination))
         self._set_canvas_tau(tau)
         return tau
 

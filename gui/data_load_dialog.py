@@ -23,6 +23,14 @@ from typing import Optional, Any, Dict, Set
 
 import pandas as pd
 
+
+import warnings
+# 屏蔽时间解析警告
+warnings.filterwarnings(
+    "ignore",
+    message="Could not infer format, so each element will be parsed individually"
+)
+
 from PyQt6.QtCore import (
     Qt,
     QAbstractTableModel,

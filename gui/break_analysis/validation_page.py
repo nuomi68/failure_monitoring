@@ -25,7 +25,7 @@ from gui.tools import show_save_success
 
 class ValidationPage(QWidget):
     """批量样本验证页，改用 :class:`SmartTable` 统一表格组件。
-    - ★ 关键改造：若已保存“计算器公式”，预测时优先构造列字典并让后端自动补齐派生特征
+    - 若已保存“计算器公式”，预测时优先构造列字典并让后端自动补齐派生特征
     """
 
     MIN_ROWS = 5
@@ -110,7 +110,7 @@ class ValidationPage(QWidget):
             return
         df_valid = df_feat.iloc[valid_idx].reset_index(drop=True)
 
-        # ★ 若模型元信息里含有 calc_recipes，则强制使用“列字典”进入后端，便于其自动补齐派生列
+        # 若模型元信息里含有 calc_recipes，则强制使用“列字典”进入后端，便于其自动补齐派生列
         use_table = False
         calc_recipes = None
         try:

@@ -6,18 +6,6 @@ TIME_COL = "TIME"
 
 
 def load_dataset(path: str, time_format: str | None = None):
-    """Load and preprocess the dataset used by all models.
-
-    Parameters
-    ----------
-    path:
-        Path to the CSV/Excel file.
-    time_format:
-        Optional ``strftime`` format string that describes how the ``TIME``
-        column is formatted in ``path``. If omitted, pandas will attempt to
-        infer the format automatically.
-    """
-
     if path.lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(path)
     else:
@@ -43,7 +31,6 @@ def load_dataset(path: str, time_format: str | None = None):
 
 
 def build_windows(data: np.ndarray, look_back: int):
-    """Create sliding windows for sequence models."""
     X, y = [], []
     for i in range(len(data) - look_back):
         X.append(data[i : i + look_back])
@@ -52,7 +39,7 @@ def build_windows(data: np.ndarray, look_back: int):
 
 
 def compute_relative_errors(compare_df: pd.DataFrame, max_thresh: float = 1000.0):
-    """Compute relative errors for predicted values, excluding large outliers from the mean.
+    """
 
     Parameters
     ----------

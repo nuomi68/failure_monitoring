@@ -39,20 +39,57 @@ class PlotCanvas(InteractiveMplCanvas):
     def __init__(self, parent=None, show_controls: bool = True):
         super().__init__(parent)
         self.cbar = None
-        self.slider = None
-        self.lbl_tau = None
+        self.slider: QSlider | None = None
+        self.tau_widget: QWidget | None = None
+        self.tau_spin: QDoubleSpinBox | None = None
         if show_controls:
             self.slider = QSlider(Qt.Orientation.Horizontal, parent)
-            self.slider.setRange(0, 999)
+            self.slider.setRange(1, 999)
             self.slider.setValue(500)
-            self.slider.valueChanged.connect(self._emit_threshold)
-            self.lbl_tau = QLabel("阈值 τ = 0.500")
+            self.slider.valueChanged.connect(self._on_slider_value_changed)
+
+            self.tau_widget = QWidget(parent)
+            layout = QHBoxLayout(self.tau_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            label = QLabel("阈值τ： ", self.tau_widget)
+            layout.addWidget(label)
+
+            self.tau_spin = QDoubleSpinBox(self.tau_widget)
+            self.tau_spin.setDecimals(3)
+            self.tau_spin.setRange(0.001, 0.999)
+            self.tau_spin.setSingleStep(0.001)
+            self.tau_spin.setKeyboardTracking(False)
+            self.tau_spin.setValue(0.500)
+            self.tau_spin.setMinimumWidth(120)
+            self.tau_spin.valueChanged.connect(self._on_tau_spin_changed)
+            layout.addWidget(self.tau_spin)
         else:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-    def _emit_threshold(self, v: int):
-        tau = v / 1000.0
-        if self.lbl_tau:
-            self.lbl_tau.setText(f"阈值 τ = {tau:.3f}")
+
+    def _set_tau_spin_value(self, tau: float) -> None:
+        if not self.tau_spin:
+            return
+        if abs(self.tau_spin.value() - tau) < 1e-6:
+            return
+        self.tau_spin.blockSignals(True)
+        self.tau_spin.setValue(tau)
+        self.tau_spin.blockSignals(False)
+
+    def _on_slider_value_changed(self, value: int):
+        tau = max(0.001, min(0.999, value / 1000.0))
+        self._set_tau_spin_value(tau)
+        self.threshold_changed.emit(tau)
+
+    def _on_tau_spin_changed(self, tau: float):
+        tau = max(0.001, min(0.999, float(tau)))
+        if self.slider:
+            slider_value = int(round(tau * 1000))
+            slider_value = max(self.slider.minimum(), min(self.slider.maximum(), slider_value))
+            if self.slider.value() != slider_value:
+                self.slider.blockSignals(True)
+                self.slider.setValue(slider_value)
+                self.slider.blockSignals(False)
         self.threshold_changed.emit(tau)
     def _clear_cbar(self):
         if self.cbar:
@@ -268,6 +305,14 @@ class AdvParamsDlg(QDialog):
         self.setWindowTitle("高级参数")
         form = QFormLayout(self)
 
+        def _dbl(min_v, max_v, step, value, decimals=3):
+            sp = QDoubleSpinBox()
+            sp.setDecimals(decimals)
+            sp.setRange(min_v, max_v)
+            sp.setSingleStep(step)
+            sp.setValue(value)
+            return sp
+
         if "knn" in code:
             self.cb_w = QComboBox()
             self.cb_w.addItems(["uniform", "distance"])
@@ -344,15 +389,7 @@ class AdvParamsDlg(QDialog):
             self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
             form.addRow("n_jobs", self.sp_jobs)
 
-        else:
-            def _dbl(min_v, max_v, step, value, decimals=3):
-                sp = QDoubleSpinBox()
-                sp.setDecimals(decimals)
-                sp.setRange(min_v, max_v)
-                sp.setSingleStep(step)
-                sp.setValue(value)
-                return sp
-
+        elif "xgb" in code:
             self.sp_depth = QSpinBox()
             self.sp_depth.setRange(1, 64)
             self.sp_depth.setValue(int(params.get("max_depth", 6)))
@@ -405,6 +442,64 @@ class AdvParamsDlg(QDialog):
             idx = self.cb_objective.findData(cur)
             self.cb_objective.setCurrentIndex(idx if idx >= 0 else 0)
             form.addRow("objective", self.cb_objective)
+        elif "lgbm" in code:
+            self.sp_depth = QSpinBox()
+            self.sp_depth.setRange(-1, 64)
+            self.sp_depth.setValue(int(params.get("max_depth", -1)))
+            form.addRow("max_depth(-1=不限)", self.sp_depth)
+
+            self.sp_leaves = QSpinBox()
+            self.sp_leaves.setRange(2, 2048)
+            self.sp_leaves.setValue(int(params.get("num_leaves", 5)))
+            form.addRow("num_leaves", self.sp_leaves)
+
+            self.sp_lr = _dbl(0.001, 1.0, 0.01, float(params.get("learning_rate", 0.1)))
+            form.addRow("learning_rate", self.sp_lr)
+
+            self.sp_subsample = _dbl(0.1, 1.0, 0.05, float(params.get("subsample", 0.8)), decimals=2)
+            form.addRow("subsample", self.sp_subsample)
+
+            self.sp_colsample = _dbl(0.1, 1.0, 0.05, float(params.get("colsample_bytree", 0.8)), decimals=2)
+            form.addRow("colsample_bytree", self.sp_colsample)
+
+            self.sp_min_child_samples = QSpinBox()
+            self.sp_min_child_samples.setRange(1, 1000)
+            self.sp_min_child_samples.setValue(int(params.get("min_child_samples", 5)))
+            form.addRow("min_child_samples", self.sp_min_child_samples)
+
+            self.sp_reg_lambda = _dbl(0.0, 20.0, 0.1, float(params.get("reg_lambda", 1.0)), decimals=2)
+            form.addRow("reg_lambda", self.sp_reg_lambda)
+
+            self.sp_reg_alpha = _dbl(0.0, 20.0, 0.1, float(params.get("reg_alpha", 0.0)), decimals=2)
+            form.addRow("reg_alpha", self.sp_reg_alpha)
+
+            self.sp_jobs = QSpinBox()
+            self.sp_jobs.setRange(-1, 64)
+            self.sp_jobs.setValue(int(params.get("n_jobs", -1)))
+            form.addRow("n_jobs", self.sp_jobs)
+
+            self.cb_objective = QComboBox()
+            if self.is_clf:
+                options = [
+                    ("binary", "binary"),
+                    ("multiclass", "multiclass"),
+                    ("multiclassova", "multiclassova"),
+                ]
+                self.sp_spw = _dbl(0.0, 1000.0, 0.5, float(params.get("scale_pos_weight", 1.0)), decimals=2)
+                form.addRow("scale_pos_weight", self.sp_spw)
+            else:
+                options = [
+                    ("regression", "regression"),
+                    ("huber", "huber"),
+                    ("poisson", "poisson"),
+                    ("quantile", "quantile"),
+                ]
+            for text, data in options:
+                self.cb_objective.addItem(text, data)
+            cur = params.get("objective", options[0][1])
+            idx = self.cb_objective.findData(cur)
+            self.cb_objective.setCurrentIndex(idx if idx >= 0 else 0)
+            form.addRow("objective", self.cb_objective)
 
         self.sp_test_size = QDoubleSpinBox()
         self.sp_test_size.setRange(0.05,0.95)
@@ -443,13 +538,28 @@ class AdvParamsDlg(QDialog):
             self.params["max_features"] = self._parse_max_features(self.le_mf.text().strip())
             self.params["bootstrap"] = self.ck_boot.isChecked()
             self.params["n_jobs"] = self.sp_jobs.value()
-        else:
+        elif "xgb" in self.code:
             self.params["max_depth"] = self.sp_depth.value()
             self.params["learning_rate"] = self.sp_lr.value()
             self.params["subsample"] = self.sp_subsample.value()
             self.params["colsample_bytree"] = self.sp_colsample.value()
             self.params["min_child_weight"] = self.sp_mcw.value()
             self.params["gamma"] = self.sp_gamma.value()
+            self.params["reg_lambda"] = self.sp_reg_lambda.value()
+            self.params["reg_alpha"] = self.sp_reg_alpha.value()
+            self.params["n_jobs"] = self.sp_jobs.value()
+            self.params["objective"] = self.cb_objective.currentData()
+            if hasattr(self, "sp_spw"):
+                self.params["scale_pos_weight"] = self.sp_spw.value()
+            else:
+                self.params.pop("scale_pos_weight", None)
+        elif "lgbm" in self.code:
+            self.params["max_depth"] = self.sp_depth.value()
+            self.params["num_leaves"] = self.sp_leaves.value()
+            self.params["learning_rate"] = self.sp_lr.value()
+            self.params["subsample"] = self.sp_subsample.value()
+            self.params["colsample_bytree"] = self.sp_colsample.value()
+            self.params["min_child_samples"] = self.sp_min_child_samples.value()
             self.params["reg_lambda"] = self.sp_reg_lambda.value()
             self.params["reg_alpha"] = self.sp_reg_alpha.value()
             self.params["n_jobs"] = self.sp_jobs.value()
@@ -556,6 +666,37 @@ class SupervisedPage(QWidget):
             "test_size": 0.2,
             "random_state": 0,
         }
+        self.lgbm_params_clf: Dict[str, Any] = {
+            "n_estimators": 200,
+            "learning_rate": 0.1,
+            "num_leaves": 5,
+            "max_depth": -1,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_samples": 5,
+            "reg_lambda": 1.0,
+            "reg_alpha": 0.0,
+            "scale_pos_weight": 1.0,
+            "objective": "binary",
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
+        self.lgbm_params_reg: Dict[str, Any] = {
+            "n_estimators": 200,
+            "learning_rate": 0.1,
+            "num_leaves": 5,
+            "max_depth": -1,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_samples": 5,
+            "reg_lambda": 1.0,
+            "reg_alpha": 0.0,
+            "objective": "regression",
+            "n_jobs": -1,
+            "test_size": 0.2,
+            "random_state": 0,
+        }
 
         top = QHBoxLayout()
         top.addWidget(QLabel("算法："))
@@ -634,15 +775,15 @@ class SupervisedPage(QWidget):
         plot_layout.setSpacing(6)
         self.canvas_holder = SquareCanvasHolder(self.canvas)
         plot_layout.addWidget(self.canvas_holder, 1)
-        if self.canvas.lbl_tau:
-            plot_layout.addWidget(self.canvas.lbl_tau, alignment=Qt.AlignmentFlag.AlignCenter)
+        if self.canvas.tau_widget:
+            plot_layout.addWidget(self.canvas.tau_widget, alignment=Qt.AlignmentFlag.AlignCenter)
         if self.canvas.slider:
             self.slider_holder = SliderHolder(self.canvas.slider, parent=plot_container)
             plot_layout.addWidget(self.slider_holder)
         # 默认隐藏阈值控件
         self._set_tau_slider_visible(False)
-        if self.canvas.lbl_tau:
-            self.canvas.lbl_tau.setVisible(False)
+        if self.canvas.tau_widget:
+            self.canvas.tau_widget.setVisible(False)
         plot_layout.addWidget(self.metrics_label)
         plot_panel_layout.addWidget(plot_container, 1)
 
@@ -656,7 +797,11 @@ class SupervisedPage(QWidget):
         table_layout.addWidget(self.tbl_test)
         self.btn_export = QPushButton("导出结果")
         self.btn_export.clicked.connect(self._export_results)
-        table_layout.addWidget(self.btn_export)
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 0, 0, 0)
+        export_row.addStretch()
+        export_row.addWidget(self.btn_export)
+        table_layout.addLayout(export_row)
 
         splitter.addWidget(plot_panel)
         splitter.addWidget(table_panel)
@@ -676,6 +821,7 @@ class SupervisedPage(QWidget):
             self.alg_combo.addItem("KNN 分类","knn_clf")
             self.alg_combo.addItem("随机森林分类","rf_clf")
             self.alg_combo.addItem("XGBoost 分类","xgb_clf")
+            self.alg_combo.addItem("LightGBM 分类","lgbm_clf")
             self.rf_params["criterion"] = "gini"
             idx = self.alg_combo.findData("rf_clf")
             if idx >= 0:
@@ -684,6 +830,7 @@ class SupervisedPage(QWidget):
             self.alg_combo.addItem("KNN 回归","knn_reg")
             self.alg_combo.addItem("随机森林回归","rf_reg")
             self.alg_combo.addItem("XGBoost 回归","xgb_reg")
+            self.alg_combo.addItem("LightGBM 回归","lgbm_reg")
             self.rf_params["criterion"] = "squared_error"
             idx = self.alg_combo.findData("rf_reg")
             if idx >= 0:
@@ -709,6 +856,8 @@ class SupervisedPage(QWidget):
             return self.rf_params
         if "xgb" in code:
             return self.xgb_params_clf if "clf" in code else self.xgb_params_reg
+        if "lgbm" in code:
+            return self.lgbm_params_clf if "clf" in code else self.lgbm_params_reg
         return {}
 
     def open_adv_dialog(self):
@@ -819,15 +968,19 @@ class SupervisedPage(QWidget):
         tau_meta = self.meta.get("tau")
 
         if self.binary and tau_meta is not None and self.canvas.slider:
-            tau = float(tau_meta)
-            self.canvas.slider.setValue(int(tau * 1000))
+            try:
+                tau = float(tau_meta)
+            except Exception:
+                tau = 0.5
+            tau = max(0.001, min(0.999, tau))
+            self.canvas.slider.setValue(int(round(tau * 1000)))
             self._update_pred_by_threshold()
             logger.info("启用阈值：二分类，τ::%.3f", float(tau))  # [LOG]
         else:
             #多分类/回归：隐藏阈值相关控件
             self._set_tau_slider_visible(False)
-            if self.canvas.lbl_tau:
-                self.canvas.lbl_tau.setVisible(False)
+            if self.canvas.tau_widget:
+                self.canvas.tau_widget.setVisible(False)
             logger.info("关闭阈值：%s", "回归或多分类")           # [LOG]
 
         self._compute_metrics()
@@ -838,7 +991,11 @@ class SupervisedPage(QWidget):
     def _update_pred_by_threshold(self):
         if not (self.is_clf and self.binary and self.test_scores is not None):
             return
-        tau = self.meta.get("tau",0.5)
+        try:
+            tau = float(self.meta.get("tau", 0.5))
+        except Exception:
+            tau = 0.5
+        tau = max(0.001, min(0.999, tau))
         classes = list(self.meta.get("classes_", []))
         if len(classes) >= 2:
             pos_label = 1 if 1 in classes else classes[1]
@@ -875,8 +1032,8 @@ class SupervisedPage(QWidget):
             logger.info("测试集MAE误差:%.3f   测试集MSE误差:%.3f   测试集R2误差:%.3f", mae, mse, r2)
     def _reset_viz_mode(self):
         self._set_tau_slider_visible(self.is_clf and self.binary)
-        if self.canvas.lbl_tau:
-            self.canvas.lbl_tau.setVisible(self.is_clf and self.binary)
+        if self.canvas.tau_widget:
+            self.canvas.tau_widget.setVisible(self.is_clf and self.binary)
         self.viz_combo.blockSignals(True)
         self.viz_combo.clear()
         self._viz_options = []

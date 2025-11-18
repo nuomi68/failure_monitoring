@@ -170,6 +170,20 @@ def _apply_calc_recipes_to_table(
     return {c: df[c].to_numpy() for c in df.columns}
 
 
+def _ensure_ndarray(X: Any) -> np.ndarray:
+    """把输入统一转化成numpy arrays."""
+    if isinstance(X, np.ndarray):
+        return X
+    if hasattr(X, "to_numpy"):
+        try:
+            arr = X.to_numpy()
+            return np.asarray(arr)
+        except Exception:
+            pass
+        
+    return np.asarray(X)
+
+
 def _fit_encode_X(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, Dict[str, LabelEncoder]]:
     """检测并编码 X 中的非数值列，返回编码后的 X 及每列的编码器。"""
     X_work = np.asarray(X, dtype=object).copy()
@@ -347,6 +361,7 @@ def _train_supervised_impl(
     if y is None:
         raise ValueError("监督学习需要提供 y")
 
+    X = _ensure_ndarray(X)
     # 编码特征
     feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
     X_enc, x_encoders = _fit_encode_X(X, feature_names)
@@ -472,6 +487,7 @@ def _train_unsupervised_impl(
     target_name: Optional[str] = None,
 ) -> Tuple[ModelArtifact, TrainReport]:
     # 特征编码与缩放
+    X = _ensure_ndarray(X)
     feature_names = list(feature_names or [f"X{i}" for i in range(X.shape[1])])
     X_enc, x_encoders = _fit_encode_X(X, feature_names)
     Xs, scaler_obj = _fit_transform_unsupervised(X_enc, scaler_spec=scaler)
@@ -585,7 +601,8 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     mtype = artifact.meta.get("model_type")
     mapping = {"knn_clf": "knn_clf", "rf": "rf_clf", "knn_reg": "knn_reg", "rf_reg": "rf_reg", "knn": "knn",
                "iforest": "iforest", "autoencoder": "autoencoder",
-               "xgb_clf": "xgb_clf", "xgb_reg": "xgb_reg", "xgb": "xgb_clf"}
+               "xgb_clf": "xgb_clf", "xgb_reg": "xgb_reg", "xgb": "xgb_clf",
+               "lgbm_clf": "lgbm_clf", "lgbm_reg": "lgbm_reg", "lgbm": "lgbm_clf"}
     alg = mapping.get(mtype, mtype)
     adapter = get_adapter(alg)
 
@@ -806,7 +823,7 @@ class ML:
             X_table = _apply_calc_recipes_to_table(X, recipes, encoders=enc)
             X_arr = _dict_to_array_for_model(cur, X_table)
         else:
-            X_arr = X
+            X_arr = _ensure_ndarray(X)
         y, sc = _predict_impl(cur, X_arr)
         if cur.label_encoder is not None:
             try:

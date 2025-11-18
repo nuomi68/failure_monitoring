@@ -9,7 +9,8 @@ supervised_core.py
 from __future__ import annotations
 from typing import Any, Optional, Literal, Protocol, runtime_checkable
 import numpy as np
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*X does not have valid feature names.*")
 
 @runtime_checkable
 class AlgoAdapter(Protocol):
@@ -140,22 +141,47 @@ class _RFRegAdapter:
         return "rf_reg"
 
 
+
+
 class _XGBClfAdapter:
     code = "xgb_clf"
     kind: Literal["supervised_clf"] = "supervised_clf"
 
     def build(self, **params):
         try:
+            import xgboost as xgb  # type: ignore
             from xgboost import XGBClassifier  # type: ignore
         except ImportError as exc:  # pragma: no cover - import guard
             raise RuntimeError("缺少 xgboost 依赖，请先安装 `pip install xgboost`.") from exc
 
         cfg = params.copy()
-        cfg.setdefault("use_label_encoder", False)
         cfg.setdefault("eval_metric", "logloss")
         if cfg.get("objective") == "auto":  # xgboost 不认识 auto
             cfg.pop("objective")
-        return XGBClassifier(**cfg)
+
+        def _ver_tuple(version: str) -> tuple[int, ...]:
+            parts: list[int] = []
+            for chunk in version.split('.'):
+                digits = []
+                for ch in chunk:
+                    if ch.isdigit():
+                        digits.append(ch)
+                    else:
+                        break
+                if not digits:
+                    parts.append(0)
+                else:
+                    parts.append(int(''.join(digits)))
+            return tuple(parts)
+
+        if _ver_tuple(xgb.__version__) >= (1, 7, 0):
+            cfg.pop("use_label_encoder", None)
+        else:
+            cfg.setdefault("use_label_encoder", False)
+
+        model = XGBClassifier(**cfg)
+        model._ml_scale_pos_weight = cfg.get("scale_pos_weight")
+        return model
 
     def fit(self, model, X, y=None):
         if y is None:
@@ -173,13 +199,27 @@ class _XGBClfAdapter:
         n_classes = len(np.unique(y_arr))
         params = model.get_params()
         objective = params.get("objective")
+        multi_objectives = {"multi:softprob", "multi:softmax"}
         if n_classes > 2:
-            if objective not in {"multi:softprob", "multi:softmax"}:
+            if objective not in multi_objectives:
                 model.set_params(objective="multi:softprob")
             model.set_params(num_class=n_classes)
         else:
             if objective is None:
                 model.set_params(objective="binary:logistic")
+            model.set_params(num_class=None)
+
+        params = model.get_params()
+        objective = params.get("objective")
+        is_multi_objective = objective in multi_objectives
+        if not hasattr(model, "_ml_scale_pos_weight"):
+            model._ml_scale_pos_weight = params.get("scale_pos_weight")
+        stored_spw = getattr(model, "_ml_scale_pos_weight", None)
+        if is_multi_objective:
+            if params.get("scale_pos_weight") is not None:
+                model.set_params(scale_pos_weight=None)
+        elif stored_spw is not None and params.get("scale_pos_weight") != stored_spw:
+            model.set_params(scale_pos_weight=stored_spw)
         model.fit(X, y_arr)
         return model
 
@@ -209,6 +249,108 @@ class _XGBClfAdapter:
     def meta_model_type(self) -> str:
         return "xgb_clf"
 
+class _LGBMClfAdapter:
+    code = "lgbm_clf"
+    kind: Literal["supervised_clf"] = "supervised_clf"
+
+    def build(self, **params):
+        try:
+            from lightgbm import LGBMClassifier  # type: ignore
+
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise RuntimeError("lightgbm 库不存在 `pip install lightgbm`.") from exc
+
+        cfg = params.copy()
+        if cfg.get("objective") == "auto":
+            cfg.pop("objective")
+
+        model = LGBMClassifier(**cfg)
+        model._ml_scale_pos_weight = cfg.get("scale_pos_weight")
+        return model
+
+    def fit(self, model, X, y=None):
+        if y is None:
+            raise ValueError("LightGBM 需要 y")
+        y_arr = np.asarray(y).ravel()
+        n_classes = len(np.unique(y_arr))
+        params = model.get_params()
+        objective = params.get("objective")
+        multi_objectives = {"multiclass", "multiclassova"}
+        if n_classes > 2:
+            if objective not in multi_objectives:
+                model.set_params(objective="multiclass")
+            model.set_params(num_class=n_classes)
+        else:
+            if objective in (None, "auto", "multiclass", "multiclassova"):
+                model.set_params(objective="binary")
+            model.set_params(num_class=None)
+
+        params = model.get_params()
+        objective = params.get("objective")
+        is_multi_objective = objective in multi_objectives
+        if not hasattr(model, "_ml_scale_pos_weight"):
+            model._ml_scale_pos_weight = params.get("scale_pos_weight")
+        stored_spw = getattr(model, "_ml_scale_pos_weight", None)
+        if is_multi_objective:
+            if params.get("scale_pos_weight") is not None:
+                model.set_params(scale_pos_weight=None)
+        elif stored_spw is not None and params.get("scale_pos_weight") != stored_spw:
+            model.set_params(scale_pos_weight=stored_spw)
+        model.fit(X, y_arr)
+        return model
+
+    def predict(self, model, X):
+        return model.predict(X)
+
+    def scores(self, model, X, *, classes_: Optional[np.ndarray] = None):
+        if not hasattr(model, "predict_proba"):
+            return None
+        proba = model.predict_proba(X)
+        cls = list(getattr(model, "classes_", []))
+        if not cls:
+            return None
+        pos_cls = 1 if 1 in cls else (cls[1] if len(cls) > 1 else cls[0])
+        pos_idx = cls.index(pos_cls)
+        return proba[:, pos_idx]
+
+    def default_tau(self, scores, *, classes_: Optional[np.ndarray] = None):
+        return 0.5
+
+    def meta_model_type(self) -> str:
+        return "lgbm_clf"
+
+
+class _LGBMRegAdapter:
+    code = "lgbm_reg"
+    kind: Literal["supervised_reg"] = "supervised_reg"
+
+    def build(self, **params):
+        try:
+            from lightgbm import LGBMRegressor  # type: ignore
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise RuntimeError("lightgbm 不存在 需要 `pip install lightgbm`.") from exc
+        cfg = params.copy()
+        if cfg.get("objective") == "auto":
+            cfg.pop("objective")
+        return LGBMRegressor(**cfg)
+
+    def fit(self, model, X, y=None):
+        if y is None:
+            raise ValueError("LightGBM 需要 y")
+        model.fit(X, y)
+        return model
+
+    def predict(self, model, X):
+        return model.predict(X)
+
+    def scores(self, model, X, *, classes_: Optional[np.ndarray] = None):
+        return model.predict(X)
+
+    def default_tau(self, scores, *, classes_: Optional[np.ndarray] = None):
+        return None
+
+    def meta_model_type(self) -> str:
+        return "lgbm_reg"
 
 class _XGBRegAdapter:
     code = "xgb_reg"
@@ -249,4 +391,6 @@ ADAPTERS: list[AlgoAdapter] = [
     _RFRegAdapter(),
     _XGBClfAdapter(),
     _XGBRegAdapter(),
+    _LGBMClfAdapter(),
+    _LGBMRegAdapter(),
 ]
