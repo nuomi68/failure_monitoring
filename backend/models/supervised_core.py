@@ -113,8 +113,7 @@ class _RFClfAdapter:
         return 0.5
 
     def meta_model_type(self) -> str:
-        # 兼容 ValidationPage：保持 "rf"
-        return "rf"
+        return "rf_clf"
 
 
 class _RFRegAdapter:

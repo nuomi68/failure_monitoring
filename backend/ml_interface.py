@@ -599,7 +599,7 @@ def _predict_impl(artifact: ModelArtifact, X: np.ndarray):
     X_enc = _encode_X(X, feats, enc)
     Xs = artifact.scaler.transform(X_enc) if artifact.scaler is not None else X_enc
     mtype = artifact.meta.get("model_type")
-    mapping = {"knn_clf": "knn_clf", "rf": "rf_clf", "knn_reg": "knn_reg", "rf_reg": "rf_reg", "knn": "knn",
+    mapping = {"knn_clf": "knn_clf", "rf_clf": "rf_clf", "knn_reg": "knn_reg", "rf_reg": "rf_reg", "knn": "knn",
                "iforest": "iforest", "autoencoder": "autoencoder",
                "xgb_clf": "xgb_clf", "xgb_reg": "xgb_reg", "xgb": "xgb_clf",
                "lgbm_clf": "lgbm_clf", "lgbm_reg": "lgbm_reg", "lgbm": "lgbm_clf"}
