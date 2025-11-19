@@ -109,16 +109,11 @@ QPushButton:disabled {
     /* $card-shadow 供 QGraphicsDropShadowEffect 使用 */
 }
 
-/* ---------- 标题 ---------- */
-h1, .h1, QLabel[h1="true"] {
+QLabel#SectionTitle {
     font-size: 18px;
     font-weight: 600;
-    margin: 0 0 8px 0;
+    padding: 4px 0;
 }
-
-/* ---------- hint ---------- */
-.hint, QLabel[hint="true"] { color: $text-light; }
-
 /* ---------- 输入框 ---------- */
 QLineEdit, QTextEdit, QPlainTextEdit {
     background-color: $bg;
