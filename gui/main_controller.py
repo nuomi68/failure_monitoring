@@ -140,7 +140,7 @@ class MainController(QMainWindow):
 
         self.menu_items = [
             (self.btn_anomaly, "🔍", "破损检测模型"),
-            (self.btn_damage, "🔧", "破损检测模型2"),
+            (self.btn_damage, "🔧", "自定义破损检测模型"),
             (self.btn_nuclide, "📈", "核素活度预测"),
             (self.btn_ensemble, "🧩", "模型集成"),
         ]
