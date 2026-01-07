@@ -99,7 +99,7 @@ class MainController(QMainWindow):
     去掉了悬浮浮窗逻辑 —— 折叠时仅显示图标 + Tooltip 提示文字。
     """
 
-    EXPANDED_WIDTH = 180  # 展开宽度
+    EXPANDED_WIDTH = 200  # 展开宽度
     COLLAPSED_WIDTH = 60  # 折叠宽度（容纳图标）
 
     def __init__(self) -> None:
@@ -139,9 +139,9 @@ class MainController(QMainWindow):
         self.btn_pipeline = QPushButton()
 
         self.menu_items = [
-            (self.btn_anomaly, "🔍", "破损检测模型"),
-            (self.btn_damage, "🔧", "自定义破损检测模型"),
-            (self.btn_nuclide, "📈", "核素活度预测"),
+            (self.btn_anomaly, "🔍", "异常检测与工况评估"),
+            (self.btn_damage, "🔧", "损伤程度评估"),
+            (self.btn_nuclide, "📈", "核素核素活度预测"),
             (self.btn_ensemble, "🧩", "模型集成"),
         ]
 

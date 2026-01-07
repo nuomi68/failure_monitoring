@@ -233,9 +233,8 @@ class _XGBClfAdapter:
         if not hasattr(model, "predict_proba"):
             return None
         proba = model.predict_proba(X)
-        cls = list(
-            getattr(model, "_ml_class_order", getattr(model, "classes_", []))
-        )
+        class_order = getattr(model, "_ml_class_order", None)
+        cls = list(class_order) if class_order is not None else list(getattr(model, "classes_", []))
         if not cls:
             return None
         pos_cls = 1 if 1 in cls else (cls[1] if len(cls) > 1 else cls[0])

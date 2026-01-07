@@ -1,7 +1,4 @@
 import math
-from typing import Tuple
-
-import math
 from typing import Callable, Optional, Tuple
 
 import torch
@@ -27,12 +24,20 @@ class SeqDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def build_model(seq_len: int, num_feat: int, num_blocks: int = 4, ff_dim: int = 128, dropout: float = 0.1) -> TSMixer:
+def build_model(
+    seq_len: int,
+    num_feat: int,
+    *,
+    out_dim: int | None = None,
+    num_blocks: int = 4,
+    ff_dim: int = 128,
+    dropout: float = 0.1,
+) -> TSMixer:
     return TSMixer(
         sequence_length=seq_len,
         prediction_length=1,
         input_channels=num_feat,
-        output_channels=num_feat,
+        output_channels=int(out_dim or num_feat),
         num_blocks=num_blocks,
         ff_dim=ff_dim,
         dropout_rate=dropout,
@@ -52,18 +57,32 @@ def train_tsmixer(
     ff_dim: int = 128,
     dropout: float = 0.1,
     log_callback: Optional[Callable[[str], None]] = None,
+    patience: Optional[int] = None,
 ) -> Tuple[TSMixer, float]:
-    dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    dtrain = DataLoader(
+        SeqDataset(X_train, y_train),
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+    )
     dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
     model = build_model(
-        X_train.shape[1], X_train.shape[2], num_blocks=num_blocks, ff_dim=ff_dim, dropout=dropout
+        X_train.shape[1],
+        X_train.shape[2],
+        out_dim=int(y_train.shape[-1]),
+        num_blocks=num_blocks,
+        ff_dim=ff_dim,
+        dropout=dropout,
     ).to(device)
     criterion = nn.MSELoss()
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
 
     best = math.inf
+    best_epoch = 0
     best_state = None
+    no_improve = 0
+    patience = int(patience or 0)
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
@@ -87,12 +106,23 @@ def train_tsmixer(
         vloss /= len(dval.dataset)
         if vloss < best:
             best = vloss
+            best_epoch = epoch
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
 
         if log_callback:
             log_callback(
                 f"[TSMixer] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
             )
+            if patience > 0 and no_improve >= patience:
+                log_callback(
+                    f"[TSMixer] early_stop patience={patience} (best_epoch={best_epoch} best_val_loss={best:.4f})"
+                )
+
+        if patience > 0 and no_improve >= patience:
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -100,9 +130,14 @@ def train_tsmixer(
     return model, best
 
 
-def predict(model: TSMixer, seq, device="cpu"):
+def predict(model: TSMixer, seq, device: Optional[str] = None):
     model.eval()
     with torch.no_grad():
+        if device is None:
+            try:
+                device = str(next(model.parameters()).device)
+            except StopIteration:
+                device = "cpu"
         seq = _to_tensor(seq, device).unsqueeze(0)
         out = model(seq).squeeze(1)
         return out.cpu().numpy().squeeze()

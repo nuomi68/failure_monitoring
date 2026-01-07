@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -72,9 +72,14 @@ def train_patchtst(X_train, y_train, X_val, y_val, device="cpu", lr=1e-3, epochs
     return model, best
 
 
-def predict(model: PatchTSTForRegression, seq, device="cpu"):
+def predict(model: PatchTSTForRegression, seq, device: Optional[str] = None):
     model.eval()
     with torch.no_grad():
+        if device is None:
+            try:
+                device = str(next(model.parameters()).device)
+            except StopIteration:
+                device = "cpu"
         seq = _to_tensor(seq, device).unsqueeze(0)
         out = model(past_values=seq)
         return out.regression_outputs.cpu().numpy().squeeze()

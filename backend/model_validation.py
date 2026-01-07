@@ -146,7 +146,7 @@ def load_supervised_dataset(
 
     y = _prepare_target(df[target_column])
 
-    drop_set = set(drop_columns or DEFAULT_DROP_COLUMNS)
+    drop_set = set(DEFAULT_DROP_COLUMNS) if drop_columns is None else set(drop_columns)
     drop_set.add(target_column)
     if time_column:
         drop_set.add(time_column)
@@ -226,7 +226,7 @@ def load_unsupervised_dataset(
         else:
             df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
 
-    drop_set = set(drop_columns or DEFAULT_DROP_COLUMNS)
+    drop_set = set(DEFAULT_DROP_COLUMNS) if drop_columns is None else set(drop_columns)
     if time_column:
         drop_set.add(time_column)
     if label_column:

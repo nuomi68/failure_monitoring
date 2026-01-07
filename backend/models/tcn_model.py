@@ -53,7 +53,15 @@ class TCNBlock(nn.Module):
 
 
 class TCNForecaster(nn.Module):
-    def __init__(self, num_feat, hid=32, levels=2, k=2, drop=0.2):
+    def __init__(
+        self,
+        num_feat: int,
+        hid: int = 32,
+        levels: int = 2,
+        k: int = 2,
+        drop: float = 0.2,
+        out_dim: int | None = None,
+    ):
         super().__init__()
         channels = [hid] * levels
         layers = []
@@ -63,7 +71,7 @@ class TCNForecaster(nn.Module):
             in_c = out_c
 
         self.tcn = nn.Sequential(*layers)
-        self.fc = nn.Linear(in_c, num_feat)
+        self.fc = nn.Linear(in_c, int(out_dim or num_feat))
 
     def forward(self, x):
         y = self.tcn(x)
@@ -85,16 +93,27 @@ def train_tcn(
     k: int = 2,
     drop: float = 0.2,
     log_callback: Optional[Callable[[str], None]] = None,
+    patience: Optional[int] = None,
 ) -> Tuple[nn.Module, float]:
     dtrain = DataLoader(SeqDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
     dval = DataLoader(SeqDataset(X_val, y_val), batch_size=batch_size)
 
-    model = TCNForecaster(X_train.shape[-1], hid=hid, levels=levels, k=k, drop=drop).to(device)
+    model = TCNForecaster(
+        X_train.shape[-1],
+        hid=hid,
+        levels=levels,
+        k=k,
+        drop=drop,
+        out_dim=int(y_train.shape[-1]),
+    ).to(device)
     criterion = nn.MSELoss()
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
     best = math.inf
+    best_epoch = 0
     best_state = None
+    no_improve = 0
+    patience = int(patience or 0)
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
@@ -116,12 +135,23 @@ def train_tcn(
         vloss /= len(dval.dataset)
         if vloss < best:
             best = vloss
+            best_epoch = epoch
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
 
         if log_callback:
             log_callback(
                 f"[TCN] epoch {epoch}/{epochs} train_loss={train_loss:.4f} val_loss={vloss:.4f}"
             )
+            if patience > 0 and no_improve >= patience:
+                log_callback(
+                    f"[TCN] early_stop patience={patience} (best_epoch={best_epoch} best_val_loss={best:.4f})"
+                )
+
+        if patience > 0 and no_improve >= patience:
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -129,8 +159,13 @@ def train_tcn(
     return model, best
 
 
-def predict(model: nn.Module, seq, device="cpu"):
+def predict(model: nn.Module, seq, device: Optional[str] = None):
     model.eval()
     with torch.no_grad():
+        if device is None:
+            try:
+                device = str(next(model.parameters()).device)
+            except StopIteration:
+                device = "cpu"
         seq = _to_tensor(seq, device).permute(1, 0).unsqueeze(0)  # (1, F, L)
         return model(seq).cpu().numpy().squeeze()

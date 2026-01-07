@@ -1308,7 +1308,7 @@ class SupervisedPage(QWidget):
             self.k_spin.setValue(int(params.get("n_estimators", 100)))
         self._reset_viz_mode()
         # [LOG]
-        logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
+        #logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
 
     # ============== logging helpers ==============
     def _log_data_overview(self, cols):

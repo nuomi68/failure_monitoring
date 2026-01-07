@@ -554,7 +554,7 @@ class UnsupervisedPage(QWidget):
             self.k_label.setText("Epochs：")
             self.k_spin.setValue(int(self.ae_params.get("epochs", 50)))
         # [LOG]
-        logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
+        #logger.info("已选择算法：%s（主参数标签：%s）", self.alg_combo.currentText(), self.k_label.text())
     # ---------------- 打开高级参数对话框 ----------------
     def open_advanced_dialog(self):
         # [LOG]
