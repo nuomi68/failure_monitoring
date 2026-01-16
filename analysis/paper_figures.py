@@ -26,16 +26,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
 from sklearn import metrics  # noqa: E402
-matplotlib.rcParams["font.sans-serif"] = [
-    "Microsoft YaHei",  # Windows
-    "SimHei",           # Windows
-    "PingFang SC",      # macOS
-    "Heiti SC",         # macOS
-    "Noto Sans CJK SC", # Linux
-    "Arial Unicode MS", # fallback
-    "DejaVu Sans",      # fallback
-]
-matplotlib.rcParams["axes.unicode_minus"] = False
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 REPORTS_DIR = ROOT_DIR / "reports"
@@ -49,7 +40,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from backend.model_validation import run_supervised_validation  # noqa: E402
 from backend.model_validation import run_unsupervised_validation  # noqa: E402
-
+from matplotlib import font_manager, rcParams
 SUP_TEST_SIZE = 0.3
 SUP_RANDOM_STATES = (0, 1, 2, 3, 4)
 UNSUP_TOP_RATIO = 0.15
@@ -100,11 +91,63 @@ def _plot_points(
 
 
 def _plot_heatmap(data: pd.DataFrame, title: str, path: Path, fmt: str = ".3f") -> None:
+    csv_path = path.with_name(path.stem + f"{title}_matrix.csv")
+    json_path = path.with_name(path.stem +f"{title}_matrix.json")
+
+    # CSV：通用、肉眼可读；utf-8-sig 方便 Excel 打开不乱码
+    data.to_csv(csv_path, encoding="utf-8-sig")
+
+    # JSON：保留 index/columns 结构更稳（不怕逗号/特殊字符）
+    data.to_json(json_path, force_ascii=False, orient="split")
+
+    # 同时存一份标题/格式等元信息（可选）
+    meta_path = path.with_name(path.stem + "_meta.json")
+    meta = {"title": title, "fmt": fmt, "rows": list(data.index), "cols": list(data.columns)}
+    Path(meta_path).write_text(pd.Series(meta).to_json(force_ascii=False), encoding="utf-8")
+
+    print("Saved matrix:", csv_path)
+    print("Saved matrix:", json_path)
+    # 1) 选字体文件（比按 name 更稳）
+    candidates = [
+        "Microsoft YaHei",
+        "Microsoft YaHei UI",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "PingFang SC",
+        "WenQuanYi Zen Hei",
+        "Arial Unicode MS",
+    ]
+    available = {f.name for f in font_manager.fontManager.ttflist}
+    chosen = next((n for n in candidates if n in available), None)
+
+    # 2) 构造 FontProperties
+    fp = font_manager.FontProperties(family=chosen) if chosen else None
+
     plt.figure(figsize=(6.5, 3.5))
-    sns.heatmap(data, annot=True, fmt=fmt, cmap="viridis", cbar_kws={"shrink": 0.8})
-    plt.title(title)
-    plt.xlabel("指标")
-    plt.ylabel("模型")
+    ax = sns.heatmap(
+        data,
+        annot=True,
+        fmt=fmt,
+        cmap="viridis",
+        cbar_kws={"shrink": 0.8},
+        annot_kws={"fontproperties": fp} if fp else None,  # ← 关键
+    )
+
+    # 3) 标题/坐标轴也显式设字体（避免被主题影响）
+    if fp:
+        ax.set_title(title, fontproperties=fp)
+        ax.set_xlabel("指标", fontproperties=fp)
+        ax.set_ylabel("模型", fontproperties=fp)
+        for tick in ax.get_xticklabels():
+            tick.set_fontproperties(fp)
+        for tick in ax.get_yticklabels():
+            tick.set_fontproperties(fp)
+    else:
+        ax.set_title(title)
+        ax.set_xlabel("指标")
+        ax.set_ylabel("模型")
+
     plt.tight_layout()
     plt.savefig(path, dpi=300)
     plt.close()

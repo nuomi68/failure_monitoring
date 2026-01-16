@@ -47,7 +47,12 @@ LOCAL_FEATURE_COLS: Tuple[str, ...] = (
     "平均核功率",
     "燃耗",
 )
-LOCAL_TARGET_COLS: Tuple[str, ...] = ("平均核功率",)
+LOCAL_TARGET_COLS: Tuple[str, ...] = (
+    "一回路平均温度",
+    "硼浓度（硼表）",
+    "平均核功率",
+    "燃耗",
+)
 # Local Excel evaluation mode:
 # - "full": evaluate full dataset only (default behaviour)
 # - "halves": split into two time-ordered parts and evaluate each part
@@ -74,6 +79,13 @@ REPORT_SCALED_METRICS = (os.getenv("TS0_REPORT_SCALED_METRICS", "1") or "1").str
     "no",
     "off",
 }
+PLOT_SPLIT_SERIES = (os.getenv("TS0_PLOT_SPLIT_SERIES", "1") or "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+PLOT_SPLIT_DPI = int(os.getenv("TS0_PLOT_SPLIT_DPI", "160"))
 
 # Split ratio (time-ordered; must sum to 1.0).
 TRAIN_RATIO = 0.7
@@ -98,8 +110,8 @@ else:
     TRAIN_PATIENCE = None if not _patience_env or _patience_env.lower() in {"none", "null"} else int(_patience_env)
 
 # Models to evaluate (in order). Override with `TS0_MODELS="gru,tsmixer,timesnet,tcn"` if needed.
-# Note: a 1-item tuple must have a trailing comma, e.g. ("tcn",)
-MODEL_ORDER: Tuple[str, ...] = ("tcn","gru","tsmixer","timesnet")
+# Note: a 1-item tuple must have a trailing comma, e.g. ("tcn",)"tcn","gru","tsmixer","timesnet"
+MODEL_ORDER: Tuple[str, ...] = ()
 
 # TimesNet tuning knobs (kept consistent across datasets/parts).
 TIMESNET_LOOK_BACK = TRAIN_LOOK_BACK
@@ -670,6 +682,76 @@ def _persistence_baseline_metrics_scaled(
     }
 
 
+def _day_axis_values(times: pd.Series) -> np.ndarray:
+    if times.empty:
+        return np.zeros(0, dtype=np.float32)
+    dt = pd.to_datetime(times, errors="coerce")
+    if dt.isna().all():
+        return np.arange(len(times), dtype=np.float32) + 1.0
+    base = dt.iloc[0]
+    delta_days = (dt - base).dt.total_seconds().fillna(0.0) / 86400.0
+    return (delta_days + 1.0).to_numpy(dtype=np.float32)
+
+
+def _plot_split_series_by_day(
+    times: pd.Series,
+    values: pd.Series,
+    split_idx: int,
+    *,
+    label: str,
+    out_dir: Path,
+) -> List[str]:
+    if split_idx <= 0 or split_idx >= len(values):
+        return []
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+    except Exception:
+        return []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plot_paths: List[str] = []
+
+    def _plot_part(part_name: str, part_times: pd.Series, part_values: pd.Series) -> None:
+        x = _day_axis_values(part_times)
+        y = pd.to_numeric(part_values, errors="coerce").to_numpy(dtype=np.float32)
+        if len(x) == 0 or len(y) == 0:
+            return
+        mask = np.isfinite(x) & np.isfinite(y)
+        if not np.any(mask):
+            return
+        x = x[mask]
+        y = y[mask]
+
+        fig, ax = plt.subplots(figsize=(10, 4), dpi=PLOT_SPLIT_DPI)
+        ax.plot(x, y, linewidth=0.8)
+        max_day = int(np.ceil(float(np.nanmax(x)))) if len(x) else 1
+        max_day = max(1, max_day)
+        if max_day <= 15:
+            ticks = np.arange(1, max_day + 1, dtype=int)
+        else:
+            step = max(1, int(np.ceil(max_day / 10)))
+            ticks = np.arange(1, max_day + 1, step, dtype=int)
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"Day {int(t)}" for t in ticks])
+        ax.set_xlabel("Day")
+        ax.set_ylabel("value")
+        ax.set_title(f"{label} {part_name}")
+        ax.grid(True, alpha=0.2)
+        fig.tight_layout()
+
+        out_path = out_dir / f"{_safe_slug(label)}_{part_name}.png"
+        fig.savefig(out_path)
+        plt.close(fig)
+        plot_paths.append(str(out_path))
+
+    _plot_part("part1", times.iloc[:split_idx], values.iloc[:split_idx])
+    _plot_part("part2", times.iloc[split_idx:], values.iloc[split_idx:])
+    return plot_paths
+
+
 def _window_time_sanity(
     times: pd.Series,
     *,
@@ -1201,6 +1283,7 @@ def main() -> None:
                 "expected 'auto_zero_run' or 'ratio'."
             )
 
+        split_idx_for_plot: Optional[int] = None
         variants: List[Tuple[str, pd.DataFrame, Dict[str, Any]]] = []
         if local_eval_mode in {"full", "both"}:
             variants.append(
@@ -1267,6 +1350,7 @@ def main() -> None:
             split_idx = int(split_idx)
             split_debug["split_idx"] = int(split_idx)
             split_debug["split_ratio"] = float(split_idx / n_total) if n_total else None
+            split_idx_for_plot = split_idx
 
             variants.append(
                 (
@@ -1294,6 +1378,16 @@ def main() -> None:
                     },
                 )
             )
+
+        if PLOT_SPLIT_SERIES and split_idx_for_plot is not None and target_cols:
+            for  plot_target in target_cols:
+                _plot_split_series_by_day(
+                    time_values_full,
+                    feat_df_full[plot_target],
+                    split_idx_for_plot,
+                    label=f"{base_label}_{plot_target}",
+                    out_dir=REPORTS_DIR,
+                )
 
         for dataset_label, feat_df, seg_meta in variants:
             lines.append("")
