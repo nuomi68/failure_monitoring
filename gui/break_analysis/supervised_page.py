@@ -975,7 +975,7 @@ class SupervisedPage(QWidget):
             tau = max(0.001, min(0.999, tau))
             self.canvas.slider.setValue(int(round(tau * 1000)))
             self._update_pred_by_threshold()
-            logger.info("启用阈值：二分类，τ::%.3f", float(tau))  # [LOG]
+            logger.info("阈值：二分类，τ:%.3f", float(tau))  # [LOG]
         else:
             #多分类/回归：隐藏阈值相关控件
             self._set_tau_slider_visible(False)
@@ -1021,15 +1021,14 @@ class SupervisedPage(QWidget):
             # [LOG] 分类指标
             self._log_metrics_cls(self.y_true, self.y_pred)
         else:
-            from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-            mae = mean_absolute_error(self.y_true, self.y_pred)
+            from sklearn.metrics import mean_squared_error, r2_score
             mse = mean_squared_error(self.y_true, self.y_pred)
             r2 = r2_score(self.y_true, self.y_pred)
-            self.metrics_text = f"MAE:{mae:.3f}   MSE:{mse:.3f}   R2:{r2:.3f}"
+            self.metrics_text = f"MSE误差:{mse:.3f} | R2误差:{r2:.3f}"
             self.metrics_label.setText(self.metrics_text)
             self.metrics_label.setVisible(True)
             # [LOG] 回归指标
-            logger.info("测试集MAE误差:%.3f   测试集MSE误差:%.3f   测试集R2误差:%.3f", mae, mse, r2)
+            logger.info("测试集指标：MSE误差:%.3f | R2误差:%.3f", mse, r2)
     def _reset_viz_mode(self):
         self._set_tau_slider_visible(self.is_clf and self.binary)
         if self.canvas.tau_widget:
@@ -1318,10 +1317,9 @@ class SupervisedPage(QWidget):
                     len(cols), total)
 
     def _log_split(self, X, y, test_size, rs, stratify):
-        logger.info("开始训练：算法:%s，规范化器:%s，样本数:%d，特征数:%d，测试集比例:%.2f，随机种子:%d，分层:%s",
+        logger.info("开始训练：算法:%s，规范化器:%s，样本数:%d，特征数:%d，测试集比例:%.2f，随机种子:%d",
                     self.alg_combo.currentText(), self.scaler_combo.currentText(),
-                    X.shape[0], X.shape[1], test_size, rs,
-                    "是" if stratify is not None else "否")
+                    X.shape[0], X.shape[1], test_size, rs)
 
     def _log_meta_after_train(self):
         if not self.meta: return
@@ -1335,7 +1333,7 @@ class SupervisedPage(QWidget):
         if int(n_classes)>1: pieces.append(f"类别数:{n_classes}")
         if classes is not None:   pieces.append(f"类名预览:{list(classes)[:5]}")
         if tau is not None: pieces.append(f"阈值τ:{tau:.3f}")
-        logger.info("训练完成：%s", "，".join(pieces))
+        #logger.info("训练完成：%s", "，".join(pieces))
 
     def _log_predict_done(self):
         if self.y_true is None or self.y_pred is None: return

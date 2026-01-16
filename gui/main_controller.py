@@ -58,6 +58,10 @@ class LogHighlighter(QSyntaxHighlighter):
             r"(((?:训练|测试)集)\s*(?:[A-Za-z0-9][A-Za-z0-9_\-/]*)?\s*误差)\s*[:：]\s*"
             r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
         )
+        self.re_metric_simple = QRegularExpression(
+            r"((?:准确率|精确率|召回率|F1|MAE|MSE|R2)(?:误差)?)\s*[:：]\s*"
+            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+        )
 
     def _apply_all(self, regex: QRegularExpression, text: str, fmt: QTextCharFormat, group: int = 0):
         it = regex.globalMatch(text)
@@ -80,6 +84,9 @@ class LogHighlighter(QSyntaxHighlighter):
             val_start, val_len = m.capturedStart(3), m.capturedLength(3)  # 组3：数值（绿色）
             if key_start >= 0: self.setFormat(key_start, key_len, self.f_key)
             if val_start >= 0: self.setFormat(val_start, val_len, self.f_num)
+
+        self._apply_all(self.re_metric_simple, text, self.f_key, group=1)
+        self._apply_all(self.re_metric_simple, text, self.f_num, group=2)
 
 from gui.set_style import get_sheet
 from gui.break_analysis.outlier_detection import OutlierDetectionPage

@@ -45,7 +45,7 @@ class UnCanvas(InteractiveMplCanvas):
         if show_controls:
             self.slider = QSlider(Qt.Orientation.Horizontal, parent)
             self.slider.setRange(1, 999)
-            self.slider.setValue(950)
+            self.slider.setValue(990)
             self.slider.valueChanged.connect(self._on_slider_change)
 
             self.tau_widget = QWidget(parent)
@@ -60,7 +60,7 @@ class UnCanvas(InteractiveMplCanvas):
             self.tau_spin.setRange(0.001, 0.999)
             self.tau_spin.setSingleStep(0.001)
             self.tau_spin.setKeyboardTracking(False)
-            self.tau_spin.setValue(0.950)
+            self.tau_spin.setValue(0.990)
             self.tau_spin.setMinimumWidth(120)
             self.tau_spin.valueChanged.connect(self._on_tau_spin_change)
             layout.addWidget(self.tau_spin)
@@ -235,7 +235,13 @@ class AdvancedParamsDialog(QDialog):
             self.sp_contamination.setDecimals(3)
             self.sp_contamination.setSingleStep(0.001)
             self.sp_contamination.setValue(float(params.get("contamination", 0.01) or 0.0))
-            form.addRow("contamination", self.sp_contamination)
+            self.sp_contamination.setToolTip("污染率（异常占比）用于训练时估计异常比例，取值 0~1")
+            form.addRow("污染率", self.sp_contamination)
+
+            self.ck_sync_tau = QCheckBox("按污染率同步阈值τ")
+            self.ck_sync_tau.setChecked(bool(params.get("sync_tau_with_contamination", False)))
+            self.ck_sync_tau.setToolTip("勾选后，阈值 τ 会按 1 - contamination 自动同步（训练后或修改污染率时）")
+            form.addRow(self.ck_sync_tau)
 
             # max_samples
             self.le_max_samples = QLineEdit(str(params.get("max_samples", "auto")))
@@ -328,6 +334,7 @@ class AdvancedParamsDialog(QDialog):
             self.params["n_jobs"] = self.sp_jobs.value()
         elif self.alg == "iforest":
             self.params["contamination"] = self.sp_contamination.value()
+            self.params["sync_tau_with_contamination"] = self.ck_sync_tau.isChecked()
             self.params["max_samples"] = self.le_max_samples.text().strip()
             self.params["max_features"] = self.sp_max_features.value()
             self.params["bootstrap"] = self.ck_bootstrap.isChecked()
@@ -369,6 +376,7 @@ class UnsupervisedPage(QWidget):
         self._abn_row_lookup: dict[int, int] = {}
         self.slider_holder: SliderHolder | None = None
         self._last_abn_df: pd.DataFrame | None = None
+        self._global_tau: float | None = None
 
         # 每种算法的高级参数
         self.knn_params: Dict[str, Any] = {
@@ -388,6 +396,7 @@ class UnsupervisedPage(QWidget):
             "warm_start": False,
             "n_jobs": -1,
             "contamination": 0.01,
+            "sync_tau_with_contamination": False,
         }
         self.ae_params: Dict[str, Any] = {
             "hidden": [64, 32],
@@ -445,6 +454,7 @@ class UnsupervisedPage(QWidget):
         column_label = QLabel("特征选择")
         column_layout.addWidget(column_label)
         self.column_list = QListWidget()
+        self.column_list.itemChanged.connect(self._on_columns_changed)
         column_layout.addWidget(self.column_list, 1)
         splitter.addWidget(column_panel)
         splitter.setStretchFactor(0, 1)
@@ -525,15 +535,20 @@ class UnsupervisedPage(QWidget):
     def set_data(self, df: pd.DataFrame, checked: List[str]):
         self.df = df
         self.column_list.clear()
+        self.column_list.blockSignals(True)
         for col in df.columns:
             it = QListWidgetItem(col)
             it.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
             self.column_list.addItem(it)
+        self.column_list.blockSignals(False)
         # [LOG]
         self._log_data_overview(self.selected_columns())
 
     def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
+
+    def _on_columns_changed(self, _item: QListWidgetItem):
+        self._log_data_overview(self.selected_columns())
 
     # ---------------- 算法切换 ----------------
     def _on_alg_changed(self, _index: int):
@@ -547,7 +562,8 @@ class UnsupervisedPage(QWidget):
             # 孤立森林：树数，并根据污染率同步 τ
             self.k_label.setText("树数：")
             self.k_spin.setValue(int(self.if_params.get("n_estimators", 100)))
-            self._apply_iforest_tau_from_contamination()
+            if self._iforest_sync_tau_enabled():
+                self._apply_iforest_tau_from_contamination()
 
         else:  # autoencoder
             # 自编码器：Epochs
@@ -558,8 +574,13 @@ class UnsupervisedPage(QWidget):
     # ---------------- 打开高级参数对话框 ----------------
     def open_advanced_dialog(self):
         # [LOG]
-        logger.info("打开高级参数：算法:%s", self.alg_combo.currentText())
+        #logger.info("打开高级参数：算法:%s", self.alg_combo.currentText())
         alg = self.alg_combo.currentData()
+        prev_contamination = None
+        prev_sync_tau = False
+        if alg == "iforest":
+            prev_contamination = self.if_params.get("contamination")
+            prev_sync_tau = self._iforest_sync_tau_enabled()
         params = (
             self.knn_params if alg == "knn"
             else self.if_params if alg == "iforest"
@@ -569,7 +590,10 @@ class UnsupervisedPage(QWidget):
         if dlg.exec():
             if alg == "iforest":
                 # 污染率在高级参数中调整后，立即同步 τ 默认值
-                self._apply_iforest_tau_from_contamination()
+                new_contamination = self.if_params.get("contamination")
+                new_sync_tau = self._iforest_sync_tau_enabled()
+                if new_sync_tau and (self._contamination_changed(prev_contamination, new_contamination) or not prev_sync_tau):
+                    self._apply_iforest_tau_from_contamination(new_contamination)
 
     def train_model(self):
         if self.df is None:
@@ -594,6 +618,7 @@ class UnsupervisedPage(QWidget):
         else:
             self.if_params["n_estimators"] = self.k_spin.value()
             params = self.if_params.copy()
+            params.pop("sync_tau_with_contamination", None)
             # 解析 max_samples
             max_samples = self._parse_max_samples(params.get("max_samples", "auto"), len(X))
             params["max_samples"] = max_samples
@@ -614,17 +639,21 @@ class UnsupervisedPage(QWidget):
         self.X_scaled = ML.transform(X)
         # [LOG] 打分完成
         self._log_scores_ready()
-        tau = float(self.meta.get("tau", 0.95))      # 若无则给个默认
-        self._set_canvas_tau(tau)
-        if alg == "iforest":
-            tau_from_contam = self._apply_iforest_tau_from_contamination(params.get("contamination"))
+        tau_meta = float(self.meta.get("tau", 0.99))      # 若无则给个默认
+        tau_target = tau_meta
+        if alg == "iforest" and self._iforest_sync_tau_enabled():
+            tau_from_contam = self._derive_iforest_tau_from_contamination(params.get("contamination"))
             if tau_from_contam is not None:
-                tau = tau_from_contam
-        logger.info("启用阈值：τ:%.3f", tau)  # [LOG]
+                tau_target = tau_from_contam
+        elif self._global_tau is not None:
+            tau_target = self._global_tau
+        self._set_canvas_tau(tau_target)
+        logger.info("阈值：τ:%.3f", tau_target)  # [LOG]
         self.refresh_plot()
 
     def on_tau_changed(self, tau: float):
         # [LOG]
+        self._global_tau = float(tau)
         self.meta["tau"] = tau
         try:
             from backend.ml_interface import ML
@@ -667,8 +696,7 @@ class UnsupervisedPage(QWidget):
         else:
             slider.setValue(slider_value)
 
-    def _apply_iforest_tau_from_contamination(self, contamination: float | None = None) -> float | None:
-        """Derive τ = 1 - contamination and push it to the slider."""
+    def _derive_iforest_tau_from_contamination(self, contamination: float | None = None) -> float | None:
         if contamination is None:
             contamination = self.if_params.get("contamination")
         try:
@@ -676,9 +704,31 @@ class UnsupervisedPage(QWidget):
         except Exception:
             return None
         contamination = max(0.0, min(1.0, contamination))
-        tau = max(0.001, min(0.999, 1.0 - contamination))
+        return max(0.001, min(0.999, 1.0 - contamination))
+
+    def _apply_iforest_tau_from_contamination(self, contamination: float | None = None) -> float | None:
+        """Derive τ = 1 - contamination and push it to the slider."""
+        tau = self._derive_iforest_tau_from_contamination(contamination)
+        if tau is None:
+            return None
         self._set_canvas_tau(tau)
         return tau
+
+    def _iforest_sync_tau_enabled(self) -> bool:
+        return bool(self.if_params.get("sync_tau_with_contamination", False))
+
+    def _contamination_changed(self, before: float | None, after: float | None) -> bool:
+        try:
+            before_val = float(before)
+        except Exception:
+            before_val = None
+        try:
+            after_val = float(after)
+        except Exception:
+            after_val = None
+        if before_val is None or after_val is None:
+            return before_val != after_val
+        return abs(before_val - after_val) > 1e-6
 
     def _render_plot(self, canvas: UnCanvas, tau: float) -> bool:
         mode = self.viz_combo.currentText()
@@ -881,7 +931,7 @@ class UnsupervisedPage(QWidget):
     # ============== logging helpers ==============
     def _log_data_overview(self, cols):
         total = self.df.shape[1] if self.df is not None else 0
-        logger.info("数据集就绪：特征已选:%d/%d", len(cols), total)
+        logger.info("当前页面特征已选:%d/%d", len(cols), total)
 
     def _log_train_start(self, X):
         logger.info("开始训练：算法:%s，规范化器:%s，样本数:%d，特征数:%d",
@@ -889,13 +939,14 @@ class UnsupervisedPage(QWidget):
                     X.shape[0], X.shape[1])
 
     def _log_meta_after_train(self):
-        if not self.meta: return
+        if not self.meta:
+            return
         model = self.meta.get("model_type", "")
-        scaler = self.meta.get("scaler", "")
-        tau = self.meta.get("tau", None)
-        pieces = [f"模型={model}", f"规范化器={scaler}"]
-        if tau is not None: pieces.append(f"阈值τ:{tau:.3f}")
-        logger.info("训练完成：%s", "，".join(pieces))
+        scaler = self.scaler_combo.currentText() if hasattr(self, "scaler_combo") else ""
+        pieces = [f"模型={model}"]
+        if scaler:
+            pieces.append(f"规范化器={scaler}")
+        #logger.info("训练完成：%s", "，".join(pieces))
 
     def _log_scores_ready(self):
         if self.scores is None: return

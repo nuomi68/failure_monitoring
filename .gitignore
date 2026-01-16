@@ -1,3 +1,10 @@
 */models_saved/*
 */lightning_logs
 .idea
+./reports
+__pycache__/
+*.pyc
+log.txt
+__pycache__/
+models_saved/*
+reports/*
