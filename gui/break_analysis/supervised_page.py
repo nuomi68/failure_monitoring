@@ -975,7 +975,7 @@ class SupervisedPage(QWidget):
             tau = max(0.001, min(0.999, tau))
             self.canvas.slider.setValue(int(round(tau * 1000)))
             self._update_pred_by_threshold()
-            logger.info("阈值：二分类，τ:%.3f", float(tau))  # [LOG]
+            logger.info("二分类阈值τ:%.3f", float(tau))  # [LOG]
         else:
             #多分类/回归：隐藏阈值相关控件
             self._set_tau_slider_visible(False)

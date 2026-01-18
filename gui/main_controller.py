@@ -50,7 +50,7 @@ class LogHighlighter(QSyntaxHighlighter):
         # 仅匹配 token 本身
         self.re_info = QRegularExpression(r"\bINFO\b")
         self.re_warn = QRegularExpression(r"\bWARN(?:ING)?\b")
-        self.re_err  = QRegularExpression(r"\bERR(?:OR)?\b|异常")
+
 
         # 精确匹配 “训练集误差:xx” / “测试集误差:xx” 中的 等号后的数值
         # 捕获组1是 key，组2是数值（含小数/科学计数）

@@ -454,7 +454,6 @@ class UnsupervisedPage(QWidget):
         column_label = QLabel("特征选择")
         column_layout.addWidget(column_label)
         self.column_list = QListWidget()
-        self.column_list.itemChanged.connect(self._on_columns_changed)
         column_layout.addWidget(self.column_list, 1)
         splitter.addWidget(column_panel)
         splitter.setStretchFactor(0, 1)
@@ -541,14 +540,9 @@ class UnsupervisedPage(QWidget):
             it.setCheckState(Qt.CheckState.Checked if col in checked else Qt.CheckState.Unchecked)
             self.column_list.addItem(it)
         self.column_list.blockSignals(False)
-        # [LOG]
-        self._log_data_overview(self.selected_columns())
 
     def selected_columns(self) -> List[str]:
         return [self.column_list.item(i).text() for i in range(self.column_list.count()) if self.column_list.item(i).checkState()==Qt.CheckState.Checked]
-
-    def _on_columns_changed(self, _item: QListWidgetItem):
-        self._log_data_overview(self.selected_columns())
 
     # ---------------- 算法切换 ----------------
     def _on_alg_changed(self, _index: int):
@@ -648,11 +642,13 @@ class UnsupervisedPage(QWidget):
         elif self._global_tau is not None:
             tau_target = self._global_tau
         self._set_canvas_tau(tau_target)
-        logger.info("阈值：τ:%.3f", tau_target)  # [LOG]
+        #logger.info("阈值：τ:%.3f", tau_target)  # [LOG]
         self.refresh_plot()
 
     def on_tau_changed(self, tau: float):
         # [LOG]
+        abn_count = int(np.sum(self.scores >= tau)) if self.scores is not None else 0
+        logger.info("阈值 τ 更新为 %.3f，异常样本数:%d", tau, abn_count)
         self._global_tau = float(tau)
         self.meta["tau"] = tau
         try:
@@ -930,8 +926,7 @@ class UnsupervisedPage(QWidget):
 
     # ============== logging helpers ==============
     def _log_data_overview(self, cols):
-        total = self.df.shape[1] if self.df is not None else 0
-        logger.info("当前页面特征已选:%d/%d", len(cols), total)
+        pass
 
     def _log_train_start(self, X):
         logger.info("开始训练：算法:%s，规范化器:%s，样本数:%d，特征数:%d",
