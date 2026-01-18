@@ -75,7 +75,6 @@ class LogHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text: str) -> None:
         self._apply_all(self.re_info, text, self.f_info)
         self._apply_all(self.re_warn, text, self.f_warn)
-        self._apply_all(self.re_err, text, self.f_err)
 
         it = self.re_metric.globalMatch(text)
         while it.hasNext():
